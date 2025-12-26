@@ -19,6 +19,15 @@ from typing import Any
 
 from .types import ChangeType, FileAnalysis
 
+# Try to import networkx - it's optional for dependency graph analysis
+NETWORKX_AVAILABLE = False
+try:
+    import networkx as nx
+
+    NETWORKX_AVAILABLE = True
+except ImportError:
+    nx = None  # type: ignore
+
 # Import debug utilities
 try:
     from debug import (
@@ -304,5 +313,132 @@ class SemanticAnalyzer:
         return ext in self.supported_extensions
 
 
+def build_dependency_graph(
+    file_analyses: dict[str, FileAnalysis] | list[FileAnalysis],
+) -> Any:
+    """
+    Build a directed graph of file dependencies based on import relationships.
+
+    Creates a NetworkX DiGraph where nodes are file paths and edges represent
+    import dependencies. An edge from file A to file B means "A imports/depends on B".
+
+    This graph is used for:
+    - Cross-file impact analysis (find files affected by a change)
+    - Dependency conflict detection (warn when changes break downstream modules)
+    - Circular dependency detection
+
+    Args:
+        file_analyses: Either a dict mapping file paths to FileAnalysis objects,
+                      or a list of FileAnalysis objects.
+
+    Returns:
+        nx.DiGraph: A directed graph of file dependencies.
+                   Returns an empty DiGraph if networkx is not available.
+
+    Example:
+        analyses = {
+            'src/utils.py': FileAnalysis(file_path='src/utils.py', imports_added={'os'}),
+            'src/main.py': FileAnalysis(file_path='src/main.py', imports_added={'src.utils'}),
+        }
+        graph = build_dependency_graph(analyses)
+        # graph has edge: 'src/main.py' -> 'src.utils' (main imports utils)
+    """
+    # Handle case when networkx is not available
+    if not NETWORKX_AVAILABLE:
+        debug(
+            MODULE,
+            "NetworkX not available, returning stub graph",
+        )
+        # Return a simple stub that mimics DiGraph interface for basic operations
+        return _StubDiGraph()
+
+    G = nx.DiGraph()
+
+    # Convert list to dict if necessary
+    analyses_dict: dict[str, FileAnalysis] = {}
+    if isinstance(file_analyses, dict):
+        analyses_dict = file_analyses
+    elif isinstance(file_analyses, list):
+        analyses_dict = {fa.file_path: fa for fa in file_analyses}
+
+    debug(
+        MODULE,
+        "Building dependency graph",
+        num_files=len(analyses_dict),
+    )
+
+    # Add nodes for all analyzed files
+    for file_path in analyses_dict:
+        G.add_node(file_path)
+
+    # Build edges from import relationships
+    for file_path, analysis in analyses_dict.items():
+        # Add edges for new imports (file_path depends on imported module)
+        for import_module in analysis.imports_added:
+            # Add edge: this file depends on the imported module
+            G.add_edge(file_path, import_module)
+            debug_detailed(
+                MODULE,
+                f"Added import dependency: {file_path} -> {import_module}",
+            )
+
+        # Also consider existing imports from changes metadata
+        for change in analysis.changes:
+            if change.change_type == ChangeType.ADD_IMPORT:
+                # The target of an ADD_IMPORT is the module being imported
+                G.add_edge(file_path, change.target)
+
+    debug_success(
+        MODULE,
+        "Dependency graph built",
+        nodes=G.number_of_nodes(),
+        edges=G.number_of_edges(),
+    )
+
+    return G
+
+
+class _StubDiGraph:
+    """
+    Stub implementation of DiGraph interface when networkx is not available.
+
+    Provides minimal interface compatibility for graceful degradation.
+    """
+
+    def __init__(self):
+        self._nodes: set[str] = set()
+        self._edges: list[tuple[str, str]] = []
+
+    def add_node(self, node: str) -> None:
+        """Add a node to the graph."""
+        self._nodes.add(node)
+
+    def add_edge(self, source: str, target: str) -> None:
+        """Add an edge to the graph."""
+        self._nodes.add(source)
+        self._nodes.add(target)
+        self._edges.append((source, target))
+
+    def number_of_nodes(self) -> int:
+        """Return the number of nodes."""
+        return len(self._nodes)
+
+    def number_of_edges(self) -> int:
+        """Return the number of edges."""
+        return len(self._edges)
+
+    def __contains__(self, node: str) -> bool:
+        """Check if a node is in the graph."""
+        return node in self._nodes
+
+    def nodes(self) -> set[str]:
+        """Return all nodes."""
+        return self._nodes
+
+    def edges(self) -> list[tuple[str, str]]:
+        """Return all edges."""
+        return self._edges
+
+
 # Re-export ExtractedElement for backwards compatibility
-__all__ = ["SemanticAnalyzer", "ExtractedElement"]
+__all__ = ["SemanticAnalyzer", "ExtractedElement", "build_dependency_graph"]
