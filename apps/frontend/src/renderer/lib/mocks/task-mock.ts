@@ -91,5 +91,29 @@ export const taskMock = {
   onTaskStatusChange: () => () => {},
   onTaskExecutionProgress: () => () => {},
   onTaskLogsChanged: () => () => {},
-  onTaskLogsStream: () => () => {}
+  onTaskLogsStream: () => () => {},
+
+  // Merge tracking event listeners (no-op in browser)
+  onMergeProgress: () => () => {},
+  onMergeComplete: () => () => {},
+  onMergeConflictDetected: () => () => {},
+
+  // Merge history operations
+  getMergeHistory: async () => ({ success: true, data: [] }),
+  getMergeHistoryLatest: async () => ({ success: true, data: null }),
+  getMergeHistoryListTasks: async () => ({ success: true, data: { taskIds: [] } }),
+  getMergeHistoryStats: async () => ({
+    success: true,
+    data: {
+      totalTasks: 0,
+      totalAttempts: 0,
+      successfulAttempts: 0,
+      failedAttempts: 0,
+      timeoutAttempts: 0,
+      successRate: 1.0,
+      totalConflicts: 0,
+      resolvedConflicts: 0,
+      conflictResolutionRate: 1.0
+    }
+  })
 };

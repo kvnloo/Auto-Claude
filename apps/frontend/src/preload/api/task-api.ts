@@ -9,8 +9,50 @@ import type {
   ImplementationPlan,
   TaskMetadata,
   TaskLogs,
-  TaskLogStreamChunk
+  TaskLogStreamChunk,
+  MergeProgress,
+  MergeStatus,
+  MergeHealth,
+  MergeAttempt,
+  MergeHistoryListResult,
+  MergeHistoryStats
 } from '../../shared/types';
+
+/**
+ * Data sent with MERGE_PROGRESS events from main process
+ */
+export interface MergeProgressEventData {
+  step: string;
+  progressPercent: number;
+  filePath?: string;
+  conflictsDetected: number;
+  conflictsResolved: number;
+}
+
+/**
+ * Data sent with MERGE_CONFLICT_DETECTED events from main process
+ */
+export interface MergeConflictEventData {
+  conflictsDetected: number;
+  filePath: string;
+  message: string;
+}
+
+/**
+ * Data sent with MERGE_COMPLETE events from main process
+ */
+export interface MergeCompleteEventData {
+  success: boolean;
+  taskId: string;
+  status: MergeStatus;
+  health: MergeHealth;
+  conflictsDetected: number;
+  conflictsResolved: number;
+  commitHash?: string;
+  durationMs: number;
+  staged?: boolean;
+  hasConflicts?: boolean;
+}
 
 export interface TaskAPI {
   // Task Operations
@@ -68,6 +110,23 @@ export interface TaskAPI {
   unwatchTaskLogs: (specId: string) => Promise<IPCResult>;
   onTaskLogsChanged: (callback: (specId: string, logs: TaskLogs) => void) => () => void;
   onTaskLogsStream: (callback: (specId: string, chunk: TaskLogStreamChunk) => void) => () => void;
+
+  // Merge Tracking Event Listeners
+  onMergeProgress: (
+    callback: (taskId: string, progress: MergeProgressEventData) => void
+  ) => () => void;
+  onMergeComplete: (
+    callback: (taskId: string, result: MergeCompleteEventData) => void
+  ) => () => void;
+  onMergeConflictDetected: (
+    callback: (taskId: string, conflict: MergeConflictEventData) => void
+  ) => () => void;
+
+  // Merge History API
+  getMergeHistory: (taskId: string, projectId?: string) => Promise<IPCResult<MergeAttempt[]>>;
+  getMergeHistoryLatest: (taskId: string, projectId?: string) => Promise<IPCResult<MergeAttempt | null>>;
+  getMergeHistoryListTasks: (projectId: string) => Promise<IPCResult<MergeHistoryListResult>>;
+  getMergeHistoryStats: (projectId: string) => Promise<IPCResult<MergeHistoryStats>>;
 }
 
 export const createTaskAPI = (): TaskAPI => ({
@@ -266,5 +325,77 @@ export const createTaskAPI = (): TaskAPI => ({
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.TASK_LOGS_STREAM, handler);
     };
-  }
+  },
+
+  // Merge Tracking Event Listeners
+  onMergeProgress: (
+    callback: (taskId: string, progress: MergeProgressEventData) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      taskId: string,
+      progress: MergeProgressEventData
+    ): void => {
+      callback(taskId, progress);
+    };
+    ipcRenderer.on(IPC_CHANNELS.MERGE_PROGRESS, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.MERGE_PROGRESS, handler);
+    };
+  },
+
+  onMergeComplete: (
+    callback: (taskId: string, result: MergeCompleteEventData) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      taskId: string,
+      result: MergeCompleteEventData
+    ): void => {
+      callback(taskId, result);
+    };
+    ipcRenderer.on(IPC_CHANNELS.MERGE_COMPLETE, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.MERGE_COMPLETE, handler);
+    };
+  },
+
+  onMergeConflictDetected: (
+    callback: (taskId: string, conflict: MergeConflictEventData) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      taskId: string,
+      conflict: MergeConflictEventData
+    ): void => {
+      callback(taskId, conflict);
+    };
+    ipcRenderer.on(IPC_CHANNELS.MERGE_CONFLICT_DETECTED, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.MERGE_CONFLICT_DETECTED, handler);
+    };
+  },
+
+  // Merge History API
+  getMergeHistory: (
+    taskId: string,
+    projectId?: string
+  ): Promise<IPCResult<MergeAttempt[]>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.MERGE_HISTORY_GET, taskId, projectId),
+
+  getMergeHistoryLatest: (
+    taskId: string,
+    projectId?: string
+  ): Promise<IPCResult<MergeAttempt | null>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.MERGE_HISTORY_GET_LATEST, taskId, projectId),
+
+  getMergeHistoryListTasks: (
+    projectId: string
+  ): Promise<IPCResult<MergeHistoryListResult>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.MERGE_HISTORY_LIST_TASKS, projectId),
+
+  getMergeHistoryStats: (
+    projectId: string
+  ): Promise<IPCResult<MergeHistoryStats>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.MERGE_HISTORY_GET_STATS, projectId)
 });

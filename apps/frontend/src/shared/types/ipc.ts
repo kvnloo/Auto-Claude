@@ -36,8 +36,16 @@ import type {
   TaskRecoveryOptions,
   TaskMetadata,
   TaskLogs,
-  TaskLogStreamChunk
+  TaskLogStreamChunk,
+  MergeAttempt,
+  MergeHistoryListResult,
+  MergeHistoryStats
 } from './task';
+import type {
+  MergeProgressEventData,
+  MergeCompleteEventData,
+  MergeConflictEventData
+} from '../../preload/api/task-api';
 import type {
   TerminalCreateOptions,
   TerminalSession,
@@ -538,6 +546,23 @@ export interface ElectronAPI {
   onTaskLogsStream: (
     callback: (specId: string, chunk: TaskLogStreamChunk) => void
   ) => () => void;
+
+  // Merge tracking event listeners
+  onMergeProgress: (
+    callback: (taskId: string, progress: MergeProgressEventData) => void
+  ) => () => void;
+  onMergeComplete: (
+    callback: (taskId: string, result: MergeCompleteEventData) => void
+  ) => () => void;
+  onMergeConflictDetected: (
+    callback: (taskId: string, conflict: MergeConflictEventData) => void
+  ) => () => void;
+
+  // Merge history API
+  getMergeHistory: (taskId: string, projectId?: string) => Promise<IPCResult<MergeAttempt[]>>;
+  getMergeHistoryLatest: (taskId: string, projectId?: string) => Promise<IPCResult<MergeAttempt | null>>;
+  getMergeHistoryListTasks: (projectId: string) => Promise<IPCResult<MergeHistoryListResult>>;
+  getMergeHistoryStats: (projectId: string) => Promise<IPCResult<MergeHistoryStats>>;
 
   // File explorer operations
   listDirectory: (dirPath: string) => Promise<IPCResult<FileNode[]>>;

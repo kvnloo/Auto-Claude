@@ -7,6 +7,11 @@ import type {
   MergeHistoryStats,
   MergeProgressConflict
 } from '../../shared/types';
+import type {
+  MergeProgressEventData,
+  MergeCompleteEventData,
+  MergeConflictEventData
+} from '../../preload/api/task-api';
 
 /**
  * Merge tracking store state interface.
@@ -437,4 +442,103 @@ export function useMergeStats(): MergeHistoryStats | null {
  */
 export function useActiveMergeCount(): number {
   return useMergeStore((state) => Object.keys(state.activeMerges).length);
+}
+
+/**
+ * Setup IPC event listeners for merge tracking.
+ * Call this once when the app initializes to start receiving merge events
+ * from the main process.
+ *
+ * @returns Cleanup function to unsubscribe all listeners
+ *
+ * @example
+ * ```typescript
+ * // In App.tsx or a similar initialization point:
+ * useEffect(() => {
+ *   const cleanup = setupMergeStoreListeners();
+ *   return cleanup;
+ * }, []);
+ * ```
+ */
+export function setupMergeStoreListeners(): () => void {
+  const store = useMergeStore.getState;
+
+  // Listen for merge progress updates
+  const unsubProgress = window.electronAPI.onMergeProgress(
+    (taskId: string, progress: MergeProgressEventData) => {
+      // Map event data to merge progress update
+      const progressUpdate: Partial<MergeProgress> = {
+        status: 'merging' as MergeStatus,
+        progress: progress.progressPercent,
+        currentStep: progress.step,
+        conflictsResolved: progress.conflictsResolved
+      };
+
+      // If conflicts detected, update health to reflect that
+      if (progress.conflictsDetected > 0) {
+        const unresolvedCount = progress.conflictsDetected - progress.conflictsResolved;
+        progressUpdate.health = unresolvedCount > 0 ? 'fail' : 'warning';
+        progressUpdate.status = unresolvedCount > 0 ? 'resolving' : 'merging';
+      }
+
+      store().updateMergeProgress(taskId, progressUpdate);
+    }
+  );
+
+  // Listen for merge complete events
+  const unsubComplete = window.electronAPI.onMergeComplete(
+    (taskId: string, result: MergeCompleteEventData) => {
+      if (result.success) {
+        // Successful merge completion
+        store().completeMerge(taskId, result.health);
+
+        // Create a history entry for the completed merge
+        const activeMerge = store().getMergeProgress(taskId);
+        if (activeMerge) {
+          const attempt: MergeAttempt = {
+            id: `${taskId}-${Date.now()}`,
+            taskId,
+            worktreePath: '', // Will be filled in by backend
+            startedAt: activeMerge.startedAt || new Date().toISOString(),
+            completedAt: new Date().toISOString(),
+            status: result.status,
+            health: result.health,
+            conflicts: activeMerge.conflicts,
+            progressPercent: 100,
+            currentStep: 'Merge completed',
+            isFastForward: result.conflictsDetected === 0,
+            commitHash: result.commitHash,
+            durationSeconds: result.durationMs / 1000
+          };
+          store().addHistoryEntry(attempt);
+        }
+      } else {
+        // Failed merge
+        const errorMessage = result.hasConflicts
+          ? `Merge failed with ${result.conflictsDetected} unresolved conflicts`
+          : 'Merge failed';
+        store().failMerge(taskId, errorMessage);
+      }
+    }
+  );
+
+  // Listen for conflict detection events
+  const unsubConflict = window.electronAPI.onMergeConflictDetected(
+    (taskId: string, conflict: MergeConflictEventData) => {
+      // Add the conflict to the active merge
+      const conflictEntry: MergeProgressConflict = {
+        filePath: conflict.filePath,
+        resolved: false,
+        details: conflict.message
+      };
+      store().addConflict(taskId, conflictEntry);
+    }
+  );
+
+  // Return cleanup function
+  return () => {
+    unsubProgress();
+    unsubComplete();
+    unsubConflict();
+  };
 }
