@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .types import ChangeType, FileAnalysis
+from .types import ChangeType, ConflictSeverity, DependencyConflict, FileAnalysis, SemanticChange
 
 # Try to import networkx - it's optional for dependency graph analysis
 NETWORKX_AVAILABLE = False
@@ -440,5 +440,252 @@ class _StubDiGraph:
         return self._edges
 
 
+def detect_dependency_conflicts(
+    file_analyses: dict[str, FileAnalysis] | list[FileAnalysis],
+    graph: Any | None,
+) -> list[DependencyConflict]:
+    """
+    Detect when changes break downstream dependencies using graph analysis.
+
+    Analyzes semantic changes and uses the dependency graph to identify
+    when modifications to one file may break other files that depend on it.
+
+    Breaking changes that are detected:
+    - REMOVE_FUNCTION: A function that other files may call is removed
+    - REMOVE_IMPORT: An import that may be re-exported is removed
+    - MODIFY_FUNCTION: A function signature change that may break callers
+    - RENAME_FUNCTION: A function rename without updating call sites
+    - REMOVE_METHOD: A method that other files may call is removed
+    - REMOVE_CLASS: A class that other files may use is removed
+
+    Args:
+        file_analyses: Either a dict mapping file paths to FileAnalysis objects,
+                      or a list of FileAnalysis objects.
+        graph: Optional NetworkX DiGraph of file dependencies.
+               If None, a new graph will be built from file_analyses.
+
+    Returns:
+        list[DependencyConflict]: List of detected dependency conflicts.
+
+    Example:
+        analyses = {...}  # FileAnalysis objects
+        graph = build_dependency_graph(analyses)
+        conflicts = detect_dependency_conflicts(analyses, graph)
+        for conflict in conflicts:
+            print(f"Change may break {len(conflict.affected_files)} files")
+    """
+    conflicts: list[DependencyConflict] = []
+
+    # Convert list to dict if necessary
+    analyses_dict: dict[str, FileAnalysis] = {}
+    if isinstance(file_analyses, dict):
+        analyses_dict = file_analyses
+    elif isinstance(file_analyses, list):
+        analyses_dict = {fa.file_path: fa for fa in file_analyses}
+
+    # If no analyses, return empty list
+    if not analyses_dict:
+        return conflicts
+
+    # Build graph if not provided
+    if graph is None:
+        graph = build_dependency_graph(file_analyses)
+
+    debug(
+        MODULE,
+        "Detecting dependency conflicts",
+        num_files=len(analyses_dict),
+        graph_available=graph is not None,
+    )
+
+    # Change types that may break downstream dependencies
+    breaking_change_types = {
+        ChangeType.REMOVE_FUNCTION,
+        ChangeType.REMOVE_IMPORT,
+        ChangeType.MODIFY_FUNCTION,
+        ChangeType.RENAME_FUNCTION,
+        ChangeType.REMOVE_METHOD,
+        ChangeType.REMOVE_CLASS,
+    }
+
+    # Iterate through all file analyses to find breaking changes
+    for file_path, analysis in analyses_dict.items():
+        for change in analysis.changes:
+            if change.change_type in breaking_change_types:
+                # Find files that depend on this file (files that import/use it)
+                affected_files = _find_dependent_files(graph, file_path)
+
+                if affected_files:
+                    # Determine severity based on change type and number of affected files
+                    severity = _determine_conflict_severity(
+                        change.change_type, len(affected_files)
+                    )
+
+                    # Create description
+                    description = _create_conflict_description(
+                        change, file_path, affected_files
+                    )
+
+                    # Add file_path to change metadata if not present
+                    if "file_path" not in change.metadata:
+                        change.metadata["file_path"] = file_path
+
+                    conflict = DependencyConflict(
+                        change=change,
+                        affected_files=affected_files,
+                        severity=severity,
+                        description=description,
+                    )
+                    conflicts.append(conflict)
+
+                    debug_detailed(
+                        MODULE,
+                        f"Detected dependency conflict: {change.change_type.value}",
+                        file_path=file_path,
+                        target=change.target,
+                        affected_count=len(affected_files),
+                        severity=severity.value,
+                    )
+
+    debug_success(
+        MODULE,
+        "Dependency conflict detection complete",
+        conflicts_found=len(conflicts),
+    )
+
+    return conflicts
+
+
+def _find_dependent_files(graph: Any, file_path: str) -> list[str]:
+    """
+    Find all files that depend on the given file using the dependency graph.
+
+    Uses nx.ancestors() to find upstream files (files that import this file).
+    Note: In our graph, edges go from importer -> imported, so we want
+    files where an edge points TO this file (predecessors/ancestors).
+
+    Args:
+        graph: NetworkX DiGraph or stub graph
+        file_path: The file path to find dependents for
+
+    Returns:
+        list[str]: List of file paths that depend on file_path
+    """
+    if graph is None:
+        return []
+
+    # Check if the file is in the graph
+    if file_path not in graph:
+        return []
+
+    # For NetworkX DiGraph
+    if NETWORKX_AVAILABLE and hasattr(graph, "predecessors"):
+        # predecessors() gives files that have an edge TO this file
+        # This means files that import/depend on this file
+        try:
+            # Get direct predecessors (files that directly import this file)
+            dependents = list(graph.predecessors(file_path))
+            return dependents
+        except Exception:
+            return []
+
+    # For stub graph, search edges manually
+    if hasattr(graph, "edges"):
+        dependents = []
+        for source, target in graph.edges():
+            if target == file_path:
+                dependents.append(source)
+        return dependents
+
+    return []
+
+
+def _determine_conflict_severity(
+    change_type: ChangeType, affected_count: int
+) -> ConflictSeverity:
+    """
+    Determine the severity of a dependency conflict.
+
+    Args:
+        change_type: The type of breaking change
+        affected_count: Number of files affected
+
+    Returns:
+        ConflictSeverity: The severity level
+    """
+    # Remove operations are more severe than modifications
+    if change_type in {
+        ChangeType.REMOVE_FUNCTION,
+        ChangeType.REMOVE_CLASS,
+        ChangeType.REMOVE_METHOD,
+    }:
+        if affected_count > 5:
+            return ConflictSeverity.CRITICAL
+        elif affected_count > 2:
+            return ConflictSeverity.HIGH
+        else:
+            return ConflictSeverity.MEDIUM
+
+    # Rename without updating call sites
+    if change_type == ChangeType.RENAME_FUNCTION:
+        return ConflictSeverity.HIGH
+
+    # Modifications may or may not break callers
+    if change_type == ChangeType.MODIFY_FUNCTION:
+        if affected_count > 5:
+            return ConflictSeverity.HIGH
+        elif affected_count > 2:
+            return ConflictSeverity.MEDIUM
+        else:
+            return ConflictSeverity.LOW
+
+    # Import removal
+    if change_type == ChangeType.REMOVE_IMPORT:
+        return ConflictSeverity.MEDIUM
+
+    return ConflictSeverity.LOW
+
+
+def _create_conflict_description(
+    change: SemanticChange, file_path: str, affected_files: list[str]
+) -> str:
+    """
+    Create a human-readable description of the dependency conflict.
+
+    Args:
+        change: The semantic change causing the conflict
+        file_path: The file where the change occurred
+        affected_files: List of affected file paths
+
+    Returns:
+        str: Human-readable description
+    """
+    change_descriptions = {
+        ChangeType.REMOVE_FUNCTION: f"Removing function '{change.target}'",
+        ChangeType.REMOVE_IMPORT: f"Removing import '{change.target}'",
+        ChangeType.MODIFY_FUNCTION: f"Modifying function '{change.target}'",
+        ChangeType.RENAME_FUNCTION: f"Renaming function '{change.target}'",
+        ChangeType.REMOVE_METHOD: f"Removing method '{change.target}'",
+        ChangeType.REMOVE_CLASS: f"Removing class '{change.target}'",
+    }
+
+    action = change_descriptions.get(
+        change.change_type, f"Change to '{change.target}'"
+    )
+
+    affected_summary = (
+        f"{len(affected_files)} dependent file(s)"
+        if len(affected_files) > 3
+        else ", ".join(affected_files)
+    )
+
+    return f"{action} in {file_path} may break {affected_summary}"
+
+
 # Re-export ExtractedElement for backwards compatibility
-__all__ = ["SemanticAnalyzer", "ExtractedElement", "build_dependency_graph"]
+__all__ = [
+    "SemanticAnalyzer",
+    "ExtractedElement",
+    "build_dependency_graph",
+    "detect_dependency_conflicts",
+]
