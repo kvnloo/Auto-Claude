@@ -361,5 +361,11 @@ export const IPC_CHANNELS = {
   RELEASE_GET_VERSIONS: 'release:getVersions',
 
   // Release events (main -> renderer)
-  RELEASE_PROGRESS: 'release:progress'
+  RELEASE_PROGRESS: 'release:progress',
+
+  // Merge tracking events (main -> renderer)
+  // Used for advanced merge completion tracking in agent worktrees
+  MERGE_PROGRESS: 'merge:progress',
+  MERGE_COMPLETE: 'merge:complete',
+  MERGE_CONFLICT_DETECTED: 'merge:conflictDetected'
 } as const;
