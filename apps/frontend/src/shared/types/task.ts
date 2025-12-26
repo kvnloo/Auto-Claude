@@ -168,7 +168,7 @@ export type TaskCategory =
 
 export interface TaskMetadata {
   // Origin tracking
-  sourceType?: 'ideation' | 'manual' | 'imported' | 'insights' | 'roadmap' | 'linear' | 'github';
+  sourceType?: 'ideation' | 'manual' | 'imported' | 'insights' | 'roadmap' | 'linear' | 'github' | 'screenshot';
   ideationType?: string;  // e.g., 'code_improvements', 'security_hardening'
   ideaId?: string;  // Reference to original idea if converted
   featureId?: string;  // Reference to roadmap feature if from roadmap
@@ -179,6 +179,11 @@ export interface TaskMetadata {
   githubIssueNumbers?: number[];  // Reference to multiple GitHub issues if from a batch
   githubUrl?: string;  // GitHub issue URL
   githubBatchTheme?: string;  // Theme/title of the GitHub issue batch
+
+  // Screenshot-generated task tracking
+  screenshotGenerated?: boolean;  // True if task was AI-generated from screenshot analysis
+  sourceScreenshots?: ImageAttachment[];  // Screenshots used to generate this task
+  extractedComponents?: string[];  // UI components identified in screenshot analysis
 
   // Classification
   category?: TaskCategory;
