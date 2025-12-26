@@ -1,0 +1,445 @@
+/**
+ * Action Scoring Algorithm for Intelligent Subtask Action Summarization
+ *
+ * Implements a weighted scoring algorithm based on cognitive science principles
+ * to identify the most relevant actions from potentially 1000+ entries.
+ *
+ * Scoring Weights (research-backed):
+ * - Error: 40 - Flow blockers demand immediate attention (Csikszentmihalyi)
+ * - Decision: 25 - Mental model building (Justin Sung's conceptual frameworks)
+ * - FileChange: 20 - Concrete anchors for active recall
+ * - TimeAnomaly: 10 - Attention signals for complexity (Kahneman's System 1/2)
+ * - Novelty: 5 - Learning moments, first exposures (Bjork's desirable difficulties)
+ */
+
+import type { TaskLogEntry, TaskLogEntryType } from '@shared/types/task';
+
+/** Scoring weight constants based on cognitive science principles */
+export const SCORING_WEIGHTS = {
+  ERROR: 40,
+  WARNING: 20,
+  DECISION: 25,
+  FILE_CHANGE: 20,
+  TIME_ANOMALY: 10,
+  NOVELTY: 5,
+} as const;
+
+/** Default number of top actions to return */
+export const DEFAULT_TOP_N = 5;
+
+/** Time anomaly threshold multiplier (2x average duration) */
+export const TIME_ANOMALY_THRESHOLD = 2;
+
+/**
+ * Scored action with computed relevance score
+ */
+export interface ScoredAction {
+  action: TaskLogEntry;
+  score: number;
+  index: number; // Original index for tiebreaking
+  scoreBreakdown: ScoreBreakdown;
+}
+
+/**
+ * Breakdown of how an action's score was calculated
+ */
+export interface ScoreBreakdown {
+  error: number;
+  decision: number;
+  fileChange: number;
+  timeAnomaly: number;
+  novelty: number;
+}
+
+/**
+ * Context for scoring actions (e.g., average duration, seen types)
+ */
+export interface ScoringContext {
+  averageDuration?: number;
+  seenToolTypes: Set<string>;
+}
+
+/**
+ * Tool names that indicate decision-making actions
+ * These represent key architectural or implementation choices
+ */
+const DECISION_TOOL_NAMES = [
+  'edit',
+  'write',
+  'create',
+  'bash', // Commands can represent decisions
+  'delete',
+  'rename',
+  'move',
+  'refactor',
+];
+
+/**
+ * Tool names that indicate file changes
+ */
+const FILE_CHANGE_TOOL_NAMES = [
+  'edit',
+  'write',
+  'create',
+  'delete',
+  'rename',
+  'move',
+  'notebookedit',
+];
+
+/**
+ * Entry types that indicate errors or warnings
+ */
+const ERROR_TYPES: TaskLogEntryType[] = ['error'];
+
+/**
+ * Entry types that indicate success (lower priority than errors)
+ */
+const SUCCESS_TYPES: TaskLogEntryType[] = ['success'];
+
+/**
+ * Check if an action represents an error
+ */
+export function isErrorAction(action: TaskLogEntry): boolean {
+  // Check entry type
+  if (ERROR_TYPES.includes(action.type)) {
+    return true;
+  }
+
+  // Check content for error keywords
+  const content = action.content?.toLowerCase() ?? '';
+  const hasErrorKeywords =
+    content.includes('error') ||
+    content.includes('failed') ||
+    content.includes('failure') ||
+    content.includes('exception') ||
+    content.includes('crash');
+
+  return hasErrorKeywords;
+}
+
+/**
+ * Check if an action represents a warning
+ */
+export function isWarningAction(action: TaskLogEntry): boolean {
+  const content = action.content?.toLowerCase() ?? '';
+  return (
+    content.includes('warning') ||
+    content.includes('deprecated') ||
+    content.includes('caution')
+  );
+}
+
+/**
+ * Check if an action represents a decision point
+ * Decision points are key moments that affect the implementation direction
+ */
+export function isDecisionAction(action: TaskLogEntry): boolean {
+  // Tool-based decision detection
+  if (action.tool_name) {
+    const toolLower = action.tool_name.toLowerCase();
+    if (DECISION_TOOL_NAMES.some((name) => toolLower.includes(name))) {
+      return true;
+    }
+  }
+
+  // Content-based decision detection
+  const content = action.content?.toLowerCase() ?? '';
+  const hasDecisionKeywords =
+    content.includes('decided') ||
+    content.includes('choosing') ||
+    content.includes('selected') ||
+    content.includes('implementing') ||
+    content.includes('creating') ||
+    content.includes('adding') ||
+    content.includes('modifying');
+
+  return hasDecisionKeywords;
+}
+
+/**
+ * Check if an action involves file changes
+ */
+export function isFileChangeAction(action: TaskLogEntry): boolean {
+  // Tool-based file change detection
+  if (action.tool_name) {
+    const toolLower = action.tool_name.toLowerCase();
+    if (FILE_CHANGE_TOOL_NAMES.some((name) => toolLower.includes(name))) {
+      return true;
+    }
+  }
+
+  // Content-based file change detection
+  const content = action.content?.toLowerCase() ?? '';
+  return (
+    content.includes('wrote') ||
+    content.includes('edited') ||
+    content.includes('created') ||
+    content.includes('modified') ||
+    content.includes('deleted')
+  );
+}
+
+/**
+ * Count the number of files affected by an action
+ * Returns a rough estimate based on content analysis
+ */
+export function countFilesChanged(action: TaskLogEntry): number {
+  // Check tool input for file paths
+  const input = action.tool_input ?? '';
+  const detail = action.detail ?? '';
+  const combined = input + detail;
+
+  // Count file path patterns (simplified heuristic)
+  const filePatterns = combined.match(/[\/\\][\w\-\.]+\.[a-z]{1,4}/gi) ?? [];
+
+  // Cap at 3 for scoring purposes (to prevent outliers)
+  return Math.min(filePatterns.length, 3);
+}
+
+/**
+ * Parse duration from action timestamp or detail
+ * Returns undefined if duration cannot be determined
+ */
+export function parseDuration(action: TaskLogEntry): number | undefined {
+  // Duration is not directly available in TaskLogEntry
+  // This could be enhanced if duration tracking is added to the type
+  return undefined;
+}
+
+/**
+ * Calculate average duration from a list of actions
+ */
+export function calculateAverageDuration(actions: TaskLogEntry[]): number | undefined {
+  const durations = actions
+    .map(parseDuration)
+    .filter((d): d is number => d !== undefined);
+
+  if (durations.length === 0) {
+    return undefined;
+  }
+
+  return durations.reduce((sum, d) => sum + d, 0) / durations.length;
+}
+
+/**
+ * Check if action duration is anomalous (significantly longer than average)
+ */
+export function isTimeAnomaly(action: TaskLogEntry, averageDuration?: number): boolean {
+  if (averageDuration === undefined) {
+    return false;
+  }
+
+  const duration = parseDuration(action);
+  if (duration === undefined) {
+    return false;
+  }
+
+  return duration > averageDuration * TIME_ANOMALY_THRESHOLD;
+}
+
+/**
+ * Check if this is the first occurrence of a tool type
+ */
+export function isNovelty(action: TaskLogEntry, seenTypes: Set<string>): boolean {
+  if (!action.tool_name) {
+    return false;
+  }
+
+  const toolType = action.tool_name.toLowerCase();
+  return !seenTypes.has(toolType);
+}
+
+/**
+ * Score a single action based on cognitive science principles
+ *
+ * @param action - The action to score
+ * @param index - Original index in the actions array (for tiebreaking)
+ * @param context - Scoring context with average duration and seen types
+ * @returns ScoredAction with computed score and breakdown
+ */
+export function scoreAction(
+  action: TaskLogEntry,
+  index: number,
+  context: ScoringContext
+): ScoredAction {
+  const breakdown: ScoreBreakdown = {
+    error: 0,
+    decision: 0,
+    fileChange: 0,
+    timeAnomaly: 0,
+    novelty: 0,
+  };
+
+  // Error/warning signals (cognitive priority)
+  if (isErrorAction(action)) {
+    breakdown.error = SCORING_WEIGHTS.ERROR;
+  } else if (isWarningAction(action)) {
+    breakdown.error = SCORING_WEIGHTS.WARNING;
+  }
+
+  // Decision points (mental model building)
+  if (isDecisionAction(action)) {
+    breakdown.decision = SCORING_WEIGHTS.DECISION;
+  }
+
+  // File changes (concrete anchors)
+  if (isFileChangeAction(action)) {
+    const filesChanged = countFilesChanged(action);
+    // Scale by number of files changed, cap at 3x base weight
+    breakdown.fileChange = SCORING_WEIGHTS.FILE_CHANGE * Math.max(1, filesChanged);
+  }
+
+  // Time anomalies (attention signals)
+  if (isTimeAnomaly(action, context.averageDuration)) {
+    breakdown.timeAnomaly = SCORING_WEIGHTS.TIME_ANOMALY;
+  }
+
+  // Novelty (learning moments)
+  if (isNovelty(action, context.seenToolTypes)) {
+    breakdown.novelty = SCORING_WEIGHTS.NOVELTY;
+    // Track this type as seen
+    if (action.tool_name) {
+      context.seenToolTypes.add(action.tool_name.toLowerCase());
+    }
+  }
+
+  const score =
+    breakdown.error +
+    breakdown.decision +
+    breakdown.fileChange +
+    breakdown.timeAnomaly +
+    breakdown.novelty;
+
+  return {
+    action,
+    score,
+    index,
+    scoreBreakdown: breakdown,
+  };
+}
+
+/**
+ * Compare function for sorting scored actions
+ * Primary: descending by score
+ * Secondary: ascending by index (earlier actions win ties)
+ */
+function compareScoredActions(a: ScoredAction, b: ScoredAction): number {
+  // Higher score comes first
+  if (b.score !== a.score) {
+    return b.score - a.score;
+  }
+  // For equal scores, earlier action wins (ascending index)
+  return a.index - b.index;
+}
+
+/**
+ * Filter and return the top N most relevant actions
+ *
+ * @param actions - Array of all actions to filter
+ * @param n - Number of top actions to return (default: 5)
+ * @param subtaskId - Optional subtask ID to filter by
+ * @returns Array of scored actions, sorted by relevance
+ */
+export function filterTopActions(
+  actions: TaskLogEntry[],
+  n: number = DEFAULT_TOP_N,
+  subtaskId?: string
+): ScoredAction[] {
+  // Handle empty or small arrays
+  if (!actions || actions.length === 0) {
+    return [];
+  }
+
+  // Filter by subtask if specified
+  let filteredActions = subtaskId
+    ? actions.filter((a) => a.subtask_id === subtaskId)
+    : actions;
+
+  // If fewer actions than requested, process all of them
+  if (filteredActions.length <= n) {
+    const context: ScoringContext = {
+      averageDuration: calculateAverageDuration(filteredActions),
+      seenToolTypes: new Set<string>(),
+    };
+
+    return filteredActions
+      .map((action, index) => scoreAction(action, index, context))
+      .sort(compareScoredActions);
+  }
+
+  // Create scoring context
+  const context: ScoringContext = {
+    averageDuration: calculateAverageDuration(filteredActions),
+    seenToolTypes: new Set<string>(),
+  };
+
+  // Score all actions
+  const scoredActions = filteredActions.map((action, index) =>
+    scoreAction(action, index, context)
+  );
+
+  // Sort by score (descending) with tiebreaker
+  scoredActions.sort(compareScoredActions);
+
+  // Return top N
+  return scoredActions.slice(0, n);
+}
+
+/**
+ * Group actions by subphase for hierarchical display
+ *
+ * @param actions - Array of scored actions
+ * @returns Map of subphase -> actions
+ */
+export function groupActionsBySubphase(
+  actions: ScoredAction[]
+): Map<string, ScoredAction[]> {
+  const groups = new Map<string, ScoredAction[]>();
+
+  for (const action of actions) {
+    const subphase = action.action.subphase ?? 'Other';
+    const existing = groups.get(subphase) ?? [];
+    existing.push(action);
+    groups.set(subphase, existing);
+  }
+
+  return groups;
+}
+
+/**
+ * Get a human-readable description of why an action scored highly
+ *
+ * @param scoredAction - The scored action to describe
+ * @returns String describing the scoring reasons
+ */
+export function getScoreReason(scoredAction: ScoredAction): string {
+  const reasons: string[] = [];
+  const { scoreBreakdown } = scoredAction;
+
+  if (scoreBreakdown.error > 0) {
+    if (scoreBreakdown.error >= SCORING_WEIGHTS.ERROR) {
+      reasons.push('Error detected');
+    } else {
+      reasons.push('Warning detected');
+    }
+  }
+
+  if (scoreBreakdown.decision > 0) {
+    reasons.push('Key decision');
+  }
+
+  if (scoreBreakdown.fileChange > 0) {
+    reasons.push('File modification');
+  }
+
+  if (scoreBreakdown.timeAnomaly > 0) {
+    reasons.push('Long duration');
+  }
+
+  if (scoreBreakdown.novelty > 0) {
+    reasons.push('New action type');
+  }
+
+  return reasons.length > 0 ? reasons.join(', ') : 'Standard action';
+}
