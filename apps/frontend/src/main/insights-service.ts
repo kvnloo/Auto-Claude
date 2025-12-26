@@ -173,14 +173,14 @@ export class InsightsService extends EventEmitter {
     const configToUse = modelConfig || session.modelConfig;
 
     try {
-      // Execute insights query
-      // Note: attachments are passed in subtask-9-2 which updates InsightsExecutor
+      // Execute insights query with attachments
       const result = await this.executor.execute(
         projectId,
         projectPath,
         message,
         conversationHistory,
-        configToUse
+        configToUse,
+        attachments
       );
 
       // Add assistant message to session

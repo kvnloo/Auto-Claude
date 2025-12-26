@@ -8,7 +8,8 @@ import type {
   InsightsChatStatus,
   InsightsStreamChunk,
   InsightsToolUsage,
-  InsightsModelConfig
+  InsightsModelConfig,
+  AttachedFile
 } from '../../shared/types';
 import { MODEL_ID_MAP } from '../../shared/constants';
 import { InsightsConfig } from './config';
@@ -63,7 +64,8 @@ export class InsightsExecutor extends EventEmitter {
     projectPath: string,
     message: string,
     conversationHistory: Array<{ role: string; content: string }>,
-    modelConfig?: InsightsModelConfig
+    modelConfig?: InsightsModelConfig,
+    attachments?: AttachedFile[]
   ): Promise<ProcessorResult> {
     // Cancel any existing session
     this.cancelSession(projectId);
@@ -102,6 +104,22 @@ export class InsightsExecutor extends EventEmitter {
       throw new Error('Failed to write conversation history to temp file');
     }
 
+    // Write attachments to temp file if present
+    const attachmentsFile = path.join(
+      os.tmpdir(),
+      `insights-attachments-${projectId}-${Date.now()}.json`
+    );
+    let attachmentsFileCreated = false;
+    if (attachments && attachments.length > 0) {
+      try {
+        writeFileSync(attachmentsFile, JSON.stringify(attachments), 'utf-8');
+        attachmentsFileCreated = true;
+      } catch (err) {
+        console.error('[Insights] Failed to write attachments file:', err);
+        // Continue without attachments - non-fatal error
+      }
+    }
+
     // Build command arguments
     const args = [
       runnerPath,
@@ -109,6 +127,11 @@ export class InsightsExecutor extends EventEmitter {
       '--message', message,
       '--history-file', historyFile
     ];
+
+    // Add attachments file if created
+    if (attachmentsFileCreated) {
+      args.push('--attachments-file', attachmentsFile);
+    }
 
     // Add model config if provided
     if (modelConfig) {
@@ -167,12 +190,19 @@ export class InsightsExecutor extends EventEmitter {
       proc.on('close', (code) => {
         this.activeSessions.delete(projectId);
 
-        // Cleanup temp file
+        // Cleanup temp files
         if (historyFileCreated && existsSync(historyFile)) {
           try {
             unlinkSync(historyFile);
           } catch (cleanupErr) {
             console.error('[Insights] Failed to cleanup history file:', cleanupErr);
+          }
+        }
+        if (attachmentsFileCreated && existsSync(attachmentsFile)) {
+          try {
+            unlinkSync(attachmentsFile);
+          } catch (cleanupErr) {
+            console.error('[Insights] Failed to cleanup attachments file:', cleanupErr);
           }
         }
 
@@ -210,12 +240,19 @@ export class InsightsExecutor extends EventEmitter {
       proc.on('error', (err) => {
         this.activeSessions.delete(projectId);
 
-        // Cleanup temp file
+        // Cleanup temp files
         if (historyFileCreated && existsSync(historyFile)) {
           try {
             unlinkSync(historyFile);
           } catch (cleanupErr) {
             console.error('[Insights] Failed to cleanup history file:', cleanupErr);
+          }
+        }
+        if (attachmentsFileCreated && existsSync(attachmentsFile)) {
+          try {
+            unlinkSync(attachmentsFile);
+          } catch (cleanupErr) {
+            console.error('[Insights] Failed to cleanup attachments file:', cleanupErr);
           }
         }
 
