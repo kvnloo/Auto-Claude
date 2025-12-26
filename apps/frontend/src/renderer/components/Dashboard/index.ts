@@ -10,3 +10,6 @@ export { default as ReasoningDisplayDefault } from './ReasoningDisplay';
 
 export { ProgressTracker } from './ProgressTracker';
 export { default as ProgressTrackerDefault } from './ProgressTracker';
+
+export { DecisionTree } from './DecisionTree';
+export { default as DecisionTreeDefault } from './DecisionTree';
