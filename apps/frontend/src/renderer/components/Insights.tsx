@@ -104,7 +104,12 @@ export function Insights({ projectId }: InsightsProps) {
     const message = inputValue.trim();
     if (!message || status.phase === 'thinking' || status.phase === 'streaming') return;
 
+    // Clear input and file error state
     setInputValue('');
+    setFileError(null);
+
+    // Send message with any attached files (base64 data already embedded when files were added)
+    // The sendMessage function in the store will include attachedFiles and clear them after sending
     sendMessage(projectId, message);
   };
 
