@@ -7,11 +7,18 @@ Functions for creating and configuring the Claude Agent SDK client.
 All AI interactions should use `create_client()` to ensure consistent OAuth authentication
 and proper tool/MCP configuration. For simple message calls without full agent sessions,
 use `ClaudeSDKClient` directly with `allowed_tools=[]` and `max_turns=1`.
+
+For vision API calls (multimodal with images), use the vision helper functions:
+- `is_vision_api_available()` - Check if vision API can be used
+- `create_vision_image_block()` - Create a single image content block
+- `create_vision_message_content()` - Create complete multimodal message content
+- `get_anthropic_client()` - Get configured Anthropic client for vision calls
 """
 
 import json
 import os
 from pathlib import Path
+from typing import Any
 
 from auto_claude_tools import (
     create_auto_claude_mcp_server,
@@ -57,6 +64,170 @@ def is_electron_mcp_enabled() -> bool:
 def get_electron_debug_port() -> int:
     """Get the Electron remote debugging port (default: 9222)."""
     return int(os.environ.get("ELECTRON_DEBUG_PORT", "9222"))
+
+
+# =============================================================================
+# VISION API HELPERS
+# =============================================================================
+#
+# These functions provide reusable utilities for working with Claude's vision API.
+# Use these for multimodal image analysis tasks like screenshot analysis.
+# The Claude Agent SDK may not fully support vision, so we use Anthropic SDK directly.
+
+
+def is_vision_api_available() -> tuple[bool, str | None]:
+    """
+    Check if the vision API is available for use.
+
+    Vision API requires:
+    1. The anthropic SDK to be installed
+    2. A valid API key (ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN)
+
+    Returns:
+        Tuple of (is_available, error_message)
+        - (True, None) if vision API is ready
+        - (False, "error description") if not available
+    """
+    # Check if anthropic SDK is installed
+    try:
+        import anthropic  # noqa: F401
+    except ImportError:
+        return False, "Anthropic SDK not installed. Run: pip install anthropic"
+
+    # Check for API key
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        api_key = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+
+    if not api_key:
+        return False, "Missing API key. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN"
+
+    return True, None
+
+
+def get_anthropic_client() -> Any:
+    """
+    Get a configured Anthropic AsyncAnthropic client for vision API calls.
+
+    Uses environment variables for configuration:
+    - ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN for authentication
+    - ANTHROPIC_BASE_URL for custom endpoint (optional)
+
+    Returns:
+        Configured anthropic.AsyncAnthropic client
+
+    Raises:
+        ImportError: If anthropic SDK is not installed
+        ValueError: If no API key is available
+    """
+    import anthropic
+
+    # Get API key from environment
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if not api_key:
+        api_key = os.environ.get("CLAUDE_CODE_OAUTH_TOKEN")
+
+    if not api_key:
+        raise ValueError("Missing API key. Set ANTHROPIC_API_KEY or CLAUDE_CODE_OAUTH_TOKEN")
+
+    # Build client kwargs
+    client_kwargs: dict[str, Any] = {"api_key": api_key}
+
+    # Add optional base URL
+    base_url = os.environ.get("ANTHROPIC_BASE_URL")
+    if base_url:
+        client_kwargs["base_url"] = base_url
+
+    return anthropic.AsyncAnthropic(**client_kwargs)
+
+
+def create_vision_image_block(
+    base64_data: str,
+    media_type: str = "image/png",
+) -> dict[str, Any]:
+    """
+    Create a single image content block for Claude's vision API.
+
+    Args:
+        base64_data: Base64 encoded image data (without data URL prefix)
+        media_type: MIME type of the image (e.g., 'image/png', 'image/jpeg')
+
+    Returns:
+        Image content block in Claude's expected format
+
+    Example:
+        >>> block = create_vision_image_block(base64_data, "image/png")
+        >>> # Result:
+        >>> {
+        ...     "type": "image",
+        ...     "source": {
+        ...         "type": "base64",
+        ...         "media_type": "image/png",
+        ...         "data": "..."
+        ...     }
+        ... }
+    """
+    # Normalize MIME type (jpeg vs jpg)
+    if media_type == "image/jpg":
+        media_type = "image/jpeg"
+
+    return {
+        "type": "image",
+        "source": {
+            "type": "base64",
+            "media_type": media_type,
+            "data": base64_data,
+        },
+    }
+
+
+def create_vision_message_content(
+    text_prompt: str,
+    images: list[dict[str, str]],
+) -> list[dict[str, Any]]:
+    """
+    Create complete multimodal message content for Claude's vision API.
+
+    This combines a text prompt with one or more images into the content array
+    format expected by Claude's messages API.
+
+    Args:
+        text_prompt: The text prompt to include
+        images: List of image dicts, each with 'data' (base64) and 'media_type'
+
+    Returns:
+        List of content blocks ready for Claude's messages API
+
+    Example:
+        >>> content = create_vision_message_content(
+        ...     "Analyze this UI design",
+        ...     [{"data": "base64...", "media_type": "image/png"}]
+        ... )
+        >>> # Use with:
+        >>> response = await client.messages.create(
+        ...     model="claude-sonnet-4-20250514",
+        ...     max_tokens=4096,
+        ...     messages=[{"role": "user", "content": content}]
+        ... )
+    """
+    content: list[dict[str, Any]] = []
+
+    # Add text prompt first
+    content.append({
+        "type": "text",
+        "text": text_prompt,
+    })
+
+    # Add each image
+    for image in images:
+        content.append(
+            create_vision_image_block(
+                base64_data=image.get("data", ""),
+                media_type=image.get("media_type", "image/png"),
+            )
+        )
+
+    return content
 
 
 # Puppeteer MCP tools for browser automation
