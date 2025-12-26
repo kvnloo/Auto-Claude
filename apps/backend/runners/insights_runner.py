@@ -8,6 +8,7 @@ about a codebase. It can also suggest tasks based on the conversation.
 
 import argparse
 import asyncio
+import base64
 import json
 import sys
 from pathlib import Path
@@ -128,14 +129,150 @@ Be conversational and helpful. Focus on providing actionable insights and clear 
 Keep responses concise but informative."""
 
 
+def format_attachment_context(attachments: list) -> str:
+    """Format file attachments as context for the AI."""
+    if not attachments:
+        return ""
+
+    context_parts = []
+    context_parts.append("\n## Attached Files\n")
+    context_parts.append(
+        "The user has attached the following files to this message:\n"
+    )
+
+    for attachment in attachments:
+        filename = attachment.get("filename", "unknown")
+        mime_type = attachment.get("mimeType", "application/octet-stream")
+        size = attachment.get("size", 0)
+        data = attachment.get("data", "")
+
+        # Format file size for readability
+        if size < 1024:
+            size_str = f"{size} bytes"
+        elif size < 1024 * 1024:
+            size_str = f"{size / 1024:.1f} KB"
+        elif size < 1024 * 1024 * 1024:
+            size_str = f"{size / (1024 * 1024):.1f} MB"
+        else:
+            size_str = f"{size / (1024 * 1024 * 1024):.1f} GB"
+
+        context_parts.append(f"\n### {filename}\n")
+        context_parts.append(f"- **Type**: {mime_type}\n")
+        context_parts.append(f"- **Size**: {size_str}\n")
+
+        # Include file content if it's a text-based file and we have data
+        if data and is_text_file(mime_type, filename):
+            try:
+                # Decode base64 data
+                decoded_data = base64.b64decode(data).decode("utf-8", errors="replace")
+                # Truncate very long files
+                max_chars = 50000
+                if len(decoded_data) > max_chars:
+                    decoded_data = (
+                        decoded_data[:max_chars] + f"\n\n... (truncated, {size_str} total)"
+                    )
+                context_parts.append(f"\n**Content:**\n```\n{decoded_data}\n```\n")
+            except Exception:
+                context_parts.append("- *Content could not be decoded*\n")
+        elif data:
+            # For binary files, just note that content is available
+            context_parts.append("- *Binary file content attached*\n")
+
+    return "".join(context_parts)
+
+
+def is_text_file(mime_type: str, filename: str) -> bool:
+    """Check if a file is text-based and should be included inline."""
+    # Text MIME types
+    text_mimes = [
+        "text/",
+        "application/json",
+        "application/javascript",
+        "application/typescript",
+        "application/xml",
+        "application/x-yaml",
+        "application/x-sh",
+        "application/x-python",
+    ]
+
+    if any(mime_type.startswith(m) for m in text_mimes):
+        return True
+
+    # Check by file extension
+    text_extensions = {
+        ".txt",
+        ".md",
+        ".py",
+        ".js",
+        ".ts",
+        ".tsx",
+        ".jsx",
+        ".json",
+        ".yaml",
+        ".yml",
+        ".xml",
+        ".html",
+        ".css",
+        ".scss",
+        ".less",
+        ".sh",
+        ".bash",
+        ".zsh",
+        ".fish",
+        ".sql",
+        ".graphql",
+        ".env",
+        ".gitignore",
+        ".dockerfile",
+        ".toml",
+        ".ini",
+        ".cfg",
+        ".conf",
+        ".log",
+        ".csv",
+        ".rst",
+        ".tex",
+        ".go",
+        ".rs",
+        ".java",
+        ".kt",
+        ".swift",
+        ".c",
+        ".cpp",
+        ".h",
+        ".hpp",
+        ".cs",
+        ".php",
+        ".rb",
+        ".pl",
+        ".lua",
+        ".vim",
+        ".el",
+        ".clj",
+        ".hs",
+        ".ex",
+        ".exs",
+        ".erl",
+        ".r",
+        ".m",
+        ".makefile",
+    }
+
+    ext = "." + filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+    return ext in text_extensions
+
+
 async def run_with_sdk(
     project_dir: str,
     message: str,
     history: list,
     model: str = "claude-sonnet-4-5-20250929",
     thinking_level: str = "medium",
+    attachments: list = None,
 ) -> None:
     """Run the chat using Claude SDK with streaming."""
+    if attachments is None:
+        attachments = []
     if not SDK_AVAILABLE:
         print("Claude SDK not available, falling back to simple mode", file=sys.stderr)
         run_simple(project_dir, message, history)
@@ -161,13 +298,25 @@ async def run_with_sdk(
         role = "User" if msg.get("role") == "user" else "Assistant"
         conversation_context += f"\n{role}: {msg['content']}\n"
 
-    # Build the full prompt with conversation history
+    # Build the full prompt with conversation history and attachments
+    attachment_context = format_attachment_context(attachments)
+
     full_prompt = message
+    if attachment_context:
+        full_prompt = f"{message}\n{attachment_context}"
+
     if conversation_context.strip():
         full_prompt = f"""Previous conversation:
 {conversation_context}
 
-Current question: {message}"""
+Current question: {full_prompt}"""
+
+    if attachments:
+        debug(
+            "insights_runner",
+            "Including file attachments in context",
+            attachment_count=len(attachments),
+        )
 
     debug(
         "insights_runner",
@@ -345,6 +494,10 @@ def main():
         choices=["none", "low", "medium", "high", "ultrathink"],
         help="Thinking level for extended reasoning (default: medium)",
     )
+    parser.add_argument(
+        "--attachments-file",
+        help="Path to JSON file containing file attachments",
+    )
     args = parser.parse_args()
 
     debug_section("insights_runner", "Starting Insights Chat")
@@ -385,9 +538,31 @@ def main():
         debug_error("insights_runner", f"Failed to load history: {e}")
         history = []
 
+    # Load attachments from file if provided
+    attachments = []
+    if args.attachments_file:
+        try:
+            debug(
+                "insights_runner",
+                "Loading attachments from file",
+                file=args.attachments_file,
+            )
+            with open(args.attachments_file, encoding="utf-8") as f:
+                attachments = json.load(f)
+            debug_detailed(
+                "insights_runner",
+                "Loaded attachments from file",
+                attachments_count=len(attachments),
+            )
+        except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
+            debug_error("insights_runner", f"Failed to load attachments: {e}")
+            attachments = []
+
     # Run the async SDK function
     debug("insights_runner", "Running SDK query")
-    asyncio.run(run_with_sdk(project_dir, user_message, history, model, thinking_level))
+    asyncio.run(
+        run_with_sdk(project_dir, user_message, history, model, thinking_level, attachments)
+    )
     debug_success("insights_runner", "Query completed")
 
 
