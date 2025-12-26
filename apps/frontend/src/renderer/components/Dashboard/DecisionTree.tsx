@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, memo, useEffect } from 'react';
+import React, { useCallback, useMemo, memo, useEffect, useState } from 'react';
 import {
   ReactFlow,
   Node,
@@ -24,6 +24,7 @@ import {
   getDecisionTypeColor,
   getNodeStatusColor,
 } from '../../stores/reasoning-store';
+import { DashboardErrorBoundary } from './DashboardErrorBoundary';
 import type {
   DecisionNode,
   DecisionType,
@@ -357,101 +358,121 @@ const nodeTypes: NodeTypes = {
 /**
  * Calculate positions for nodes in a tree layout.
  * Uses a simple hierarchical layout algorithm.
+ * Wrapped in try-catch to handle malformed data gracefully.
  */
 function calculateTreeLayout(
   decisions: DecisionNode[],
   selectedDecisionId: string | null,
   onSelect: (decision: DecisionNode) => void
 ): Node<DecisionNodeData>[] {
-  if (decisions.length === 0) return [];
+  try {
+    if (!Array.isArray(decisions) || decisions.length === 0) return [];
 
-  // Build parent-child relationships
-  const childrenMap = new Map<string | undefined, DecisionNode[]>();
-  decisions.forEach((node) => {
-    const parentId = node.parentId;
-    if (!childrenMap.has(parentId)) {
-      childrenMap.set(parentId, []);
+    // Build parent-child relationships
+    const childrenMap = new Map<string | undefined, DecisionNode[]>();
+    decisions.forEach((node) => {
+      if (!node || !node.id) return; // Skip invalid nodes
+      const parentId = node.parentId;
+      if (!childrenMap.has(parentId)) {
+        childrenMap.set(parentId, []);
+      }
+      childrenMap.get(parentId)!.push(node);
+    });
+
+    // Calculate positions using BFS
+    const nodes: Node<DecisionNodeData>[] = [];
+    const positionedNodes = new Set<string>();
+
+    // Track x position for each depth level
+    const levelWidths = new Map<number, number>();
+
+    function getNodeX(depth: number): number {
+      const currentWidth = levelWidths.get(depth) || LAYOUT_CONFIG.startX;
+      levelWidths.set(depth, currentWidth + LAYOUT_CONFIG.horizontalSpacing);
+      return currentWidth;
     }
-    childrenMap.get(parentId)!.push(node);
-  });
 
-  // Calculate positions using BFS
-  const nodes: Node<DecisionNodeData>[] = [];
-  const positionedNodes = new Set<string>();
+    function processNode(node: DecisionNode, depth: number, parentX?: number) {
+      try {
+        if (!node || !node.id || positionedNodes.has(node.id)) return;
+        positionedNodes.add(node.id);
 
-  // Track x position for each depth level
-  const levelWidths = new Map<number, number>();
+        const x = parentX !== undefined
+          ? parentX + LAYOUT_CONFIG.horizontalSpacing * (Math.random() * 0.4 - 0.2) // Slight variation
+          : getNodeX(depth);
+        const y = LAYOUT_CONFIG.startY + depth * LAYOUT_CONFIG.verticalSpacing;
 
-  function getNodeX(depth: number): number {
-    const currentWidth = levelWidths.get(depth) || LAYOUT_CONFIG.startX;
-    levelWidths.set(depth, currentWidth + LAYOUT_CONFIG.horizontalSpacing);
-    return currentWidth;
-  }
+        nodes.push({
+          id: node.id,
+          type: 'decision',
+          position: { x, y },
+          data: {
+            label: node.label || 'Unknown',
+            type: node.type || 'reasoning',
+            status: node.status || 'pending',
+            timestamp: node.timestamp || new Date().toISOString(),
+            reasoning: node.reasoning || '',
+            toolName: node.toolName,
+            decision: node,
+            isSelected: node.id === selectedDecisionId,
+            onSelect,
+          },
+          selected: node.id === selectedDecisionId,
+        });
 
-  function processNode(node: DecisionNode, depth: number, parentX?: number) {
-    if (positionedNodes.has(node.id)) return;
-    positionedNodes.add(node.id);
+        // Process children
+        const children = childrenMap.get(node.id) || [];
+        const childStartX = x - ((children.length - 1) * LAYOUT_CONFIG.horizontalSpacing) / 2;
 
-    const x = parentX !== undefined
-      ? parentX + LAYOUT_CONFIG.horizontalSpacing * (Math.random() * 0.4 - 0.2) // Slight variation
-      : getNodeX(depth);
-    const y = LAYOUT_CONFIG.startY + depth * LAYOUT_CONFIG.verticalSpacing;
+        children.forEach((child, index) => {
+          processNode(child, depth + 1, childStartX + index * LAYOUT_CONFIG.horizontalSpacing);
+        });
+      } catch (nodeError) {
+        // Skip this node if processing fails
+      }
+    }
 
-    nodes.push({
-      id: node.id,
-      type: 'decision',
-      position: { x, y },
-      data: {
-        label: node.label,
-        type: node.type,
-        status: node.status,
-        timestamp: node.timestamp,
-        reasoning: node.reasoning,
-        toolName: node.toolName,
-        decision: node,
-        isSelected: node.id === selectedDecisionId,
-        onSelect,
-      },
-      selected: node.id === selectedDecisionId,
+    // Start with root nodes (nodes without parents)
+    const rootNodes = childrenMap.get(undefined) || [];
+    rootNodes.forEach((root, index) => {
+      processNode(root, 0, LAYOUT_CONFIG.startX + index * LAYOUT_CONFIG.horizontalSpacing * 2);
     });
 
-    // Process children
-    const children = childrenMap.get(node.id) || [];
-    const childStartX = x - ((children.length - 1) * LAYOUT_CONFIG.horizontalSpacing) / 2;
-
-    children.forEach((child, index) => {
-      processNode(child, depth + 1, childStartX + index * LAYOUT_CONFIG.horizontalSpacing);
-    });
+    return nodes;
+  } catch (error) {
+    // Return empty array if layout calculation fails
+    return [];
   }
-
-  // Start with root nodes (nodes without parents)
-  const rootNodes = childrenMap.get(undefined) || [];
-  rootNodes.forEach((root, index) => {
-    processNode(root, 0, LAYOUT_CONFIG.startX + index * LAYOUT_CONFIG.horizontalSpacing * 2);
-  });
-
-  return nodes;
 }
 
 /**
  * Convert store edges to React Flow edges with styling
+ * Wrapped in try-catch to handle malformed data gracefully.
  */
 function convertEdges(storeEdges: ReasoningEdge[], activeNodeId?: string): Edge[] {
-  return storeEdges.map((edge) => ({
-    id: edge.id,
-    source: edge.source,
-    target: edge.target,
-    type: 'smoothstep',
-    animated: edge.animated || edge.target === activeNodeId,
-    style: {
-      stroke: edge.type === 'error' ? '#ef4444' : '#6b7280',
-      strokeWidth: edge.target === activeNodeId ? 2 : 1.5,
-    },
-    markerEnd: {
-      type: 'arrowclosed' as const,
-      color: edge.type === 'error' ? '#ef4444' : '#6b7280',
-    },
-  }));
+  try {
+    if (!Array.isArray(storeEdges)) return [];
+
+    return storeEdges
+      .filter((edge) => edge && edge.id && edge.source && edge.target)
+      .map((edge) => ({
+        id: edge.id,
+        source: edge.source,
+        target: edge.target,
+        type: 'smoothstep',
+        animated: edge.animated || edge.target === activeNodeId,
+        style: {
+          stroke: edge.type === 'error' ? '#ef4444' : '#6b7280',
+          strokeWidth: edge.target === activeNodeId ? 2 : 1.5,
+        },
+        markerEnd: {
+          type: 'arrowclosed' as const,
+          color: edge.type === 'error' ? '#ef4444' : '#6b7280',
+        },
+      }));
+  } catch (error) {
+    return [];
+  }
 }
 
 // ============================================
@@ -556,76 +577,119 @@ export function DecisionTree({
   }
 
   return (
-    <div
+    <DashboardErrorBoundary
       className={cn('flex flex-col rounded-lg border bg-card overflow-hidden', className)}
+      fallback={<TreeErrorFallback minHeight={minHeight} />}
+    >
+      <div
+        className={cn('flex flex-col rounded-lg border bg-card overflow-hidden', className)}
+        style={{ minHeight }}
+      >
+        <ReactFlow
+          nodes={nodes}
+          edges={edges}
+          onNodesChange={onNodesChange}
+          onEdgesChange={onEdgesChange}
+          nodeTypes={nodeTypes}
+          fitView
+          fitViewOptions={{ padding: 0.2 }}
+          minZoom={0.2}
+          maxZoom={2}
+          attributionPosition="bottom-left"
+          proOptions={{ hideAttribution: true }}
+          className="decision-tree-flow"
+        >
+          {/* Controls panel */}
+          {showControls && (
+            <Controls
+              position="top-right"
+              showInteractive={false}
+              className="!bg-card !border !border-border !shadow-sm"
+            />
+          )}
+
+          {/* Background grid */}
+          {showBackground && (
+            <Background
+              variant={BackgroundVariant.Dots}
+              gap={16}
+              size={1}
+              color="hsl(var(--muted-foreground) / 0.2)"
+            />
+          )}
+
+          {/* Minimap for navigation */}
+          {showMinimap && storeNodes.length > 5 && (
+            <MiniMap
+              nodeStrokeWidth={3}
+              pannable
+              zoomable
+              className="!bg-card/80 !border !border-border !rounded-lg"
+              maskColor="hsl(var(--background) / 0.8)"
+            />
+          )}
+
+          {/* Info panel */}
+          <Panel position="top-left" className="!m-2">
+            <div className="flex items-center gap-2 rounded-md bg-card/90 backdrop-blur-sm border px-3 py-1.5 shadow-sm">
+              <span className="text-xs text-muted-foreground">
+                {storeNodes.length} {storeNodes.length === 1 ? t('reasoning.node', 'node') : t('reasoning.nodes', 'nodes')}
+              </span>
+              {isRunning && (
+                <motion.div
+                  className="flex items-center gap-1.5 text-xs text-primary"
+                  animate={{ opacity: [1, 0.5, 1] }}
+                  transition={{ duration: 1.5, repeat: Infinity }}
+                >
+                  <div className="h-1.5 w-1.5 rounded-full bg-primary" />
+                  <span>{t('reasoning.liveUpdating', 'Live')}</span>
+                </motion.div>
+              )}
+            </div>
+          </Panel>
+
+          {/* Auto-fit view component */}
+          <AutoFitView nodeCount={storeNodes.length} />
+        </ReactFlow>
+      </div>
+    </DashboardErrorBoundary>
+  );
+}
+
+/**
+ * Fallback component when tree rendering fails
+ */
+function TreeErrorFallback({ minHeight }: { minHeight: string }) {
+  const { t } = useTranslation('tasks');
+
+  return (
+    <div
+      className="flex flex-col items-center justify-center gap-4 rounded-lg border bg-card p-8"
       style={{ minHeight }}
     >
-      <ReactFlow
-        nodes={nodes}
-        edges={edges}
-        onNodesChange={onNodesChange}
-        onEdgesChange={onEdgesChange}
-        nodeTypes={nodeTypes}
-        fitView
-        fitViewOptions={{ padding: 0.2 }}
-        minZoom={0.2}
-        maxZoom={2}
-        attributionPosition="bottom-left"
-        proOptions={{ hideAttribution: true }}
-        className="decision-tree-flow"
-      >
-        {/* Controls panel */}
-        {showControls && (
-          <Controls
-            position="top-right"
-            showInteractive={false}
-            className="!bg-card !border !border-border !shadow-sm"
+      <div className="rounded-full bg-destructive/20 p-4">
+        <svg
+          className="h-8 w-8 text-destructive"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+          strokeWidth={1.5}
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z"
           />
-        )}
-
-        {/* Background grid */}
-        {showBackground && (
-          <Background
-            variant={BackgroundVariant.Dots}
-            gap={16}
-            size={1}
-            color="hsl(var(--muted-foreground) / 0.2)"
-          />
-        )}
-
-        {/* Minimap for navigation */}
-        {showMinimap && storeNodes.length > 5 && (
-          <MiniMap
-            nodeStrokeWidth={3}
-            pannable
-            zoomable
-            className="!bg-card/80 !border !border-border !rounded-lg"
-            maskColor="hsl(var(--background) / 0.8)"
-          />
-        )}
-
-        {/* Info panel */}
-        <Panel position="top-left" className="!m-2">
-          <div className="flex items-center gap-2 rounded-md bg-card/90 backdrop-blur-sm border px-3 py-1.5 shadow-sm">
-            <span className="text-xs text-muted-foreground">
-              {storeNodes.length} {storeNodes.length === 1 ? t('reasoning.node', 'node') : t('reasoning.nodes', 'nodes')}
-            </span>
-            {isRunning && (
-              <motion.div
-                className="flex items-center gap-1.5 text-xs text-primary"
-                animate={{ opacity: [1, 0.5, 1] }}
-                transition={{ duration: 1.5, repeat: Infinity }}
-              >
-                <div className="h-1.5 w-1.5 rounded-full bg-primary" />
-                <span>{t('reasoning.liveUpdating', 'Live')}</span>
-              </motion.div>
-            )}
-          </div>
-        </Panel>
-
-        {/* Auto-fit view component */}
-        <AutoFitView nodeCount={storeNodes.length} />
-      </ReactFlow>
+        </svg>
+      </div>
+      <div className="text-center">
+        <h4 className="text-sm font-medium text-foreground">
+          {t('reasoning.treeError', 'Decision Tree Error')}
+        </h4>
+        <p className="mt-1 text-xs text-muted-foreground max-w-xs">
+          {t('reasoning.treeErrorDescription', 'Unable to render the decision tree. The agent is still running - try refreshing the view.')}
+        </p>
+      </div>
     </div>
   );
 }

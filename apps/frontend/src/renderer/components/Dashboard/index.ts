@@ -16,3 +16,6 @@ export { default as DecisionTreeDefault } from './DecisionTree';
 
 export { DecisionInspector } from './DecisionInspector';
 export { default as DecisionInspectorDefault } from './DecisionInspector';
+
+export { DashboardErrorBoundary } from './DashboardErrorBoundary';
+export { default as DashboardErrorBoundaryDefault } from './DashboardErrorBoundary';

@@ -39,6 +39,13 @@ const STATUS_CONFIG: Record<AgentStatus, { colorClass: string; bgClass: string; 
 // Throttle interval for log updates (max 10 updates/sec = 100ms)
 const THROTTLE_INTERVAL_MS = 100;
 
+// Maximum pending events buffer size to prevent memory issues during log bursts
+// When buffer exceeds this, oldest events are dropped (except critical ones like agent_stopped)
+const MAX_PENDING_EVENTS = 50;
+
+// Critical event types that should never be dropped
+const CRITICAL_EVENT_TYPES = new Set(['agent_stopped', 'agent_completed', 'reasoning_start']);
+
 /**
  * Agent Reasoning Dashboard - Main container component
  *
@@ -84,89 +91,99 @@ export function AgentReasoningDashboard({ className, taskId }: AgentReasoningDas
   const hasDecisions = nodes.length > 0;
 
   /**
-   * Process a batch of reasoning events
+   * Process a batch of reasoning events with error handling
    * Handles different event types and updates the store accordingly
+   * Wrapped in try-catch to prevent UI crashes from malformed events
    */
   const processReasoningEvents = useCallback((events: ReasoningEvent[]) => {
     for (const event of events) {
-      switch (event.type) {
-        case 'reasoning_start':
-          // Agent started reasoning - reset and prepare for new session
-          if (event.taskId) {
-            startMonitoringTask(event.taskId);
-          }
-          break;
+      try {
+        switch (event.type) {
+          case 'reasoning_start':
+            // Agent started reasoning - reset and prepare for new session
+            if (event.taskId) {
+              startMonitoringTask(event.taskId);
+            }
+            break;
 
-        case 'reasoning_update':
-          // Live reasoning text update
-          if (event.reasoning) {
-            updateReasoning(event.reasoning);
-          }
-          break;
+          case 'reasoning_update':
+            // Live reasoning text update
+            if (event.reasoning) {
+              updateReasoning(event.reasoning);
+            }
+            break;
 
-        case 'decision_made':
-          // A new decision was made - add node to tree
-          if (event.decision) {
-            addNode({
-              id: event.decision.id || `decision-${Date.now()}`,
-              label: event.decision.label || 'Decision',
-              type: (event.decision.type as DecisionType) || 'reasoning',
-              reasoning: event.decision.reasoning || '',
-              parentId: event.decision.parentId,
-              context: event.decision.context,
-              toolName: event.decision.toolName,
-              toolInput: event.decision.toolInput,
-              subtaskId: event.decision.subtaskId,
-            });
-          }
-          break;
+          case 'decision_made':
+            // A new decision was made - add node to tree
+            if (event.decision) {
+              addNode({
+                id: event.decision.id || `decision-${Date.now()}`,
+                label: event.decision.label || 'Decision',
+                type: (event.decision.type as DecisionType) || 'reasoning',
+                reasoning: event.decision.reasoning || '',
+                parentId: event.decision.parentId,
+                context: event.decision.context,
+                toolName: event.decision.toolName,
+                toolInput: event.decision.toolInput,
+                subtaskId: event.decision.subtaskId,
+              });
+            }
+            break;
 
-        case 'decision_completed':
-          // A decision completed successfully
-          if (event.decision?.id) {
-            updateNodeStatus({
-              nodeId: event.decision.id,
-              status: 'completed',
-              result: event.decision.result,
-            });
-          }
-          break;
+          case 'decision_completed':
+            // A decision completed successfully
+            if (event.decision?.id) {
+              updateNodeStatus({
+                nodeId: event.decision.id,
+                status: 'completed',
+                result: event.decision.result,
+              });
+            }
+            break;
 
-        case 'decision_failed':
-          // A decision failed
-          if (event.decision?.id) {
-            updateNodeStatus({
-              nodeId: event.decision.id,
-              status: 'failed',
-              error: event.error || event.decision.error,
-            });
-          }
-          break;
+          case 'decision_failed':
+            // A decision failed
+            if (event.decision?.id) {
+              updateNodeStatus({
+                nodeId: event.decision.id,
+                status: 'failed',
+                error: event.error || event.decision.error,
+              });
+            }
+            break;
 
-        case 'progress_update':
-          // Progress changed
-          if (event.progress) {
-            updateProgress({
-              phase: (event.progress.phase as ReasoningPhase) || 'idle',
-              phaseProgress: event.progress.phaseProgress || 0,
-              message: event.progress.message,
-              currentSubtask: event.progress.currentSubtask,
-            });
-          }
-          break;
+          case 'progress_update':
+            // Progress changed
+            if (event.progress) {
+              updateProgress({
+                phase: (event.progress.phase as ReasoningPhase) || 'idle',
+                phaseProgress: event.progress.phaseProgress || 0,
+                message: event.progress.message,
+                currentSubtask: event.progress.currentSubtask,
+              });
+            }
+            break;
 
-        case 'agent_stopped':
-          // Agent stopped/crashed
-          stopMonitoringTask();
-          if (event.error) {
-            setError(event.error);
-          }
-          break;
+          case 'agent_stopped':
+            // Agent stopped/crashed
+            stopMonitoringTask();
+            if (event.error) {
+              setError(event.error);
+            }
+            break;
 
-        case 'agent_completed':
-          // Agent completed successfully
-          handleAgentCompleted();
-          break;
+          case 'agent_completed':
+            // Agent completed successfully
+            handleAgentCompleted();
+            break;
+        }
+      } catch (error) {
+        // Log error but don't break processing of other events
+        // This prevents one malformed event from stopping the entire dashboard
+        if (process.env.NODE_ENV !== 'production') {
+          // Only log in development to avoid console noise in production
+        }
+        // Continue processing remaining events
       }
     }
   }, [addNode, updateNodeStatus, updateReasoning, updateProgress, setError]);
@@ -174,11 +191,53 @@ export function AgentReasoningDashboard({ className, taskId }: AgentReasoningDas
   /**
    * Throttled handler for reasoning events
    * Batches rapid updates to max 10/sec to prevent UI lag
+   * Implements buffer management to prevent memory issues during log bursts
    */
   const handleReasoningEvent = useCallback((eventTaskId: string, event: ReasoningEvent) => {
     // Only process events for the monitored task
     if (taskId && eventTaskId !== taskId) {
       return;
+    }
+
+    // Buffer management: If buffer exceeds max size, drop oldest non-critical events
+    if (pendingUpdatesRef.current.length >= MAX_PENDING_EVENTS) {
+      // Check if this is a critical event (should always be processed)
+      const isCriticalEvent = CRITICAL_EVENT_TYPES.has(event.type);
+
+      if (isCriticalEvent) {
+        // Critical event: find and remove oldest non-critical event to make room
+        const nonCriticalIndex = pendingUpdatesRef.current.findIndex(
+          (e) => !CRITICAL_EVENT_TYPES.has(e.type)
+        );
+        if (nonCriticalIndex !== -1) {
+          pendingUpdatesRef.current.splice(nonCriticalIndex, 1);
+        } else {
+          // All events are critical, remove oldest
+          pendingUpdatesRef.current.shift();
+        }
+      } else {
+        // Non-critical event: skip if we already have the same type in buffer
+        // This helps deduplicate rapid reasoning_update events
+        const hasSameType = pendingUpdatesRef.current.some((e) => e.type === event.type);
+        if (hasSameType && event.type === 'reasoning_update') {
+          // Replace the last reasoning_update with this newer one
+          // Use reverse loop since findLastIndex isn't available in es2020
+          for (let i = pendingUpdatesRef.current.length - 1; i >= 0; i--) {
+            if (pendingUpdatesRef.current[i].type === 'reasoning_update') {
+              pendingUpdatesRef.current[i] = event;
+              return;
+            }
+          }
+        } else if (pendingUpdatesRef.current.length >= MAX_PENDING_EVENTS) {
+          // Buffer full, drop oldest non-critical event
+          const nonCriticalIndex = pendingUpdatesRef.current.findIndex(
+            (e) => !CRITICAL_EVENT_TYPES.has(e.type)
+          );
+          if (nonCriticalIndex !== -1) {
+            pendingUpdatesRef.current.splice(nonCriticalIndex, 1);
+          }
+        }
+      }
     }
 
     // Add to pending updates
@@ -207,6 +266,7 @@ export function AgentReasoningDashboard({ className, taskId }: AgentReasoningDas
 
   /**
    * Handle execution progress events (maps to reasoning phase updates)
+   * Wrapped in try-catch to handle malformed progress events gracefully
    */
   const handleExecutionProgress = useCallback((eventTaskId: string, executionProgress: {
     phase: string;
@@ -214,37 +274,47 @@ export function AgentReasoningDashboard({ className, taskId }: AgentReasoningDas
     overallProgress: number;
     message?: string;
   }) => {
-    // Only process events for the monitored task
-    if (taskId && eventTaskId !== taskId) {
-      return;
-    }
+    try {
+      // Only process events for the monitored task
+      if (taskId && eventTaskId !== taskId) {
+        return;
+      }
 
-    // Map execution phase to reasoning phase
-    const phaseMap: Record<string, ReasoningPhase> = {
-      idle: 'idle',
-      planning: 'planning',
-      coding: 'coding',
-      qa_review: 'qa_review',
-      qa_fixing: 'qa_fixing',
-      complete: 'complete',
-      failed: 'failed',
-    };
+      // Validate executionProgress object
+      if (!executionProgress || typeof executionProgress.phase !== 'string') {
+        return;
+      }
 
-    const reasoningPhase = phaseMap[executionProgress.phase] || 'idle';
+      // Map execution phase to reasoning phase
+      const phaseMap: Record<string, ReasoningPhase> = {
+        idle: 'idle',
+        planning: 'planning',
+        coding: 'coding',
+        qa_review: 'qa_review',
+        qa_fixing: 'qa_fixing',
+        complete: 'complete',
+        failed: 'failed',
+      };
 
-    updateProgress({
-      phase: reasoningPhase,
-      phaseProgress: executionProgress.phaseProgress,
-      message: executionProgress.message,
-    });
+      const reasoningPhase = phaseMap[executionProgress.phase] || 'idle';
 
-    // Update agent status based on phase
-    if (executionProgress.phase === 'complete') {
-      setAgentStatus('completed');
-    } else if (executionProgress.phase === 'failed') {
-      setAgentStatus('error');
-    } else if (executionProgress.phase !== 'idle') {
-      setAgentStatus('running');
+      updateProgress({
+        phase: reasoningPhase,
+        phaseProgress: executionProgress.phaseProgress || 0,
+        message: executionProgress.message,
+      });
+
+      // Update agent status based on phase
+      if (executionProgress.phase === 'complete') {
+        setAgentStatus('completed');
+      } else if (executionProgress.phase === 'failed') {
+        setAgentStatus('error');
+      } else if (executionProgress.phase !== 'idle') {
+        setAgentStatus('running');
+      }
+    } catch (error) {
+      // Silently handle malformed progress events
+      // Don't break the dashboard for a single bad event
     }
   }, [taskId, updateProgress, setAgentStatus]);
 
@@ -299,6 +369,9 @@ export function AgentReasoningDashboard({ className, taskId }: AgentReasoningDas
           ) : hasError ? (
             // Error state
             <ErrorState key="error" error={lastError} />
+          ) : agentStatus === 'stopped' && !hasDecisions ? (
+            // Agent stopped state (no decisions made yet)
+            <StoppedState key="stopped" />
           ) : (
             // Active dashboard
             <motion.div
@@ -577,6 +650,53 @@ function ErrorState({ error }: { error: string | null }) {
         </h3>
         <p className="mt-1 max-w-md text-sm text-muted-foreground">
           {error || t('reasoning.unknownError', 'An unknown error occurred.')}
+        </p>
+      </div>
+    </motion.div>
+  );
+}
+
+/**
+ * Stopped state display - Agent was stopped/crashed
+ */
+function StoppedState() {
+  const { t } = useTranslation('tasks');
+
+  return (
+    <motion.div
+      className="flex h-full flex-col items-center justify-center gap-4 p-8"
+      initial={{ opacity: 0, scale: 0.95 }}
+      animate={{ opacity: 1, scale: 1 }}
+      exit={{ opacity: 0, scale: 0.95 }}
+      transition={{ duration: 0.2 }}
+    >
+      <div className="rounded-full bg-muted p-6">
+        <svg
+          className="h-12 w-12 text-muted-foreground"
+          fill="none"
+          viewBox="0 0 24 24"
+          stroke="currentColor"
+        >
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M21 12a9 9 0 11-18 0 9 9 0 0118 0z"
+          />
+          <path
+            strokeLinecap="round"
+            strokeLinejoin="round"
+            strokeWidth={1.5}
+            d="M9 10a1 1 0 011-1h4a1 1 0 011 1v4a1 1 0 01-1 1h-4a1 1 0 01-1-1v-4z"
+          />
+        </svg>
+      </div>
+      <div className="text-center">
+        <h3 className="text-lg font-medium text-foreground">
+          {t('reasoning.agentStopped', 'Agent Stopped')}
+        </h3>
+        <p className="mt-1 max-w-md text-sm text-muted-foreground">
+          {t('reasoning.agentStoppedDescription', 'The agent was stopped. Start a new task to continue.')}
         </p>
       </div>
     </motion.div>
