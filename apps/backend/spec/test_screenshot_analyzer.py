@@ -212,7 +212,7 @@ class TestImageValidation:
 
     def test_validate_empty_list(self, analyzer: ScreenshotAnalyzer):
         """Empty image list fails validation."""
-        is_valid, errors = analyzer.validate_images([])
+        is_valid, errors, warnings = analyzer.validate_images([])
         assert is_valid is False
         assert len(errors) == 1
         assert "No images provided" in errors[0].error
@@ -231,7 +231,7 @@ class TestImageValidation:
             )
             for i in range(MAX_SCREENSHOTS + 1)
         ]
-        is_valid, errors = analyzer.validate_images(images)
+        is_valid, errors, warnings = analyzer.validate_images(images)
         assert is_valid is False
         assert any(f"Too many images: {MAX_SCREENSHOTS + 1}" in e.error for e in errors)
 
@@ -246,7 +246,7 @@ class TestImageValidation:
             size=1024,
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
         assert any("Invalid file type" in e.error for e in errors)
 
@@ -261,7 +261,7 @@ class TestImageValidation:
             size=MAX_FILE_SIZE_BYTES + 1,  # 10MB + 1 byte
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
         assert any("File too large" in e.error for e in errors)
 
@@ -274,7 +274,7 @@ class TestImageValidation:
             size=1024,
             data="",  # Empty data
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
         assert any("Missing image data" in e.error for e in errors)
 
@@ -287,7 +287,7 @@ class TestImageValidation:
             size=1024,
             data="not-valid-base64!@#$",
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
         assert any("Invalid base64 encoding" in e.error for e in errors)
 
@@ -295,7 +295,7 @@ class TestImageValidation:
         self, analyzer: ScreenshotAnalyzer, valid_image_attachment: ImageAttachment
     ):
         """Valid image passes validation."""
-        is_valid, errors = analyzer.validate_images([valid_image_attachment])
+        is_valid, errors, warnings = analyzer.validate_images([valid_image_attachment])
         assert is_valid is True
         assert len(errors) == 0
 
@@ -316,7 +316,7 @@ class TestImageValidation:
                 size=1024,
                 data=valid_image_data,
             )
-            is_valid, errors = analyzer.validate_images([image])
+            is_valid, errors, warnings = analyzer.validate_images([image])
             assert is_valid is True, f"MIME type {mime_type} should be valid"
 
     def test_validate_jpeg_with_jpeg_data(self, analyzer: ScreenshotAnalyzer):
@@ -333,7 +333,7 @@ class TestImageValidation:
                 size=110,
                 data=jpeg_data,
             )
-            is_valid, errors = analyzer.validate_images([image])
+            is_valid, errors, warnings = analyzer.validate_images([image])
             assert is_valid is True, f"MIME type {mime_type} should be valid: {errors}"
 
     def test_validate_gif_with_gif_data(self, analyzer: ScreenshotAnalyzer):
@@ -346,7 +346,7 @@ class TestImageValidation:
             size=106,
             data=gif_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is True, f"GIF should be valid: {errors}"
 
     def test_validate_webp_with_webp_data(self, analyzer: ScreenshotAnalyzer):
@@ -359,7 +359,7 @@ class TestImageValidation:
             size=112,
             data=webp_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is True, f"WebP should be valid: {errors}"
 
     def test_validate_svg_with_svg_data(self, analyzer: ScreenshotAnalyzer):
@@ -372,7 +372,7 @@ class TestImageValidation:
             size=24,
             data=svg_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is True, f"SVG should be valid: {errors}"
 
     def test_validate_multiple_images_partial_failure(
@@ -402,7 +402,7 @@ class TestImageValidation:
                 data=valid_image_data,
             ),
         ]
-        is_valid, errors = analyzer.validate_images(images)
+        is_valid, errors, warnings = analyzer.validate_images(images)
         assert is_valid is False
         assert len(errors) == 2  # Two invalid images
         assert any("uuid-2" in e.image_id for e in errors)
@@ -1075,7 +1075,7 @@ class TestFileSecurity:
             size=MAX_FILE_SIZE_BYTES + 1,
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
         assert any("too large" in e.error.lower() for e in errors)
 
@@ -1098,7 +1098,7 @@ class TestFileSecurity:
                 size=1024,
                 data=valid_image_data,
             )
-            is_valid, errors = analyzer.validate_images([image])
+            is_valid, errors, warnings = analyzer.validate_images([image])
             assert is_valid is False, f"MIME type {mime_type} should be rejected"
 
     def test_base64_decoding_validation(self, analyzer: ScreenshotAnalyzer):
@@ -1110,7 +1110,7 @@ class TestFileSecurity:
             size=1024,
             data="<script>alert('xss')</script>",
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
 
     def test_max_image_count_enforced(
@@ -1127,7 +1127,7 @@ class TestFileSecurity:
             )
             for i in range(MAX_SCREENSHOTS + 5)
         ]
-        is_valid, errors = analyzer.validate_images(images)
+        is_valid, errors, warnings = analyzer.validate_images(images)
         assert is_valid is False
         assert any("Too many images" in e.error for e in errors)
 
@@ -1149,7 +1149,7 @@ class TestFileSecurity:
                 size=1024,
                 data=valid_image_data,
             )
-            is_valid, errors = analyzer.validate_images([image])
+            is_valid, errors, warnings = analyzer.validate_images([image])
             assert is_valid is False, f"Filename '{filename}' should be rejected"
             assert any("dangerous pattern" in e.error.lower() or "invalid filename" in e.error.lower() for e in errors)
 
@@ -1164,7 +1164,7 @@ class TestFileSecurity:
             size=1024,
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
         assert any("dangerous pattern" in e.error.lower() or "invalid filename" in e.error.lower() for e in errors)
 
@@ -1182,7 +1182,7 @@ class TestFileSecurity:
                 size=1024,
                 data=valid_image_data,
             )
-            is_valid, errors = analyzer.validate_images([image])
+            is_valid, errors, warnings = analyzer.validate_images([image])
             assert is_valid is False, f"Control char 0x{char_code:02x} should be rejected"
 
 
@@ -1411,7 +1411,7 @@ class TestEdgeCases:
             size=MAX_FILE_SIZE_BYTES,  # Exactly 10MB
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is True
 
     def test_exact_max_screenshots(
@@ -1428,7 +1428,7 @@ class TestEdgeCases:
             )
             for i in range(MAX_SCREENSHOTS)
         ]
-        is_valid, errors = analyzer.validate_images(images)
+        is_valid, errors, warnings = analyzer.validate_images(images)
         assert is_valid is True
 
     def test_special_characters_in_filename(
@@ -1442,7 +1442,7 @@ class TestEdgeCases:
             size=1024,
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is True
 
     def test_unicode_in_filename(
@@ -1456,7 +1456,7 @@ class TestEdgeCases:
             size=1024,
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is True
 
     def test_very_long_filename_at_limit(
@@ -1471,7 +1471,7 @@ class TestEdgeCases:
             size=1024,
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is True
 
     def test_filename_exceeds_max_length_rejected(
@@ -1486,7 +1486,7 @@ class TestEdgeCases:
             size=1024,
             data=valid_image_data,
         )
-        is_valid, errors = analyzer.validate_images([image])
+        is_valid, errors, warnings = analyzer.validate_images([image])
         assert is_valid is False
         assert any("too long" in e.error.lower() for e in errors)
 

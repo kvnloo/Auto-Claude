@@ -77,6 +77,16 @@ DANGEROUS_FILENAME_PATTERNS = [
 # Path to the prompt template
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "prompts" / "screenshot_analysis.txt"
 
+# Minimum recommended image dimensions for quality analysis
+MIN_RECOMMENDED_WIDTH = 400
+MIN_RECOMMENDED_HEIGHT = 300
+
+# Minimum file size that suggests reasonable quality (50KB)
+MIN_REASONABLE_FILE_SIZE = 50 * 1024
+
+# Threshold for complex designs (many tasks)
+COMPLEX_DESIGN_THRESHOLD = 20
+
 
 # =============================================================================
 # SECURITY VALIDATION FUNCTIONS
@@ -196,6 +206,34 @@ def decode_base64_safely(data: str) -> tuple[bytes | None, str]:
         return None, f"Invalid base64 encoding: {e}"
     except ValueError as e:
         return None, f"Base64 decode error: {e}"
+
+
+def detect_low_quality_image(data: bytes, reported_size: int, filename: str) -> str | None:
+    """
+    Detect potential low-quality images based on file size.
+
+    Very small images or heavily compressed images may not provide
+    enough detail for accurate analysis.
+
+    Args:
+        data: Decoded file bytes
+        reported_size: Reported file size
+        filename: Filename for warning message
+
+    Returns:
+        Warning message if low quality detected, None otherwise
+    """
+    actual_size = len(data) if data else reported_size
+
+    # Very small files are likely low quality
+    if actual_size < MIN_REASONABLE_FILE_SIZE:
+        size_kb = actual_size / 1024
+        return (
+            f'"{filename}" is very small ({size_kb:.1f}KB). '
+            "Consider uploading a higher resolution screenshot for better analysis."
+        )
+
+    return None
 
 
 def validate_content_size(decoded_data: bytes, reported_size: int) -> tuple[bool, str]:
@@ -459,7 +497,7 @@ class ScreenshotAnalyzer:
 
     def validate_images(
         self, images: list[ImageAttachment]
-    ) -> tuple[bool, list[ValidationError]]:
+    ) -> tuple[bool, list[ValidationError], list[str]]:
         """
         Validate uploaded images for analysis with comprehensive security checks.
 
@@ -472,13 +510,17 @@ class ScreenshotAnalyzer:
         - Magic bytes verification (content matches claimed type)
         - Content size consistency check
 
+        Also detects edge cases:
+        - Low quality/small images (warning only)
+
         Args:
             images: List of ImageAttachment objects to validate
 
         Returns:
-            Tuple of (is_valid, errors)
+            Tuple of (is_valid, errors, warnings)
         """
         errors: list[ValidationError] = []
+        warnings: list[str] = []
 
         if not images:
             errors.append(
@@ -488,7 +530,7 @@ class ScreenshotAnalyzer:
                     error="No images provided for analysis",
                 )
             )
-            return False, errors
+            return False, errors, warnings
 
         if len(images) > MAX_SCREENSHOTS:
             errors.append(
@@ -498,7 +540,7 @@ class ScreenshotAnalyzer:
                     error=f"Too many images: {len(images)} exceeds maximum of {MAX_SCREENSHOTS}",
                 )
             )
-            return False, errors
+            return False, errors, warnings
 
         for image in images:
             # Security: Validate filename for path traversal and injection
@@ -583,7 +625,12 @@ class ScreenshotAnalyzer:
                 )
                 continue
 
-        return len(errors) == 0, errors
+            # Edge case: Check for low quality images (warning only, not a validation error)
+            quality_warning = detect_low_quality_image(decoded_data, image.size, image.filename)
+            if quality_warning:
+                warnings.append(quality_warning)
+
+        return len(errors) == 0, errors, warnings
 
     def _build_multimodal_content(
         self, images: list[ImageAttachment], project_context: str | None = None
@@ -767,7 +814,7 @@ class ScreenshotAnalyzer:
             AnalysisResult with extracted components and generated tasks
         """
         # Validate images first
-        is_valid, validation_errors = self.validate_images(images)
+        is_valid, validation_errors, validation_warnings = self.validate_images(images)
         if not is_valid:
             error_messages = [f"{e.filename}: {e.error}" for e in validation_errors]
             return AnalysisResult(
@@ -781,6 +828,19 @@ class ScreenshotAnalyzer:
 
             # Call Claude API with vision
             result = await self._call_vision_api(content, model)
+
+            # Add validation warnings to result warnings
+            if validation_warnings:
+                result.warnings = validation_warnings + result.warnings
+
+            # Add complex design warning if applicable
+            if len(result.tasks) >= COMPLEX_DESIGN_THRESHOLD:
+                result.warnings.insert(
+                    0,
+                    f"This design contains {len(result.tasks)} components/tasks. "
+                    "Consider implementing in batches for easier management."
+                )
+
             return result
 
         except Exception as e:
@@ -1034,7 +1094,7 @@ def validate_screenshot_uploads(
             )
 
     analyzer = ScreenshotAnalyzer()
-    is_valid, errors = analyzer.validate_images(attachments)
+    is_valid, errors, _warnings = analyzer.validate_images(attachments)
 
     return is_valid, [
         {"image_id": e.image_id, "filename": e.filename, "error": e.error}

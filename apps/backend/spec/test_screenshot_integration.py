@@ -1043,7 +1043,7 @@ class TestMultiScreenshotEdgeCases:
             for i in range(11)  # One more than limit
         ]
 
-        is_valid, errors = analyzer.validate_images(images)
+        is_valid, errors, warnings = analyzer.validate_images(images)
 
         assert is_valid is False
         assert any("Too many images" in e.error for e in errors)

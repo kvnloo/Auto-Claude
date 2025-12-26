@@ -1,5 +1,5 @@
 import { useCallback, useRef, useState, type DragEvent, type ChangeEvent } from 'react';
-import { Upload, X, AlertCircle, Image as ImageIcon, Loader2, Sparkles, FileText, Pencil, Check } from 'lucide-react';
+import { Upload, X, AlertCircle, Image as ImageIcon, Loader2, Sparkles, FileText, Pencil, Check, HelpCircle, Layers, Copy } from 'lucide-react';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
 import type { ImageAttachment } from '../../shared/types';
@@ -17,6 +17,62 @@ import {
   resolveFilename,
   formatFileSize
 } from './ImageUpload';
+
+/**
+ * Minimum recommended image dimensions for quality analysis
+ */
+const MIN_RECOMMENDED_WIDTH = 400;
+const MIN_RECOMMENDED_HEIGHT = 300;
+
+/**
+ * Threshold for considering designs as complex (many components)
+ */
+const COMPLEX_DESIGN_THRESHOLD = 20;
+
+/**
+ * Hash a string using simple djb2 algorithm for duplicate detection
+ */
+function simpleHash(str: string): string {
+  let hash = 5381;
+  for (let i = 0; i < str.length; i++) {
+    hash = ((hash << 5) + hash) + str.charCodeAt(i);
+  }
+  return hash.toString(16);
+}
+
+/**
+ * Get image dimensions from base64 data
+ */
+async function getImageDimensions(dataUrl: string): Promise<{ width: number; height: number }> {
+  return new Promise((resolve, reject) => {
+    const img = new Image();
+    img.onload = () => {
+      resolve({ width: img.width, height: img.height });
+    };
+    img.onerror = reject;
+    img.src = dataUrl;
+  });
+}
+
+/**
+ * Check if image might be a duplicate based on content hash
+ */
+function detectDuplicate(
+  newData: string,
+  existingImages: ImageAttachment[]
+): ImageAttachment | null {
+  const newHash = simpleHash(newData.substring(0, 10000)); // Hash first 10KB for speed
+
+  for (const existing of existingImages) {
+    if (!existing.data) continue;
+    const existingHash = simpleHash(existing.data.substring(0, 10000));
+    if (newHash === existingHash) {
+      return existing;
+    }
+  }
+
+  return null;
+}
 
 /**
  * Generated task from screenshot analysis
@@ -77,6 +133,24 @@ interface BackendAnalysisResponse {
   tasks?: BackendTaskResponse[];
   warnings?: string[];
   questions?: string[];
+  analysis?: {
+    screenshot_count?: number;
+    screenshot_type?: string;
+    overall_style?: string;
+    is_ui_design?: boolean;
+    image_quality?: 'low' | 'medium' | 'high';
+    component_count?: number;
+  };
+}
+
+/**
+ * Duplicate detection confirmation state
+ */
+interface DuplicateConfirmation {
+  filename: string;
+  existingFilename: string;
+  file: File;
+  dataUrl: string;
 }
 
 /**
@@ -86,12 +160,23 @@ interface BackendAnalysisResponse {
 const SCREENSHOT_API_BASE_URL = 'http://localhost:8000';
 
 /**
+ * Analysis API response with all edge case data
+ */
+interface AnalysisAPIResult {
+  tasks: GeneratedTask[];
+  warnings: string[];
+  questions: string[];
+  isUiDesign: boolean;
+  componentCount: number;
+}
+
+/**
  * Analyze screenshots using the backend vision API
  */
 async function analyzeScreenshotsAPI(
   images: ImageAttachment[],
   projectContext?: string
-): Promise<{ tasks: GeneratedTask[]; warnings: string[] }> {
+): Promise<AnalysisAPIResult> {
   const requestBody = {
     images: images.map((img) => ({
       id: img.id,
@@ -124,6 +209,12 @@ async function analyzeScreenshotsAPI(
     throw new Error(data.error || 'Analysis failed');
   }
 
+  // Check for non-UI design (backend may flag this in analysis)
+  const isUiDesign = data.analysis?.is_ui_design !== false;
+  if (!isUiDesign) {
+    throw new Error('The image does not appear to be a UI design. Please upload a design mockup or screenshot.');
+  }
+
   // Convert backend tasks to frontend GeneratedTask format
   const tasks: GeneratedTask[] = (data.tasks || []).map((task, index) => ({
     id: `task-${Date.now()}-${index}`,
@@ -137,7 +228,10 @@ async function analyzeScreenshotsAPI(
 
   return {
     tasks,
-    warnings: data.warnings || []
+    warnings: data.warnings || [],
+    questions: data.questions || [],
+    isUiDesign,
+    componentCount: data.components?.length || tasks.length
   };
 }
 
@@ -168,9 +262,14 @@ export function ScreenshotAnalyzer({
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [generatedTasks, setGeneratedTasks] = useState<GeneratedTask[]>([]);
   const [warnings, setWarnings] = useState<string[]>([]);
+  const [questions, setQuestions] = useState<string[]>([]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [editingDescription, setEditingDescription] = useState('');
+  const [duplicateConfirmation, setDuplicateConfirmation] = useState<DuplicateConfirmation | null>(null);
+  const [lowQualityWarnings, setLowQualityWarnings] = useState<string[]>([]);
+  const [isComplexDesign, setIsComplexDesign] = useState(false);
+  const [taskBatchIndex, setTaskBatchIndex] = useState(0);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
   const canAddMore = images.length < MAX_IMAGES_PER_TASK;
@@ -181,7 +280,7 @@ export function ScreenshotAnalyzer({
    * Process files and add them to the images array
    */
   const processFiles = useCallback(
-    async (files: FileList | File[]) => {
+    async (files: FileList | File[], skipDuplicateCheck = false) => {
       setError(null);
       const fileArray = Array.from(files);
 
@@ -201,6 +300,7 @@ export function ScreenshotAnalyzer({
       const newImages: ImageAttachment[] = [];
       const existingFilenames = images.map((img) => img.filename);
       const errors: string[] = [];
+      const qualityWarnings: string[] = [];
 
       for (const file of filesToProcess) {
         // Validate file type
@@ -216,6 +316,35 @@ export function ScreenshotAnalyzer({
 
         try {
           const dataUrl = await fileToBase64(file);
+          const base64Data = dataUrl.split(',')[1];
+
+          // Check for duplicate uploads (unless explicitly skipped)
+          if (!skipDuplicateCheck) {
+            const existingDuplicate = detectDuplicate(base64Data, images);
+            if (existingDuplicate) {
+              // Ask user if this is intentional
+              setDuplicateConfirmation({
+                filename: file.name,
+                existingFilename: existingDuplicate.filename,
+                file,
+                dataUrl
+              });
+              return; // Stop processing, wait for user confirmation
+            }
+          }
+
+          // Check image dimensions for quality warning
+          try {
+            const dimensions = await getImageDimensions(dataUrl);
+            if (dimensions.width < MIN_RECOMMENDED_WIDTH || dimensions.height < MIN_RECOMMENDED_HEIGHT) {
+              qualityWarnings.push(
+                `"${file.name}" has low resolution (${dimensions.width}×${dimensions.height}). Consider uploading a higher resolution image for better analysis.`
+              );
+            }
+          } catch {
+            // Ignore dimension check errors - not critical
+          }
+
           const thumbnail = await createThumbnail(dataUrl);
           const resolvedFilename = resolveFilename(file.name, [
             ...existingFilenames,
@@ -227,7 +356,7 @@ export function ScreenshotAnalyzer({
             filename: resolvedFilename,
             mimeType: file.type,
             size: file.size,
-            data: dataUrl.split(',')[1], // Store base64 without data URL prefix
+            data: base64Data,
             thumbnail
           });
         } catch {
@@ -239,14 +368,60 @@ export function ScreenshotAnalyzer({
         setError(errors.join(' '));
       }
 
+      if (qualityWarnings.length > 0) {
+        setLowQualityWarnings((prev) => [...prev, ...qualityWarnings]);
+      }
+
       if (newImages.length > 0) {
         setImages((prev) => [...prev, ...newImages]);
         // Clear previous analysis results when new images are added
         setGeneratedTasks([]);
+        setQuestions([]);
+        setIsComplexDesign(false);
+        setTaskBatchIndex(0);
       }
     },
     [images]
   );
+
+  /**
+   * Confirm adding duplicate image (intentional duplicate for different states)
+   */
+  const handleConfirmDuplicate = useCallback(async () => {
+    if (!duplicateConfirmation) return;
+
+    const { file, dataUrl } = duplicateConfirmation;
+    setDuplicateConfirmation(null);
+
+    try {
+      const base64Data = dataUrl.split(',')[1];
+      const thumbnail = await createThumbnail(dataUrl);
+      const existingFilenames = images.map((img) => img.filename);
+      const resolvedFilename = resolveFilename(file.name, existingFilenames);
+
+      const newImage: ImageAttachment = {
+        id: generateImageId(),
+        filename: resolvedFilename,
+        mimeType: file.type,
+        size: file.size,
+        data: base64Data,
+        thumbnail
+      };
+
+      setImages((prev) => [...prev, newImage]);
+      setGeneratedTasks([]);
+      setQuestions([]);
+    } catch {
+      setError('Failed to add duplicate image');
+    }
+  }, [duplicateConfirmation, images]);
+
+  /**
+   * Cancel adding duplicate image
+   */
+  const handleCancelDuplicate = useCallback(() => {
+    setDuplicateConfirmation(null);
+  }, []);
 
   /**
    * Handle file input change
@@ -322,7 +497,12 @@ export function ScreenshotAnalyzer({
     setImages([]);
     setGeneratedTasks([]);
     setWarnings([]);
+    setQuestions([]);
+    setLowQualityWarnings([]);
     setError(null);
+    setIsComplexDesign(false);
+    setTaskBatchIndex(0);
+    setDuplicateConfirmation(null);
   }, []);
 
   /**
@@ -334,12 +514,29 @@ export function ScreenshotAnalyzer({
     setIsAnalyzing(true);
     setError(null);
     setWarnings([]);
+    setQuestions([]);
+    setIsComplexDesign(false);
 
     try {
       const result = await analyzeScreenshotsAPI(images);
 
       setGeneratedTasks(result.tasks);
       setWarnings(result.warnings);
+
+      // Extract questions from backend response for ambiguous components
+      if (result.questions && result.questions.length > 0) {
+        setQuestions(result.questions);
+      }
+
+      // Check if design has many components (complex design)
+      if (result.tasks.length >= COMPLEX_DESIGN_THRESHOLD) {
+        setIsComplexDesign(true);
+        // Add a warning about the complex design
+        setWarnings((prev) => [
+          ...prev,
+          `This design contains ${result.tasks.length} tasks. Consider implementing in batches for easier management.`
+        ]);
+      }
 
       if (result.tasks.length > 0) {
         onTasksGenerated?.(result.tasks.filter((t) => t.selected));
@@ -354,6 +551,8 @@ export function ScreenshotAnalyzer({
         setError('Invalid request. Please check your screenshots and try again.');
       } else if (errorMessage.includes('HTTP 500')) {
         setError('Analysis service error. Please try again later.');
+      } else if (errorMessage.includes('not a UI design') || errorMessage.includes('non-UI')) {
+        setError('The uploaded image does not appear to be a UI design. Please upload a design mockup, wireframe, or screenshot of a user interface.');
       } else {
         setError(`Analysis failed: ${errorMessage}`);
       }
@@ -482,6 +681,68 @@ export function ScreenshotAnalyzer({
         </div>
       )}
 
+      {/* Duplicate upload confirmation */}
+      {duplicateConfirmation && (
+        <div className="rounded-lg border border-amber-500/50 bg-amber-50 dark:bg-amber-950/30 p-4 space-y-3">
+          <div className="flex items-start gap-3">
+            <Copy className="h-5 w-5 text-amber-600 dark:text-amber-400 shrink-0 mt-0.5" />
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-amber-800 dark:text-amber-200">
+                Duplicate Screenshot Detected
+              </p>
+              <p className="text-xs text-amber-700 dark:text-amber-300">
+                "{duplicateConfirmation.filename}" appears to be the same as "{duplicateConfirmation.existingFilename}".
+                Is this intentional (e.g., different states of the same component)?
+              </p>
+            </div>
+          </div>
+          <div className="flex gap-2 justify-end">
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={handleCancelDuplicate}
+            >
+              Skip This File
+            </Button>
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={handleConfirmDuplicate}
+            >
+              Yes, Add Anyway
+            </Button>
+          </div>
+        </div>
+      )}
+
+      {/* Low quality image warnings */}
+      {lowQualityWarnings.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-lg bg-amber-50 dark:bg-amber-950/20 border border-amber-300/50 p-3 text-sm">
+          <div className="flex items-center gap-2 text-amber-700 dark:text-amber-400 font-medium">
+            <AlertCircle className="h-4 w-4" />
+            Image Quality Warning
+          </div>
+          <ul className="ml-6 list-disc space-y-0.5">
+            {lowQualityWarnings.map((warning, idx) => (
+              <li key={idx} className="text-xs text-amber-600 dark:text-amber-300">
+                {warning}
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-amber-600 dark:text-amber-300 italic">
+            Low resolution images may result in less accurate analysis. Consider uploading higher resolution screenshots.
+          </p>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setLowQualityWarnings([])}
+            className="self-end text-amber-700 dark:text-amber-400 hover:text-amber-800"
+          >
+            Dismiss
+          </Button>
+        </div>
+      )}
+
       {/* Screenshot previews */}
       {images.length > 0 && (
         <div className="space-y-3">
@@ -603,6 +864,77 @@ export function ScreenshotAnalyzer({
         </div>
       )}
 
+      {/* Questions for ambiguous components */}
+      {questions.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-lg bg-blue-50 dark:bg-blue-950/20 border border-blue-300/50 p-3 text-sm">
+          <div className="flex items-center gap-2 text-blue-700 dark:text-blue-400 font-medium">
+            <HelpCircle className="h-4 w-4" />
+            Clarification Needed
+          </div>
+          <p className="text-xs text-blue-600 dark:text-blue-300">
+            The AI identified some components that may need clarification for accurate implementation:
+          </p>
+          <ul className="ml-4 space-y-1.5">
+            {questions.map((question, idx) => (
+              <li key={idx} className="text-xs text-blue-700 dark:text-blue-300 flex items-start gap-2">
+                <span className="text-blue-500 font-medium shrink-0">Q{idx + 1}:</span>
+                <span>{question}</span>
+              </li>
+            ))}
+          </ul>
+          <p className="text-xs text-blue-500 dark:text-blue-400 italic mt-1">
+            You can edit the generated tasks below to provide additional context, or continue with the AI's best interpretation.
+          </p>
+        </div>
+      )}
+
+      {/* Complex design notice with batch navigation */}
+      {isComplexDesign && generatedTasks.length > 0 && (
+        <div className="flex flex-col gap-2 rounded-lg bg-purple-50 dark:bg-purple-950/20 border border-purple-300/50 p-3 text-sm">
+          <div className="flex items-center gap-2 text-purple-700 dark:text-purple-400 font-medium">
+            <Layers className="h-4 w-4" />
+            Complex Design Detected
+          </div>
+          <p className="text-xs text-purple-600 dark:text-purple-300">
+            This design contains {generatedTasks.length} tasks. We recommend implementing in batches
+            of {Math.min(10, Math.ceil(generatedTasks.length / 2))} tasks at a time for easier management.
+          </p>
+          <div className="flex items-center gap-2 mt-1">
+            <span className="text-xs text-purple-600 dark:text-purple-400">
+              Viewing batch {taskBatchIndex + 1} of {Math.ceil(generatedTasks.length / 10)}
+            </span>
+            <div className="flex gap-1">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setTaskBatchIndex(Math.max(0, taskBatchIndex - 1))}
+                disabled={taskBatchIndex === 0}
+                className="h-6 px-2 text-purple-700 dark:text-purple-400"
+              >
+                Previous
+              </Button>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => setTaskBatchIndex(Math.min(Math.ceil(generatedTasks.length / 10) - 1, taskBatchIndex + 1))}
+                disabled={taskBatchIndex >= Math.ceil(generatedTasks.length / 10) - 1}
+                className="h-6 px-2 text-purple-700 dark:text-purple-400"
+              >
+                Next
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setIsComplexDesign(false)}
+                className="h-6 px-2 text-purple-700 dark:text-purple-400"
+              >
+                Show All
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Generated tasks */}
       {generatedTasks.length > 0 && (
         <div className="space-y-3 border-t border-border pt-4">
@@ -614,7 +946,10 @@ export function ScreenshotAnalyzer({
           </div>
 
           <div className="space-y-2">
-            {generatedTasks.map((task) => (
+            {(isComplexDesign
+              ? generatedTasks.slice(taskBatchIndex * 10, (taskBatchIndex + 1) * 10)
+              : generatedTasks
+            ).map((task) => (
               <div
                 key={task.id}
                 className={cn(
