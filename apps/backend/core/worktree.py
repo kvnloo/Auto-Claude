@@ -19,8 +19,15 @@ import os
 import re
 import shutil
 import subprocess
+import uuid
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
+from typing import Callable
+
+# Merge tracking imports
+from merge.history import MergeHistoryStore
+from merge.tracking import MergeAttempt, MergeHealth, MergeStatus
 
 
 class WorktreeError(Exception):
@@ -52,11 +59,52 @@ class WorktreeManager:
     a corresponding branch auto-claude/{spec-name}.
     """
 
-    def __init__(self, project_dir: Path, base_branch: str | None = None):
+    def __init__(
+        self,
+        project_dir: Path,
+        base_branch: str | None = None,
+        history_store: MergeHistoryStore | None = None,
+    ):
         self.project_dir = project_dir
         self.base_branch = base_branch or self._detect_base_branch()
         self.worktrees_dir = project_dir / ".worktrees"
         self._merge_lock = asyncio.Lock()
+        self._history_store = history_store
+        self._merge_progress_callback: Callable[[MergeAttempt], None] | None = None
+
+    def set_history_store(self, store: MergeHistoryStore) -> None:
+        """
+        Set the merge history store for tracking merge attempts.
+
+        Args:
+            store: MergeHistoryStore instance for persisting merge history
+        """
+        self._history_store = store
+
+    def set_merge_progress_callback(
+        self, callback: Callable[[MergeAttempt], None] | None
+    ) -> None:
+        """
+        Set a callback for merge progress updates.
+
+        The callback is invoked at key points during merge operations:
+        - When merge starts (status=MERGING)
+        - When merge completes (status=COMPLETE)
+        - When merge fails (status=FAILED)
+
+        Args:
+            callback: Function to call with MergeAttempt updates, or None to clear
+        """
+        self._merge_progress_callback = callback
+
+    def _emit_merge_progress(self, attempt: MergeAttempt) -> None:
+        """Emit a merge progress event via the callback if set."""
+        if self._merge_progress_callback:
+            try:
+                self._merge_progress_callback(attempt)
+            except Exception:
+                # Don't let callback errors break merge operations
+                pass
 
     def _detect_base_branch(self) -> str:
         """
@@ -397,6 +445,10 @@ class WorktreeManager:
         """
         Merge a spec's worktree branch back to base branch.
 
+        This method tracks the merge attempt in the history store (if configured),
+        creating a MergeAttempt record before the merge starts and updating it
+        on completion.
+
         Args:
             spec_name: The spec folder name
             delete_after: Whether to remove worktree and branch after merge
@@ -410,6 +462,21 @@ class WorktreeManager:
             print(f"No worktree found for spec: {spec_name}")
             return False
 
+        # Create merge attempt record for tracking
+        attempt = MergeAttempt(
+            id=str(uuid.uuid4()),
+            task_id=spec_name,
+            worktree_path=str(info.path),
+            started_at=datetime.now(),
+            status=MergeStatus.MERGING,
+            health=MergeHealth.PASS,
+            progress_percent=0,
+            current_step="Preparing merge",
+        )
+
+        # Emit initial progress event
+        self._emit_merge_progress(attempt)
+
         if no_commit:
             print(
                 f"Merging {info.branch} into {self.base_branch} (staged, not committed)..."
@@ -417,11 +484,22 @@ class WorktreeManager:
         else:
             print(f"Merging {info.branch} into {self.base_branch}...")
 
+        # Update progress: Checking out base branch
+        attempt.update_progress(20, "Checking out base branch")
+        self._emit_merge_progress(attempt)
+
         # Switch to base branch in main project
         result = self._run_git(["checkout", self.base_branch])
         if result.returncode != 0:
             print(f"Error: Could not checkout base branch: {result.stderr}")
+            attempt.mark_failed(f"Could not checkout base branch: {result.stderr}")
+            self._emit_merge_progress(attempt)
+            self._store_merge_attempt(attempt)
             return False
+
+        # Update progress: Merging branch
+        attempt.update_progress(40, "Merging branch")
+        self._emit_merge_progress(attempt)
 
         # Merge the spec branch
         merge_args = ["merge", "--no-ff", info.branch]
@@ -436,7 +514,16 @@ class WorktreeManager:
         if result.returncode != 0:
             print("Merge conflict! Aborting merge...")
             self._run_git(["merge", "--abort"])
+
+            # Mark as failed with conflict info
+            attempt.mark_failed("Merge conflict detected - merge aborted")
+            self._emit_merge_progress(attempt)
+            self._store_merge_attempt(attempt)
             return False
+
+        # Update progress: Finalizing
+        attempt.update_progress(80, "Finalizing merge")
+        self._emit_merge_progress(attempt)
 
         if no_commit:
             # Unstage any files that are gitignored in the main branch
@@ -447,13 +534,43 @@ class WorktreeManager:
             )
             print("Review the changes, then commit when ready:")
             print("  git commit -m 'your commit message'")
+
+            # Mark as complete (no commit hash for staged merges)
+            attempt.mark_complete()
         else:
             print(f"Successfully merged {info.branch}")
+
+            # Get the merge commit hash
+            commit_result = self._run_git(["rev-parse", "HEAD"])
+            commit_hash = (
+                commit_result.stdout.strip() if commit_result.returncode == 0 else None
+            )
+            attempt.mark_complete(commit_hash)
+
+        # Emit final progress event
+        self._emit_merge_progress(attempt)
+
+        # Store the completed attempt
+        self._store_merge_attempt(attempt)
 
         if delete_after:
             self.remove_worktree(spec_name, delete_branch=True)
 
         return True
+
+    def _store_merge_attempt(self, attempt: MergeAttempt) -> None:
+        """
+        Store a merge attempt in the history store.
+
+        Args:
+            attempt: The MergeAttempt to store
+        """
+        if self._history_store:
+            try:
+                self._history_store.append(attempt)
+            except Exception as e:
+                # Log but don't fail the merge operation due to storage errors
+                print(f"Warning: Failed to store merge attempt: {e}")
 
     def commit_in_worktree(self, spec_name: str, message: str) -> bool:
         """Commit all changes in a spec's worktree."""
