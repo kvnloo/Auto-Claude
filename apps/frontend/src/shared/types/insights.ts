@@ -192,6 +192,8 @@ export interface InsightsChatMessage {
   role: InsightsChatRole;
   content: string;
   timestamp: Date;
+  // File attachments for user messages
+  attachments?: AttachedFile[];
   // For assistant messages that suggest task creation
   suggestedTask?: {
     title: string;
