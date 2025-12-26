@@ -38,6 +38,7 @@ import { loadTasks } from '../stores/task-store';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { InsightsModelSelector } from './InsightsModelSelector';
 import { FileAttachmentList } from './FileAttachmentList';
+import { FileChip } from './FileChip';
 import type { InsightsChatMessage, InsightsModelConfig } from '../../shared/types';
 import {
   TASK_CATEGORY_LABELS,
@@ -648,6 +649,20 @@ function MessageBubble({
         <div className="prose prose-sm dark:prose-invert max-w-none">
           <p className="whitespace-pre-wrap">{message.content}</p>
         </div>
+
+        {/* File attachments for user messages */}
+        {message.attachments && message.attachments.length > 0 && (
+          <div className="flex flex-wrap gap-1.5 mt-2">
+            {message.attachments.map((file) => (
+              <FileChip
+                key={file.id}
+                file={file}
+                readOnly
+                size="sm"
+              />
+            ))}
+          </div>
+        )}
 
         {/* Tool usage history for assistant messages */}
         {!isUser && message.toolsUsed && message.toolsUsed.length > 0 && (
