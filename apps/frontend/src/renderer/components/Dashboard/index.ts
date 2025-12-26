@@ -7,3 +7,6 @@ export { default as AgentReasoningDashboardDefault } from './AgentReasoningDashb
 
 export { ReasoningDisplay } from './ReasoningDisplay';
 export { default as ReasoningDisplayDefault } from './ReasoningDisplay';
+
+export { ProgressTracker } from './ProgressTracker';
+export { default as ProgressTrackerDefault } from './ProgressTracker';
