@@ -267,23 +267,147 @@ def detect_implicit_conflicts(
 
     Returns:
         List of implicit conflict regions
-
-    Note:
-        These advanced checks are currently TODO.
-        The main location-based detection handles most cases.
     """
-    conflicts = []
+    conflicts: list[ConflictRegion] = []
+
+    if len(task_analyses) <= 1:
+        return conflicts  # No implicit conflicts possible with 0-1 tasks
 
     # Check for function rename + function call changes
     # (If task A renames a function and task B calls the old name)
+    rename_conflicts = _detect_function_rename_conflicts(task_analyses)
+    conflicts.extend(rename_conflicts)
 
     # Check for import removal + usage
     # (If task A removes an import and task B uses it)
-
-    # For now, these advanced checks are TODO
-    # The main location-based detection handles most cases
+    # Note: Import conflict detection will be implemented in subtask-3-2
 
     return conflicts
+
+
+def _detect_function_rename_conflicts(
+    task_analyses: dict[str, FileAnalysis],
+) -> list[ConflictRegion]:
+    """
+    Detect conflicts where one task renames a function and another task
+    still references the old function name.
+
+    Args:
+        task_analyses: Map of task_id -> FileAnalysis
+
+    Returns:
+        List of conflict regions for function rename conflicts
+    """
+    conflicts: list[ConflictRegion] = []
+
+    # Collect all function renames from all tasks
+    # Format: list of (task_id, old_name, new_name, change)
+    renames: list[tuple[str, str, str, SemanticChange]] = []
+
+    for task_id, analysis in task_analyses.items():
+        for change in analysis.changes:
+            if change.change_type == ChangeType.RENAME_FUNCTION:
+                # Extract old and new names from metadata or target
+                old_name = change.metadata.get("old_name", change.target)
+                new_name = change.metadata.get("new_name", "")
+
+                # If old_name is in target and we have new_name in metadata
+                if old_name and new_name:
+                    renames.append((task_id, old_name, new_name, change))
+                    debug_detailed(
+                        MODULE,
+                        f"Found function rename in task {task_id}",
+                        old_name=old_name,
+                        new_name=new_name,
+                    )
+
+    # For each rename, check if other tasks reference the old function name
+    for rename_task_id, old_name, new_name, rename_change in renames:
+        for other_task_id, other_analysis in task_analyses.items():
+            if other_task_id == rename_task_id:
+                continue  # Don't check against same task
+
+            # Check if other task's changes reference the old function name
+            references_old_name = _task_references_function(
+                other_analysis, old_name
+            )
+
+            if references_old_name:
+                debug_detailed(
+                    MODULE,
+                    f"Function rename conflict detected",
+                    rename_task=rename_task_id,
+                    referencing_task=other_task_id,
+                    old_name=old_name,
+                    new_name=new_name,
+                )
+
+                conflict = ConflictRegion(
+                    file_path=other_analysis.file_path,
+                    location=f"function:{old_name}",
+                    tasks_involved=[rename_task_id, other_task_id],
+                    change_types=[
+                        ChangeType.RENAME_FUNCTION,
+                        ChangeType.MODIFY_FUNCTION,
+                    ],
+                    severity=ConflictSeverity.HIGH,
+                    can_auto_merge=False,
+                    merge_strategy=MergeStrategy.AI_REQUIRED,
+                    reason=(
+                        f"Task '{rename_task_id}' renames function '{old_name}' to "
+                        f"'{new_name}', but task '{other_task_id}' still references "
+                        f"the old name '{old_name}'"
+                    ),
+                )
+                conflicts.append(conflict)
+
+    return conflicts
+
+
+def _task_references_function(
+    analysis: FileAnalysis,
+    function_name: str,
+) -> bool:
+    """
+    Check if a task's analysis references a specific function name.
+
+    This checks:
+    - Function modifications (functions_modified set)
+    - Function calls in change content
+    - Metadata containing function references
+
+    Args:
+        analysis: The FileAnalysis to check
+        function_name: The function name to look for
+
+    Returns:
+        True if the analysis references the function, False otherwise
+    """
+    # Check if the function is in the modified functions set
+    if function_name in analysis.functions_modified:
+        return True
+
+    # Check each change for references to the function
+    for change in analysis.changes:
+        # Check if target references the function
+        if function_name in change.target:
+            return True
+
+        # Check if content_after contains the function name (likely a call)
+        if change.content_after and function_name in change.content_after:
+            return True
+
+        # Check metadata for function calls
+        function_calls = change.metadata.get("function_calls", [])
+        if function_name in function_calls:
+            return True
+
+        # Check metadata for referenced functions
+        referenced_functions = change.metadata.get("referenced_functions", [])
+        if function_name in referenced_functions:
+            return True
+
+    return False
 
 
 def analyze_compatibility(
