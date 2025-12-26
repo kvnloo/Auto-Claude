@@ -13,3 +13,6 @@ export { default as ProgressTrackerDefault } from './ProgressTracker';
 
 export { DecisionTree } from './DecisionTree';
 export { default as DecisionTreeDefault } from './DecisionTree';
+
+export { DecisionInspector } from './DecisionInspector';
+export { default as DecisionInspectorDefault } from './DecisionInspector';
