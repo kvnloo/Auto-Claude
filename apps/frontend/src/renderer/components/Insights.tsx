@@ -47,7 +47,8 @@ import {
 } from '../../shared/constants';
 import {
   validateFiles,
-  processFilesToAttachments
+  processFilesToAttachments,
+  hasLargeFiles
 } from '../utils/fileValidation';
 
 interface InsightsProps {
@@ -72,6 +73,7 @@ export function Insights({ projectId }: InsightsProps) {
   const [showSidebar, setShowSidebar] = useState(true);
   const [fileError, setFileError] = useState<string | null>(null);
   const [isDragOver, setIsDragOver] = useState(false);
+  const [isProcessingFiles, setIsProcessingFiles] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
@@ -141,19 +143,31 @@ export function Insights({ projectId }: InsightsProps) {
 
       // Process valid files to attachments
       if (validFiles.length > 0) {
-        const { attachments, errors: processErrors } = await processFilesToAttachments(
-          validFiles,
-          attachedFiles
-        );
-
-        // Add processing errors to display
-        if (processErrors.length > 0 && !fileError) {
-          setFileError(processErrors[0]);
+        // Show loading state for large files (>100MB)
+        const processingLargeFiles = hasLargeFiles(validFiles);
+        if (processingLargeFiles) {
+          setIsProcessingFiles(true);
         }
 
-        // Add each attachment to the store
-        for (const attachment of attachments) {
-          addAttachment(attachment);
+        try {
+          const { attachments, errors: processErrors } = await processFilesToAttachments(
+            validFiles,
+            attachedFiles
+          );
+
+          // Add processing errors to display
+          if (processErrors.length > 0 && !fileError) {
+            setFileError(processErrors[0]);
+          }
+
+          // Add each attachment to the store
+          for (const attachment of attachments) {
+            addAttachment(attachment);
+          }
+        } finally {
+          if (processingLargeFiles) {
+            setIsProcessingFiles(false);
+          }
         }
       }
 
@@ -220,8 +234,8 @@ export function Insights({ projectId }: InsightsProps) {
       dragCounterRef.current = 0;
       setIsDragOver(false);
 
-      // Don't process if loading
-      if (status.phase === 'thinking' || status.phase === 'streaming') return;
+      // Don't process if loading or already processing files
+      if (status.phase === 'thinking' || status.phase === 'streaming' || isProcessingFiles) return;
 
       const files = e.dataTransfer?.files;
       if (!files || files.length === 0) return;
@@ -239,23 +253,35 @@ export function Insights({ projectId }: InsightsProps) {
 
       // Process valid files to attachments
       if (validFiles.length > 0) {
-        const { attachments, errors: processErrors } = await processFilesToAttachments(
-          validFiles,
-          attachedFiles
-        );
-
-        // Add processing errors to display
-        if (processErrors.length > 0 && !fileError) {
-          setFileError(processErrors[0]);
+        // Show loading state for large files (>100MB)
+        const processingLargeFiles = hasLargeFiles(validFiles);
+        if (processingLargeFiles) {
+          setIsProcessingFiles(true);
         }
 
-        // Add each attachment to the store
-        for (const attachment of attachments) {
-          addAttachment(attachment);
+        try {
+          const { attachments, errors: processErrors } = await processFilesToAttachments(
+            validFiles,
+            attachedFiles
+          );
+
+          // Add processing errors to display
+          if (processErrors.length > 0 && !fileError) {
+            setFileError(processErrors[0]);
+          }
+
+          // Add each attachment to the store
+          for (const attachment of attachments) {
+            addAttachment(attachment);
+          }
+        } finally {
+          if (processingLargeFiles) {
+            setIsProcessingFiles(false);
+          }
         }
       }
     },
-    [attachedFiles, addAttachment, fileError, status.phase]
+    [attachedFiles, addAttachment, fileError, status.phase, isProcessingFiles]
   );
 
   const handleNewSession = async () => {
@@ -488,13 +514,23 @@ export function Insights({ projectId }: InsightsProps) {
           </div>
         )}
 
+        {/* Large file processing overlay */}
+        {isProcessingFiles && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-background/80 backdrop-blur-sm rounded-lg pointer-events-none">
+            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+              <Loader2 className="h-8 w-8 animate-spin text-primary" />
+              <span className="text-sm font-medium">Processing large files...</span>
+            </div>
+          </div>
+        )}
+
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
           type="file"
           multiple
           onChange={handleFileSelect}
-          disabled={isLoading}
+          disabled={isLoading || isProcessingFiles}
           className="hidden"
         />
 
@@ -521,19 +557,23 @@ export function Insights({ projectId }: InsightsProps) {
             onKeyDown={handleKeyDown}
             placeholder="Ask about your codebase..."
             className="min-h-[80px] resize-none"
-            disabled={isLoading}
+            disabled={isLoading || isProcessingFiles}
           />
           <div className="flex flex-col justify-end gap-1">
             <Button
               variant="outline"
               size="icon"
-              disabled={isLoading}
-              title={attachedFiles.length > 0 ? `${attachedFiles.length} file(s) attached` : 'Attach files'}
+              disabled={isLoading || isProcessingFiles}
+              title={isProcessingFiles ? 'Processing files...' : attachedFiles.length > 0 ? `${attachedFiles.length} file(s) attached` : 'Attach files'}
               onClick={handlePaperclipClick}
               className="relative"
             >
-              <Paperclip className="h-4 w-4" />
-              {attachedFiles.length > 0 && (
+              {isProcessingFiles ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <Paperclip className="h-4 w-4" />
+              )}
+              {attachedFiles.length > 0 && !isProcessingFiles && (
                 <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
                   {attachedFiles.length > 9 ? '9+' : attachedFiles.length}
                 </span>
@@ -541,7 +581,7 @@ export function Insights({ projectId }: InsightsProps) {
             </Button>
             <Button
               onClick={handleSend}
-              disabled={!inputValue.trim() || isLoading}
+              disabled={!inputValue.trim() || isLoading || isProcessingFiles}
               size="icon"
             >
               {isLoading ? (
@@ -558,7 +598,7 @@ export function Insights({ projectId }: InsightsProps) {
           files={attachedFiles}
           onRemove={(file) => removeAttachment(file.id)}
           onClearAll={clearAttachments}
-          disabled={isLoading}
+          disabled={isLoading || isProcessingFiles}
           size="sm"
           className="mt-2"
         />
