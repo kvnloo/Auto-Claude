@@ -19,9 +19,11 @@ with maximum automation and minimum AI token usage.
 from __future__ import annotations
 
 import logging
+from dataclasses import dataclass, field
 from datetime import datetime
+from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .ai_resolver import AIResolver, create_claude_resolver
 from .auto_merger import AutoMerger
@@ -82,9 +84,79 @@ except ImportError:
 logger = logging.getLogger(__name__)
 MODULE = "merge.orchestrator"
 
+
+class MergeProgressStep(Enum):
+    """
+    Progress steps during file merge operations.
+
+    These represent the stages of processing a single file,
+    enabling real-time progress tracking in the UI.
+    """
+
+    FILE_START = "file_start"
+    LOADING_BASELINE = "loading_baseline"
+    DETECTING_CONFLICTS = "detecting_conflicts"
+    RESOLVING_CONFLICTS = "resolving_conflicts"
+    APPLYING_CHANGES = "applying_changes"
+    FILE_COMPLETE = "file_complete"
+    FILE_FAILED = "file_failed"
+
+
+@dataclass
+class MergeProgressEvent:
+    """
+    Progress event emitted during merge operations.
+
+    This provides real-time updates about merge progress
+    for consumption by the UI or logging systems.
+
+    Attributes:
+        file_path: Path to the file being processed
+        task_ids: Task IDs involved in this file merge
+        step: Current processing step
+        progress_percent: Estimated progress (0-100)
+        message: Human-readable status message
+        conflicts_detected: Number of conflicts found so far
+        conflicts_resolved: Number of conflicts resolved so far
+        error: Error message if step failed
+        metadata: Additional context information
+    """
+
+    file_path: str
+    task_ids: list[str]
+    step: MergeProgressStep
+    progress_percent: int = 0
+    message: str = ""
+    conflicts_detected: int = 0
+    conflicts_resolved: int = 0
+    error: str | None = None
+    metadata: dict[str, Any] = field(default_factory=dict)
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "file_path": self.file_path,
+            "task_ids": self.task_ids,
+            "step": self.step.value,
+            "progress_percent": self.progress_percent,
+            "message": self.message,
+            "conflicts_detected": self.conflicts_detected,
+            "conflicts_resolved": self.conflicts_resolved,
+            "error": self.error,
+            "metadata": self.metadata,
+        }
+
+
+# Type alias for progress callback
+MergeProgressCallback = Callable[[MergeProgressEvent], None]
+
+
 # Export all public classes for backwards compatibility
 __all__ = [
     "MergeOrchestrator",
+    "MergeProgressEvent",
+    "MergeProgressStep",
+    "MergeProgressCallback",
     "MergeReport",
     "MergeStats",
     "TaskMergeRequest",
@@ -119,6 +191,7 @@ class MergeOrchestrator:
         enable_ai: bool = True,
         ai_resolver: AIResolver | None = None,
         dry_run: bool = False,
+        progress_callback: MergeProgressCallback | None = None,
     ):
         """
         Initialize the merge orchestrator.
@@ -129,6 +202,7 @@ class MergeOrchestrator:
             enable_ai: Whether to use AI for ambiguous conflicts
             ai_resolver: Optional pre-configured AI resolver
             dry_run: If True, don't write any files
+            progress_callback: Optional callback for progress events
         """
         debug_section(MODULE, "Initializing MergeOrchestrator")
         debug(
@@ -143,6 +217,7 @@ class MergeOrchestrator:
         self.storage_dir = storage_dir or (self.project_dir / ".auto-claude")
         self.enable_ai = enable_ai
         self.dry_run = dry_run
+        self._progress_callback = progress_callback
 
         # Initialize components
         debug_detailed(MODULE, "Initializing sub-components...")
@@ -396,6 +471,80 @@ class MergeOrchestrator:
 
         return report
 
+    def set_progress_callback(self, callback: MergeProgressCallback | None) -> None:
+        """
+        Set the progress callback for real-time merge updates.
+
+        Args:
+            callback: Function to call with progress events, or None to disable
+        """
+        self._progress_callback = callback
+        debug(MODULE, f"Progress callback {'set' if callback else 'cleared'}")
+
+    def _emit_progress(
+        self,
+        file_path: str,
+        task_ids: list[str],
+        step: MergeProgressStep,
+        progress_percent: int = 0,
+        message: str = "",
+        conflicts_detected: int = 0,
+        conflicts_resolved: int = 0,
+        error: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Emit a progress event for merge tracking.
+
+        This method creates and dispatches a MergeProgressEvent to the
+        configured callback (if any) and logs the event for debugging.
+
+        Args:
+            file_path: Path to the file being processed
+            task_ids: Task IDs involved in this file merge
+            step: Current processing step
+            progress_percent: Estimated progress (0-100)
+            message: Human-readable status message
+            conflicts_detected: Number of conflicts found so far
+            conflicts_resolved: Number of conflicts resolved so far
+            error: Error message if step failed
+            metadata: Additional context information
+        """
+        event = MergeProgressEvent(
+            file_path=file_path,
+            task_ids=task_ids,
+            step=step,
+            progress_percent=progress_percent,
+            message=message,
+            conflicts_detected=conflicts_detected,
+            conflicts_resolved=conflicts_resolved,
+            error=error,
+            metadata=metadata or {},
+        )
+
+        # Log the event
+        debug_detailed(
+            MODULE,
+            f"Progress: {step.value} ({progress_percent}%)",
+            file=file_path,
+            tasks=task_ids,
+            conflicts_detected=conflicts_detected,
+            conflicts_resolved=conflicts_resolved,
+        )
+
+        # Dispatch to callback if configured
+        if self._progress_callback is not None:
+            try:
+                self._progress_callback(event)
+            except Exception as e:
+                debug_error(
+                    MODULE,
+                    "Progress callback failed",
+                    error=str(e),
+                    step=step.value,
+                )
+                logger.warning(f"Progress callback error: {e}")
+
     def _merge_file(
         self,
         file_path: str,
@@ -404,6 +553,14 @@ class MergeOrchestrator:
     ):
         """
         Merge changes from multiple tasks for a single file.
+
+        Emits progress events at each stage:
+        - FILE_START: Beginning file processing
+        - LOADING_BASELINE: Loading baseline content
+        - DETECTING_CONFLICTS: Analyzing for conflicts
+        - RESOLVING_CONFLICTS: Resolving detected conflicts
+        - APPLYING_CHANGES: Applying merge changes
+        - FILE_COMPLETE/FILE_FAILED: Processing finished
 
         Args:
             file_path: Path to the file
@@ -421,24 +578,133 @@ class MergeOrchestrator:
             target_branch=target_branch,
         )
 
-        # Get baseline content
-        baseline_content = self.evolution_tracker.get_baseline_content(file_path)
-        if baseline_content is None:
-            # Try to get from target branch
-            baseline_content = get_file_from_branch(
-                self.project_dir, file_path, target_branch
+        # Emit FILE_START event
+        self._emit_progress(
+            file_path=file_path,
+            task_ids=task_ids,
+            step=MergeProgressStep.FILE_START,
+            progress_percent=0,
+            message=f"Starting merge for {file_path}",
+            metadata={"target_branch": target_branch},
+        )
+
+        try:
+            # Emit LOADING_BASELINE event
+            self._emit_progress(
+                file_path=file_path,
+                task_ids=task_ids,
+                step=MergeProgressStep.LOADING_BASELINE,
+                progress_percent=10,
+                message="Loading baseline content",
             )
 
-        if baseline_content is None:
-            # File is new - created by task(s)
-            baseline_content = ""
+            # Get baseline content
+            baseline_content = self.evolution_tracker.get_baseline_content(file_path)
+            if baseline_content is None:
+                # Try to get from target branch
+                baseline_content = get_file_from_branch(
+                    self.project_dir, file_path, target_branch
+                )
 
-        # Delegate to merge pipeline
-        return self.merge_pipeline.merge_file(
-            file_path=file_path,
-            baseline_content=baseline_content,
-            task_snapshots=task_snapshots,
-        )
+            if baseline_content is None:
+                # File is new - created by task(s)
+                baseline_content = ""
+
+            # Emit DETECTING_CONFLICTS event
+            self._emit_progress(
+                file_path=file_path,
+                task_ids=task_ids,
+                step=MergeProgressStep.DETECTING_CONFLICTS,
+                progress_percent=30,
+                message="Detecting conflicts",
+            )
+
+            # Delegate to merge pipeline for the actual merge
+            # The pipeline handles conflict detection and resolution internally
+            result = self.merge_pipeline.merge_file(
+                file_path=file_path,
+                baseline_content=baseline_content,
+                task_snapshots=task_snapshots,
+            )
+
+            # Calculate conflict counts from result
+            conflicts_detected = len(result.conflicts_resolved) + len(
+                result.conflicts_remaining
+            )
+            conflicts_resolved = len(result.conflicts_resolved)
+
+            # Emit RESOLVING_CONFLICTS if there were conflicts
+            if conflicts_detected > 0:
+                self._emit_progress(
+                    file_path=file_path,
+                    task_ids=task_ids,
+                    step=MergeProgressStep.RESOLVING_CONFLICTS,
+                    progress_percent=60,
+                    message=f"Resolved {conflicts_resolved}/{conflicts_detected} conflicts",
+                    conflicts_detected=conflicts_detected,
+                    conflicts_resolved=conflicts_resolved,
+                    metadata={
+                        "ai_calls_made": result.ai_calls_made,
+                        "decision": result.decision.value,
+                    },
+                )
+
+            # Emit APPLYING_CHANGES event
+            self._emit_progress(
+                file_path=file_path,
+                task_ids=task_ids,
+                step=MergeProgressStep.APPLYING_CHANGES,
+                progress_percent=80,
+                message="Applying merged changes",
+                conflicts_detected=conflicts_detected,
+                conflicts_resolved=conflicts_resolved,
+            )
+
+            # Emit completion event
+            if result.success:
+                self._emit_progress(
+                    file_path=file_path,
+                    task_ids=task_ids,
+                    step=MergeProgressStep.FILE_COMPLETE,
+                    progress_percent=100,
+                    message=f"Merge complete: {result.decision.value}",
+                    conflicts_detected=conflicts_detected,
+                    conflicts_resolved=conflicts_resolved,
+                    metadata={
+                        "decision": result.decision.value,
+                        "explanation": result.explanation,
+                    },
+                )
+            else:
+                self._emit_progress(
+                    file_path=file_path,
+                    task_ids=task_ids,
+                    step=MergeProgressStep.FILE_FAILED,
+                    progress_percent=100,
+                    message=f"Merge failed: {result.error or 'Unknown error'}",
+                    conflicts_detected=conflicts_detected,
+                    conflicts_resolved=conflicts_resolved,
+                    error=result.error,
+                    metadata={
+                        "decision": result.decision.value,
+                        "conflicts_remaining": len(result.conflicts_remaining),
+                    },
+                )
+
+            return result
+
+        except Exception as e:
+            # Emit FILE_FAILED event on exception
+            error_msg = str(e)
+            self._emit_progress(
+                file_path=file_path,
+                task_ids=task_ids,
+                step=MergeProgressStep.FILE_FAILED,
+                progress_percent=100,
+                message=f"Merge error: {error_msg}",
+                error=error_msg,
+            )
+            raise
 
     def get_pending_conflicts(self) -> list[tuple[str, list[ConflictRegion]]]:
         """
