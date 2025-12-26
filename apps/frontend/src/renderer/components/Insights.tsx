@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type ChangeEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, type ChangeEvent, type DragEvent } from 'react';
 import {
   MessageSquare,
   Send,
@@ -71,10 +71,12 @@ export function Insights({ projectId }: InsightsProps) {
   const [taskCreated, setTaskCreated] = useState<Set<string>>(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
   const [fileError, setFileError] = useState<string | null>(null);
+  const [isDragOver, setIsDragOver] = useState(false);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragCounterRef = useRef(0);
 
   // Load session and set up listeners on mount
   useEffect(() => {
@@ -164,6 +166,92 @@ export function Insights({ projectId }: InsightsProps) {
   const handlePaperclipClick = useCallback(() => {
     fileInputRef.current?.click();
   }, []);
+
+  /**
+   * Handle drag enter on the chat input area
+   */
+  const handleDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current++;
+
+    // Only show drag overlay if files are being dragged
+    if (e.dataTransfer?.types.includes('Files')) {
+      setIsDragOver(true);
+    }
+  }, []);
+
+  /**
+   * Handle drag leave from the chat input area
+   */
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+    dragCounterRef.current--;
+
+    // Only hide overlay when fully leaving the drop zone
+    if (dragCounterRef.current === 0) {
+      setIsDragOver(false);
+    }
+  }, []);
+
+  /**
+   * Handle drag over the chat input area
+   */
+  const handleDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    e.preventDefault();
+    e.stopPropagation();
+  }, []);
+
+  /**
+   * Handle file drop on the chat input area
+   */
+  const handleDrop = useCallback(
+    async (e: DragEvent<HTMLDivElement>) => {
+      e.preventDefault();
+      e.stopPropagation();
+
+      // Reset drag state
+      dragCounterRef.current = 0;
+      setIsDragOver(false);
+
+      // Don't process if loading
+      if (status.phase === 'thinking' || status.phase === 'streaming') return;
+
+      const files = e.dataTransfer?.files;
+      if (!files || files.length === 0) return;
+
+      setFileError(null);
+
+      // Validate files
+      const fileArray = Array.from(files);
+      const { validFiles, errors } = validateFiles(fileArray, attachedFiles.length);
+
+      // Show first error if any
+      if (errors.length > 0) {
+        setFileError(errors[0]);
+      }
+
+      // Process valid files to attachments
+      if (validFiles.length > 0) {
+        const { attachments, errors: processErrors } = await processFilesToAttachments(
+          validFiles,
+          attachedFiles
+        );
+
+        // Add processing errors to display
+        if (processErrors.length > 0 && !fileError) {
+          setFileError(processErrors[0]);
+        }
+
+        // Add each attachment to the store
+        for (const attachment of attachments) {
+          addAttachment(attachment);
+        }
+      }
+    },
+    [attachedFiles, addAttachment, fileError, status.phase]
+  );
 
   const handleNewSession = async () => {
     await newSession(projectId);
@@ -375,7 +463,26 @@ export function Insights({ projectId }: InsightsProps) {
       </ScrollArea>
 
       {/* Input */}
-      <div className="border-t border-border p-4">
+      <div
+        className={cn(
+          "border-t border-border p-4 relative transition-colors",
+          isDragOver && "bg-primary/5 border-primary"
+        )}
+        onDragEnter={handleDragEnter}
+        onDragLeave={handleDragLeave}
+        onDragOver={handleDragOver}
+        onDrop={handleDrop}
+      >
+        {/* Drag overlay */}
+        {isDragOver && (
+          <div className="absolute inset-0 z-10 flex items-center justify-center bg-primary/10 border-2 border-dashed border-primary rounded-lg pointer-events-none">
+            <div className="flex flex-col items-center gap-2 text-primary">
+              <Paperclip className="h-8 w-8" />
+              <span className="text-sm font-medium">Drop files to attach</span>
+            </div>
+          </div>
+        )}
+
         {/* Hidden file input */}
         <input
           ref={fileInputRef}
