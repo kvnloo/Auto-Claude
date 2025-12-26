@@ -159,6 +159,18 @@ export interface IdeationSummary {
 import type { ThinkingLevel } from './settings';
 import type { ModelType } from './task';
 
+// File attachment types for insights chat
+export interface AttachedFile {
+  id: string;           // Unique identifier (UUID)
+  filename: string;     // Original filename
+  mimeType: string;     // e.g., 'text/plain', 'image/png', 'application/pdf'
+  size: number;         // Size in bytes
+  data?: string;        // Base64 data (for transport/embedding)
+  // Status tracking for processing states
+  status?: 'pending' | 'ready' | 'error';
+  error?: string;       // Error message if status is 'error'
+}
+
 // Model configuration for insights sessions
 export interface InsightsModelConfig {
   profileId: string;           // 'complex' | 'balanced' | 'quick' | 'custom'
