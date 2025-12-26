@@ -11,6 +11,7 @@ import type {
 } from '../../shared/types';
 import { AgentManager } from '../agent';
 import type { ProcessType, ExecutionProgressData } from '../agent';
+import { reasoningParser } from '../agent/reasoning-parser';
 import { titleGenerator } from '../title-generator';
 import { fileWatcher } from '../file-watcher';
 import { projectStore } from '../project-store';
@@ -31,7 +32,16 @@ export function registerAgenteventsHandlers(
   agentManager.on('log', (taskId: string, log: string) => {
     const mainWindow = getMainWindow();
     if (mainWindow) {
+      // Send the raw log to the renderer
       mainWindow.webContents.send(IPC_CHANNELS.TASK_LOG, taskId, log);
+
+      // Parse the log for reasoning/decision information
+      // The parser maintains state per task and builds a decision tree
+      const reasoningEvent = reasoningParser.parseLog(log, taskId);
+      if (reasoningEvent) {
+        // Emit reasoning event to the renderer for dashboard visualization
+        mainWindow.webContents.send(IPC_CHANNELS.TASK_REASONING_EVENT, taskId, reasoningEvent);
+      }
     }
   });
 
@@ -63,6 +73,26 @@ export function registerAgenteventsHandlers(
     if (mainWindow) {
       // Stop file watcher
       fileWatcher.unwatch(taskId);
+
+      // Emit agent completion/stop event to reasoning dashboard
+      const timestamp = new Date().toISOString();
+      if (code === 0) {
+        mainWindow.webContents.send(IPC_CHANNELS.TASK_REASONING_EVENT, taskId, {
+          type: 'agent_completed',
+          taskId,
+          timestamp,
+        });
+      } else {
+        mainWindow.webContents.send(IPC_CHANNELS.TASK_REASONING_EVENT, taskId, {
+          type: 'agent_stopped',
+          taskId,
+          timestamp,
+          error: `Agent exited with code ${code}`,
+        });
+      }
+
+      // Reset reasoning parser for this task (clean up state)
+      reasoningParser.reset();
 
       // Determine new status based on process type and exit code
       // Flow: Planning → In Progress → AI Review (QA agent) → Human Review (QA passed)
