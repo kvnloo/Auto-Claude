@@ -281,8 +281,8 @@ export function sendMessage(projectId: string, message: string, modelConfig?: In
   // Use provided modelConfig, or fall back to session's config
   const configToUse = modelConfig || session?.modelConfig;
 
-  // Send to main process
-  window.electronAPI.sendInsightsMessage(projectId, message, configToUse);
+  // Send to main process (pass attachments for AI context)
+  window.electronAPI.sendInsightsMessage(projectId, message, configToUse, attachedFiles);
 }
 
 export async function clearSession(projectId: string): Promise<void> {

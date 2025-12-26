@@ -87,7 +87,8 @@ import type {
   InsightsSessionSummary,
   InsightsChatStatus,
   InsightsStreamChunk,
-  InsightsModelConfig
+  InsightsModelConfig,
+  AttachedFile
 } from './insights';
 import type {
   Roadmap,
@@ -500,7 +501,7 @@ export interface ElectronAPI {
 
   // Insights operations
   getInsightsSession: (projectId: string) => Promise<IPCResult<InsightsSession | null>>;
-  sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig) => void;
+  sendInsightsMessage: (projectId: string, message: string, modelConfig?: InsightsModelConfig, attachments?: AttachedFile[]) => void;
   clearInsightsSession: (projectId: string) => Promise<IPCResult>;
   createTaskFromInsights: (
     projectId: string,

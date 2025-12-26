@@ -3,7 +3,7 @@ import type { BrowserWindow } from 'electron';
 import path from 'path';
 import { existsSync, readdirSync, mkdirSync, writeFileSync } from 'fs';
 import { IPC_CHANNELS, getSpecsDir, AUTO_BUILD_PATHS } from '../../shared/constants';
-import type { IPCResult, InsightsSession, InsightsSessionSummary, InsightsModelConfig, Task, TaskMetadata } from '../../shared/types';
+import type { IPCResult, InsightsSession, InsightsSessionSummary, InsightsModelConfig, Task, TaskMetadata, AttachedFile } from '../../shared/types';
 import { projectStore } from '../project-store';
 import { insightsService } from '../insights-service';
 
@@ -32,7 +32,7 @@ export function registerInsightsHandlers(
 
   ipcMain.on(
     IPC_CHANNELS.INSIGHTS_SEND_MESSAGE,
-    async (_, projectId: string, message: string, modelConfig?: InsightsModelConfig) => {
+    async (_, projectId: string, message: string, modelConfig?: InsightsModelConfig, attachments?: AttachedFile[]) => {
       const project = projectStore.getProject(projectId);
       if (!project) {
         const mainWindow = getMainWindow();
@@ -44,7 +44,7 @@ export function registerInsightsHandlers(
 
       // Note: Python environment initialization should be handled by insightsService
       // or added here with proper dependency injection if needed
-      insightsService.sendMessage(projectId, project.path, message, modelConfig);
+      insightsService.sendMessage(projectId, project.path, message, modelConfig, attachments);
     }
   );
 
