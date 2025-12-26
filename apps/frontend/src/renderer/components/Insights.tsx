@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback, type ChangeEvent, type DragEvent } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo, type ChangeEvent, type DragEvent } from 'react';
 import {
   MessageSquare,
   Send,
@@ -14,7 +14,8 @@ import {
   FolderSearch,
   PanelLeftClose,
   PanelLeft,
-  Paperclip
+  Paperclip,
+  File
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { Textarea } from './ui/textarea';
@@ -76,10 +77,20 @@ export function Insights({ projectId }: InsightsProps) {
   const [isDragOver, setIsDragOver] = useState(false);
   const [isProcessingFiles, setIsProcessingFiles] = useState(false);
 
+  // @ autocomplete state
+  const [autocomplete, setAutocomplete] = useState<{
+    show: boolean;
+    query: string;
+    startPos: number;
+    position: { top: number; left: number };
+  } | null>(null);
+  const [selectedIndex, setSelectedIndex] = useState(0);
+
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const dragCounterRef = useRef(0);
+  const autocompleteListRef = useRef<HTMLDivElement>(null);
 
   // Load session and set up listeners on mount
   useEffect(() => {
@@ -103,6 +114,206 @@ export function Insights({ projectId }: InsightsProps) {
     setTaskCreated(new Set());
   }, [session?.id]);
 
+  // Filter attached files based on autocomplete query
+  const filteredFiles = useMemo(() => {
+    if (!autocomplete?.show || attachedFiles.length === 0) {
+      return [];
+    }
+
+    const query = autocomplete.query.toLowerCase();
+    if (!query) {
+      // Show all attached files when no query
+      return attachedFiles.slice(0, 10);
+    }
+
+    // Score files by match quality
+    return attachedFiles
+      .map(file => {
+        const name = file.name.toLowerCase();
+        let score = 0;
+
+        // Exact name match (highest priority)
+        if (name === query) {
+          score = 1000;
+        }
+        // Name starts with query
+        else if (name.startsWith(query)) {
+          score = 100;
+        }
+        // Name contains query
+        else if (name.includes(query)) {
+          score = 50;
+        }
+
+        return { file, score };
+      })
+      .filter(item => item.score > 0)
+      .sort((a, b) => b.score - a.score)
+      .slice(0, 10)
+      .map(item => item.file);
+  }, [autocomplete?.show, autocomplete?.query, attachedFiles]);
+
+  // Reset selection when results change
+  useEffect(() => {
+    setSelectedIndex(0);
+  }, [filteredFiles]);
+
+  // Scroll selected item into view
+  useEffect(() => {
+    const list = autocompleteListRef.current;
+    if (!list) return;
+
+    const selectedElement = list.children[selectedIndex] as HTMLElement;
+    if (selectedElement) {
+      selectedElement.scrollIntoView({ block: 'nearest' });
+    }
+  }, [selectedIndex]);
+
+  /**
+   * Detect @ mention being typed and show autocomplete
+   */
+  const detectAtMention = useCallback((text: string, cursorPos: number) => {
+    const beforeCursor = text.slice(0, cursorPos);
+    // Match @ followed by optional word characters, dots, dashes
+    const match = beforeCursor.match(/@([\w\-.]*)$/);
+
+    if (match) {
+      return {
+        query: match[1],
+        startPos: cursorPos - match[0].length
+      };
+    }
+    return null;
+  }, []);
+
+  /**
+   * Handle input change and check for @ mentions
+   */
+  const handleInputChange = useCallback((e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    const newValue = e.target.value;
+    const cursorPos = e.target.selectionStart || 0;
+
+    setInputValue(newValue);
+
+    // Only show autocomplete if there are attached files
+    if (attachedFiles.length === 0) {
+      if (autocomplete?.show) {
+        setAutocomplete(null);
+      }
+      return;
+    }
+
+    // Check for @ mention at cursor
+    const mention = detectAtMention(newValue, cursorPos);
+
+    if (mention) {
+      // Calculate popup position based on cursor
+      const textarea = textareaRef.current;
+      if (textarea) {
+        const rect = textarea.getBoundingClientRect();
+        const textareaStyle = window.getComputedStyle(textarea);
+        const lineHeight = parseFloat(textareaStyle.lineHeight) || 20;
+        const paddingTop = parseFloat(textareaStyle.paddingTop) || 8;
+        const paddingLeft = parseFloat(textareaStyle.paddingLeft) || 12;
+
+        // Estimate cursor position
+        const textBeforeCursor = newValue.slice(0, cursorPos);
+        const lines = textBeforeCursor.split('\n');
+        const currentLineIndex = lines.length - 1;
+        const currentLineLength = lines[currentLineIndex].length;
+
+        // Calculate position relative to textarea
+        const charWidth = 8;
+        const top = paddingTop + (currentLineIndex + 1) * lineHeight + 4;
+        const left = paddingLeft + Math.min(currentLineLength * charWidth, rect.width - 280);
+
+        setAutocomplete({
+          show: true,
+          query: mention.query,
+          startPos: mention.startPos,
+          position: { top, left: Math.max(0, left) }
+        });
+      }
+    } else {
+      // No @ mention at cursor, close autocomplete
+      if (autocomplete?.show) {
+        setAutocomplete(null);
+      }
+    }
+  }, [detectAtMention, autocomplete?.show, attachedFiles.length]);
+
+  /**
+   * Handle autocomplete selection
+   */
+  const handleAutocompleteSelect = useCallback((filename: string) => {
+    if (!autocomplete) return;
+
+    const textarea = textareaRef.current;
+    if (!textarea) return;
+
+    // Replace the @query with @filename
+    const beforeMention = inputValue.slice(0, autocomplete.startPos);
+    const afterMention = inputValue.slice(autocomplete.startPos + 1 + autocomplete.query.length);
+    const newValue = beforeMention + '@' + filename + ' ' + afterMention;
+
+    setInputValue(newValue);
+    setAutocomplete(null);
+
+    // Set cursor after the inserted mention
+    setTimeout(() => {
+      const newCursorPos = autocomplete.startPos + 1 + filename.length + 1;
+      textarea.focus();
+      textarea.setSelectionRange(newCursorPos, newCursorPos);
+    }, 0);
+  }, [autocomplete, inputValue]);
+
+  /**
+   * Close autocomplete
+   */
+  const handleAutocompleteClose = useCallback(() => {
+    setAutocomplete(null);
+  }, []);
+
+  /**
+   * Handle keyboard navigation in autocomplete
+   */
+  const handleAutocompleteKeyDown = useCallback((e: React.KeyboardEvent) => {
+    if (!autocomplete?.show || filteredFiles.length === 0) return;
+
+    switch (e.key) {
+      case 'ArrowDown':
+        e.preventDefault();
+        setSelectedIndex(prev =>
+          prev < filteredFiles.length - 1 ? prev + 1 : prev
+        );
+        break;
+      case 'ArrowUp':
+        e.preventDefault();
+        setSelectedIndex(prev => prev > 0 ? prev - 1 : prev);
+        break;
+      case 'Enter':
+        if (autocomplete.show) {
+          e.preventDefault();
+          if (filteredFiles[selectedIndex]) {
+            handleAutocompleteSelect(filteredFiles[selectedIndex].name);
+          }
+        }
+        break;
+      case 'Escape':
+        e.preventDefault();
+        handleAutocompleteClose();
+        break;
+      case 'Tab':
+        if (autocomplete.show) {
+          e.preventDefault();
+          if (filteredFiles[selectedIndex]) {
+            handleAutocompleteSelect(filteredFiles[selectedIndex].name);
+          }
+        }
+        break;
+    }
+  }, [autocomplete?.show, filteredFiles, selectedIndex, handleAutocompleteSelect, handleAutocompleteClose]);
+
   const handleSend = () => {
     const message = inputValue.trim();
     if (!message || status.phase === 'thinking' || status.phase === 'streaming') return;
@@ -117,6 +328,15 @@ export function Insights({ projectId }: InsightsProps) {
   };
 
   const handleKeyDown = (e: React.KeyboardEvent) => {
+    // Handle autocomplete keyboard navigation first
+    if (autocomplete?.show && filteredFiles.length > 0) {
+      handleAutocompleteKeyDown(e);
+      // If autocomplete handled the key, don't process further
+      if (['ArrowDown', 'ArrowUp', 'Enter', 'Escape', 'Tab'].includes(e.key)) {
+        return;
+      }
+    }
+
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault();
       handleSend();
@@ -551,15 +771,74 @@ export function Insights({ projectId }: InsightsProps) {
         )}
 
         <div className="flex gap-2">
-          <Textarea
-            ref={textareaRef}
-            value={inputValue}
-            onChange={(e) => setInputValue(e.target.value)}
-            onKeyDown={handleKeyDown}
-            placeholder="Ask about your codebase..."
-            className="min-h-[80px] resize-none"
-            disabled={isLoading || isProcessingFiles}
-          />
+          {/* Textarea with @ autocomplete */}
+          <div className="relative flex-1">
+            <Textarea
+              ref={textareaRef}
+              value={inputValue}
+              onChange={handleInputChange}
+              onKeyDown={handleKeyDown}
+              placeholder={attachedFiles.length > 0 ? "Ask about your codebase... (type @ to reference attached files)" : "Ask about your codebase..."}
+              className="min-h-[80px] resize-none"
+              disabled={isLoading || isProcessingFiles}
+            />
+            {/* @ autocomplete popup for attached files */}
+            {autocomplete?.show && filteredFiles.length > 0 && (
+              <div
+                className="absolute z-50 bg-popover border border-border rounded-md shadow-lg overflow-hidden"
+                style={{
+                  top: autocomplete.position.top,
+                  left: autocomplete.position.left,
+                  minWidth: '240px',
+                  maxWidth: '320px',
+                  maxHeight: '200px'
+                }}
+              >
+                <div
+                  ref={autocompleteListRef}
+                  className="overflow-y-auto max-h-[160px]"
+                >
+                  {filteredFiles.map((file, index) => (
+                    <button
+                      key={file.id}
+                      className={cn(
+                        'w-full flex items-center gap-2 px-3 py-2 text-left text-sm',
+                        'hover:bg-accent hover:text-accent-foreground',
+                        'focus:outline-none transition-colors',
+                        index === selectedIndex && 'bg-accent text-accent-foreground'
+                      )}
+                      onClick={() => handleAutocompleteSelect(file.name)}
+                      onMouseEnter={() => setSelectedIndex(index)}
+                    >
+                      <File className="h-4 w-4 text-muted-foreground shrink-0" />
+                      <div className="flex-1 min-w-0">
+                        <div className="font-medium truncate">{file.name}</div>
+                        <div className="text-xs text-muted-foreground">
+                          {(file.size / 1024).toFixed(1)} KB
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
+                <div className="border-t border-border px-3 py-1.5 text-[10px] text-muted-foreground bg-muted/30">
+                  <span className="font-medium">↑↓</span> navigate · <span className="font-medium">Enter</span> select · <span className="font-medium">Esc</span> close
+                </div>
+              </div>
+            )}
+            {/* No files message when typing @ but no files attached */}
+            {autocomplete?.show && attachedFiles.length > 0 && filteredFiles.length === 0 && (
+              <div
+                className="absolute z-50 bg-popover border border-border rounded-md shadow-lg p-3 text-sm text-muted-foreground"
+                style={{
+                  top: autocomplete.position.top,
+                  left: autocomplete.position.left,
+                  minWidth: '200px'
+                }}
+              >
+                No matching files
+              </div>
+            )}
+          </div>
           <div className="flex flex-col justify-end gap-1">
             <Button
               variant="outline"
@@ -605,7 +884,7 @@ export function Insights({ projectId }: InsightsProps) {
         />
 
         <p className="mt-2 text-xs text-muted-foreground">
-          Press Enter to send, Shift+Enter for new line
+          Press Enter to send, Shift+Enter for new line{attachedFiles.length > 0 ? '. Type @ to reference attached files' : ''}
         </p>
       </div>
       </div>
