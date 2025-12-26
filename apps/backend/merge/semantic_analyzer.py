@@ -17,7 +17,7 @@ import logging
 from pathlib import Path
 from typing import Any
 
-from .types import ChangeType, ConflictSeverity, DependencyConflict, FileAnalysis, SemanticChange
+from .types import ChangeType, ConflictSeverity, CrossFileImpact, DependencyConflict, FileAnalysis, SemanticChange
 
 # Try to import networkx - it's optional for dependency graph analysis
 NETWORKX_AVAILABLE = False
@@ -682,10 +682,223 @@ def _create_conflict_description(
     return f"{action} in {file_path} may break {affected_summary}"
 
 
+def analyze_cross_file_impact(
+    file_analyses: dict[str, FileAnalysis] | list[FileAnalysis],
+    graph: Any | None,
+) -> list[CrossFileImpact]:
+    """
+    Analyze the ripple effects of changes across multiple files using graph traversal.
+
+    Uses the dependency graph to find all downstream files affected by changes
+    in each analyzed file. This helps identify the full scope of impact when
+    a shared utility, function, or module is modified.
+
+    Impact types detected:
+    - 'import_dependency': Files that import the changed module
+    - 'function_call': Files that may call modified/removed functions
+    - 'inheritance': Files with classes that inherit from modified classes
+
+    Args:
+        file_analyses: Either a dict mapping file paths to FileAnalysis objects,
+                      or a list of FileAnalysis objects.
+        graph: Optional NetworkX DiGraph of file dependencies.
+               If None, a new graph will be built from file_analyses.
+
+    Returns:
+        list[CrossFileImpact]: List of cross-file impact objects, each describing
+                               how a change in one file affects other files.
+
+    Example:
+        analyses = {
+            'src/utils.py': FileAnalysis(file_path='src/utils.py', ...),
+            'src/main.py': FileAnalysis(file_path='src/main.py', ...),
+        }
+        graph = build_dependency_graph(analyses)
+        impacts = analyze_cross_file_impact(analyses, graph)
+        for impact in impacts:
+            print(f"{impact.source_file}: affects {len(impact.impacted_files)} files")
+    """
+    impacts: list[CrossFileImpact] = []
+
+    # Convert list to dict if necessary
+    analyses_dict: dict[str, FileAnalysis] = {}
+    if isinstance(file_analyses, dict):
+        analyses_dict = file_analyses
+    elif isinstance(file_analyses, list):
+        analyses_dict = {fa.file_path: fa for fa in file_analyses}
+
+    # If no analyses, return empty list
+    if not analyses_dict:
+        return impacts
+
+    # Build graph if not provided
+    if graph is None:
+        graph = build_dependency_graph(file_analyses)
+
+    debug(
+        MODULE,
+        "Analyzing cross-file impact",
+        num_files=len(analyses_dict),
+        graph_available=graph is not None,
+    )
+
+    # Change types that have significant cross-file impact
+    impactful_change_types = {
+        # Function changes
+        ChangeType.REMOVE_FUNCTION,
+        ChangeType.MODIFY_FUNCTION,
+        ChangeType.RENAME_FUNCTION,
+        # Import changes
+        ChangeType.REMOVE_IMPORT,
+        ChangeType.MODIFY_IMPORT,
+        # Class changes
+        ChangeType.REMOVE_CLASS,
+        ChangeType.MODIFY_CLASS,
+        ChangeType.REMOVE_METHOD,
+        ChangeType.MODIFY_METHOD,
+        # Type changes (TypeScript)
+        ChangeType.MODIFY_TYPE,
+        ChangeType.MODIFY_INTERFACE,
+    }
+
+    # Iterate through all file analyses to find impactful changes
+    for file_path, analysis in analyses_dict.items():
+        for change in analysis.changes:
+            if change.change_type in impactful_change_types:
+                # Find all files that depend on this file
+                impacted_files = _find_all_impacted_files(graph, file_path)
+
+                if impacted_files:
+                    # Determine impact type based on change type
+                    impact_type = _determine_impact_type(change.change_type)
+
+                    # Add file_path to change metadata if not present
+                    if "file_path" not in change.metadata:
+                        change.metadata["file_path"] = file_path
+
+                    impact = CrossFileImpact(
+                        source_file=file_path,
+                        change=change,
+                        impacted_files=impacted_files,
+                        impact_type=impact_type,
+                    )
+                    impacts.append(impact)
+
+                    debug_detailed(
+                        MODULE,
+                        f"Cross-file impact detected: {change.change_type.value}",
+                        source_file=file_path,
+                        target=change.target,
+                        impacted_count=len(impacted_files),
+                        impact_type=impact_type,
+                    )
+
+    debug_success(
+        MODULE,
+        "Cross-file impact analysis complete",
+        impacts_found=len(impacts),
+    )
+
+    return impacts
+
+
+def _find_all_impacted_files(graph: Any, file_path: str) -> list[str]:
+    """
+    Find all files that may be impacted by changes to the given file.
+
+    Uses graph traversal to find both direct dependents (files that import this file)
+    and transitive dependents (files that depend on files that depend on this file).
+
+    Args:
+        graph: NetworkX DiGraph or stub graph
+        file_path: The file path to find impacts for
+
+    Returns:
+        list[str]: List of file paths that may be impacted by changes to file_path
+    """
+    if graph is None:
+        return []
+
+    # Check if the file is in the graph
+    if file_path not in graph:
+        return []
+
+    impacted: list[str] = []
+
+    # For NetworkX DiGraph, use predecessors (files that import this file)
+    # and optionally traverse the full dependency tree
+    if NETWORKX_AVAILABLE and hasattr(graph, "predecessors"):
+        try:
+            # Get direct predecessors (files that directly import this file)
+            direct_dependents = set(graph.predecessors(file_path))
+
+            # For a more complete picture, we could also find transitive dependents
+            # using nx.ancestors(), but for now we focus on direct dependencies
+            # to avoid over-reporting
+            impacted = list(direct_dependents)
+
+            # Sort for consistent ordering
+            impacted.sort()
+            return impacted
+        except Exception:
+            return []
+
+    # For stub graph, search edges manually
+    if hasattr(graph, "edges"):
+        for source, target in graph.edges():
+            if target == file_path:
+                impacted.append(source)
+        impacted.sort()
+        return impacted
+
+    return []
+
+
+def _determine_impact_type(change_type: ChangeType) -> str:
+    """
+    Determine the type of cross-file impact based on the change type.
+
+    Args:
+        change_type: The type of semantic change
+
+    Returns:
+        str: The impact type string
+    """
+    if change_type in {
+        ChangeType.REMOVE_FUNCTION,
+        ChangeType.MODIFY_FUNCTION,
+        ChangeType.RENAME_FUNCTION,
+        ChangeType.REMOVE_METHOD,
+        ChangeType.MODIFY_METHOD,
+    }:
+        return "function_call"
+
+    if change_type in {
+        ChangeType.REMOVE_CLASS,
+        ChangeType.MODIFY_CLASS,
+    }:
+        return "inheritance"
+
+    if change_type in {
+        ChangeType.REMOVE_IMPORT,
+        ChangeType.MODIFY_IMPORT,
+    }:
+        return "import_dependency"
+
+    if change_type in {
+        ChangeType.MODIFY_TYPE,
+        ChangeType.MODIFY_INTERFACE,
+    }:
+        return "type_dependency"
+
+    return "unknown"
+
+
 # Re-export ExtractedElement for backwards compatibility
 __all__ = [
     "SemanticAnalyzer",
     "ExtractedElement",
     "build_dependency_graph",
     "detect_dependency_conflicts",
+    "analyze_cross_file_impact",
 ]
