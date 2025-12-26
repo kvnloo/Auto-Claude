@@ -1,0 +1,159 @@
+/**
+ * MetricsDisplay component styles
+ *
+ * Custom styles for the Claude Flow execution metrics display.
+ * Most styling uses Tailwind CSS classes directly in the component.
+ * This module provides additional styles for specific visual effects.
+ */
+
+.metricsDisplay {
+  /* Card styling is handled by Tailwind classes */
+  /* This class is available for custom animations or effects */
+}
+
+/* Metrics grid styling */
+.metricsGrid {
+  /* Grid layout handled by Tailwind */
+}
+
+/* Individual metric card styling */
+.metricCard {
+  transition: transform 0.15s ease-out, box-shadow 0.15s ease-out;
+}
+
+.metricCard:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 4px 12px hsl(var(--foreground) / 0.05);
+}
+
+/* Speedup card with special highlight */
+.speedupCard {
+  background: linear-gradient(
+    135deg,
+    hsl(var(--primary) / 0.05) 0%,
+    hsl(var(--primary) / 0.02) 100%
+  );
+  border-color: hsl(var(--primary) / 0.2);
+}
+
+/* Summary panel styling */
+.summaryPanel {
+  background: linear-gradient(
+    135deg,
+    hsl(var(--muted) / 0.3) 0%,
+    hsl(var(--muted) / 0.1) 100%
+  );
+}
+
+/* Timeline section styling */
+.timeline {
+  position: relative;
+}
+
+.timeline::before {
+  content: "";
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 1px;
+  height: calc(100% - 48px);
+  background-color: hsl(var(--border));
+  transform: translate(-50%, -50%);
+}
+
+/* Compact metrics styling */
+.compactMetrics {
+  flex-wrap: wrap;
+}
+
+/* Animation for metric updates */
+@keyframes metricUpdate {
+  0% {
+    opacity: 0.7;
+    transform: scale(0.98);
+  }
+  100% {
+    opacity: 1;
+    transform: scale(1);
+  }
+}
+
+.metricUpdated {
+  animation: metricUpdate 0.3s ease-out;
+}
+
+/* Pulse animation for loading states */
+@keyframes metricPulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+.metricLoading {
+  animation: metricPulse 1.5s ease-in-out infinite;
+}
+
+/* Speedup factor highlight animation */
+@keyframes speedupGlow {
+  0%,
+  100% {
+    box-shadow: 0 0 0 0 hsl(var(--primary) / 0);
+  }
+  50% {
+    box-shadow: 0 0 12px 2px hsl(var(--primary) / 0.2);
+  }
+}
+
+.speedupHighlight {
+  animation: speedupGlow 2s ease-in-out infinite;
+}
+
+/* Success rate progress bar customization */
+.successBar {
+  transition: width 0.5s ease-out;
+}
+
+/* Agent status indicators */
+.agentSuccess {
+  color: hsl(var(--success));
+}
+
+.agentFailed {
+  color: hsl(var(--destructive));
+}
+
+/* Responsive adjustments for metrics grid */
+@media (max-width: 640px) {
+  .metricsGrid {
+    grid-template-columns: repeat(2, 1fr);
+  }
+
+  .metricCard {
+    padding: 0.75rem;
+  }
+
+  .timeline::before {
+    display: none;
+  }
+}
+
+/* Dark mode adjustments */
+:global(.dark) .speedupCard {
+  background: linear-gradient(
+    135deg,
+    hsl(var(--primary) / 0.1) 0%,
+    hsl(var(--primary) / 0.03) 100%
+  );
+}
+
+:global(.dark) .summaryPanel {
+  background: linear-gradient(
+    135deg,
+    hsl(var(--muted) / 0.4) 0%,
+    hsl(var(--muted) / 0.15) 100%
+  );
+}
