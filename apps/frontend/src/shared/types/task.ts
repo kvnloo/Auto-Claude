@@ -549,3 +549,26 @@ export function calculateMergeHealth(
     return 'fail'; // Unresolved conflicts remain
   }
 }
+
+/**
+ * Result of listing tasks with merge history.
+ */
+export interface MergeHistoryListResult {
+  taskIds: string[];
+}
+
+/**
+ * Summary statistics for merge history.
+ * Aggregated stats across all merge attempts.
+ */
+export interface MergeHistoryStats {
+  totalTasks: number;
+  totalAttempts: number;
+  successfulAttempts: number;
+  failedAttempts: number;
+  timeoutAttempts: number;
+  successRate: number;
+  totalConflicts: number;
+  resolvedConflicts: number;
+  conflictResolutionRate: number;
+}

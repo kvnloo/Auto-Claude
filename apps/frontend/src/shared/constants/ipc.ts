@@ -367,5 +367,12 @@ export const IPC_CHANNELS = {
   // Used for advanced merge completion tracking in agent worktrees
   MERGE_PROGRESS: 'merge:progress',
   MERGE_COMPLETE: 'merge:complete',
-  MERGE_CONFLICT_DETECTED: 'merge:conflictDetected'
+  MERGE_CONFLICT_DETECTED: 'merge:conflictDetected',
+
+  // Merge history retrieval (renderer -> main)
+  // Query persisted merge attempt history from .auto-claude/merge_history/
+  MERGE_HISTORY_GET: 'merge:history:get',
+  MERGE_HISTORY_GET_LATEST: 'merge:history:getLatest',
+  MERGE_HISTORY_LIST_TASKS: 'merge:history:listTasks',
+  MERGE_HISTORY_GET_STATS: 'merge:history:getStats'
 } as const;
