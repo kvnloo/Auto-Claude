@@ -158,14 +158,18 @@ class ClaudeFlowConfig(BaseModel):
         """
         Convert configuration to Claude Flow CLI arguments.
 
+        Note: Claude Flow CLI uses --mode (not --topology) for coordination mode.
+
         Returns:
             List of command line arguments for Claude Flow CLI.
         """
         args = [
-            "--topology",
+            "--mode",
             self.topology.value,
             "--max-agents",
             str(self.max_agents),
+            "--parallel",
+            "--executor",  # Use built-in executor instead of Claude Code CLI
         ]
 
         if self.timeout_seconds != DEFAULT_TIMEOUT:
