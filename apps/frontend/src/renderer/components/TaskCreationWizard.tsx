@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ClipboardEvent, type DragEvent } from 'react';
-import { Loader2, ChevronDown, ChevronUp, Image as ImageIcon, X, RotateCcw, FolderTree, GitBranch } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp, Image as ImageIcon, X, RotateCcw, FolderTree, GitBranch, Camera, FileEdit } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -30,6 +30,7 @@ import {
 import { TaskFileExplorerDrawer } from './TaskFileExplorerDrawer';
 import { AgentProfileSelector } from './AgentProfileSelector';
 import { FileAutocomplete } from './FileAutocomplete';
+import { ScreenshotAnalyzer, type GeneratedTask } from './ScreenshotAnalyzer';
 import { createTask, saveDraft, loadDraft, clearDraft, isDraftEmpty } from '../stores/task-store';
 import { useProjectStore } from '../stores/project-store';
 import { cn } from '../lib/utils';
@@ -72,6 +73,10 @@ export function TaskCreationWizard({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showFileExplorer, setShowFileExplorer] = useState(false);
   const [showGitOptions, setShowGitOptions] = useState(false);
+
+  // Creation mode: manual entry or screenshot-based generation
+  type CreationMode = 'manual' | 'screenshot';
+  const [creationMode, setCreationMode] = useState<CreationMode>('manual');
 
   // Git options state
   // Use a special value to represent "use project default" since Radix UI Select doesn't allow empty string values
@@ -598,6 +603,44 @@ export function TaskCreationWizard({
     return [...existingFiles, ...newFiles];
   }, []);
 
+  /**
+   * Handle generated tasks from ScreenshotAnalyzer
+   * Populates the description field with task details
+   */
+  const handleScreenshotTasksGenerated = useCallback((tasks: GeneratedTask[]) => {
+    if (tasks.length === 0) return;
+
+    // Build a description from the generated tasks
+    const taskDescriptions = tasks.map((task, index) => {
+      const lines: string[] = [];
+      lines.push(`## ${index + 1}. ${task.title}`);
+      lines.push(task.description);
+      if (task.filePath) {
+        lines.push(`\nFile: \`${task.filePath}\``);
+      }
+      if (task.implementation && task.implementation.length > 0) {
+        lines.push('\nImplementation:');
+        task.implementation.forEach((item) => {
+          lines.push(`- ${item}`);
+        });
+      }
+      return lines.join('\n');
+    });
+
+    const generatedDescription = `# Screenshot Analysis Results\n\n${taskDescriptions.join('\n\n---\n\n')}`;
+
+    // Set the description and switch to manual mode for editing
+    setDescription(generatedDescription);
+    setCreationMode('manual');
+    setError(null);
+
+    // Auto-generate a title if empty
+    if (!title.trim()) {
+      const firstTaskTitle = tasks[0]?.title || 'Screenshot-generated tasks';
+      setTitle(`Implement: ${firstTaskTitle}${tasks.length > 1 ? ` (+${tasks.length - 1} more)` : ''}`);
+    }
+  }, [title]);
+
   const handleCreate = async () => {
     if (!description.trim()) {
       setError('Please provide a description');
@@ -675,6 +718,7 @@ export function TaskCreationWizard({
     setShowGitOptions(false);
     setIsDraftRestored(false);
     setPasteSuccess(false);
+    setCreationMode('manual');
   };
 
   /**
@@ -748,7 +792,56 @@ export function TaskCreationWizard({
           </DialogDescription>
         </DialogHeader>
 
+        {/* Creation Mode Toggle */}
+        <div className="flex items-center gap-1 p-1 bg-muted rounded-lg mb-2">
+          <button
+            type="button"
+            onClick={() => setCreationMode('manual')}
+            disabled={isCreating}
+            className={cn(
+              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all',
+              creationMode === 'manual'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <FileEdit className="h-4 w-4" />
+            Manual Entry
+          </button>
+          <button
+            type="button"
+            onClick={() => setCreationMode('screenshot')}
+            disabled={isCreating}
+            className={cn(
+              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all',
+              creationMode === 'screenshot'
+                ? 'bg-background text-foreground shadow-sm'
+                : 'text-muted-foreground hover:text-foreground'
+            )}
+          >
+            <Camera className="h-4 w-4" />
+            From Screenshot
+          </button>
+        </div>
+
         <div className="space-y-5 py-4">
+          {/* Screenshot Mode Content */}
+          {creationMode === 'screenshot' && (
+            <div className="space-y-4">
+              <ScreenshotAnalyzer
+                onTasksGenerated={handleScreenshotTasksGenerated}
+                disabled={isCreating}
+              />
+              <p className="text-xs text-muted-foreground text-center">
+                Upload design screenshots to generate implementation tasks automatically.
+                Selected tasks will populate the description for editing.
+              </p>
+            </div>
+          )}
+
+          {/* Manual Entry Mode Content */}
+          {creationMode === 'manual' && (
+            <>
           {/* Description (Primary - Required) */}
           <div className="space-y-2">
             <Label htmlFor="description" className="text-sm font-medium text-foreground">
@@ -1106,6 +1199,8 @@ export function TaskCreationWizard({
               </div>
             </div>
           )}
+            </>
+          )}
 
           {/* Error */}
           {error && (
@@ -1118,8 +1213,8 @@ export function TaskCreationWizard({
 
         <DialogFooter>
           <div className="flex items-center gap-2">
-            {/* File Explorer Toggle Button */}
-            {projectPath && (
+            {/* File Explorer Toggle Button - only in manual mode */}
+            {projectPath && creationMode === 'manual' && (
               <Button
                 type="button"
                 variant={showFileExplorer ? 'default' : 'outline'}
@@ -1137,16 +1232,19 @@ export function TaskCreationWizard({
             <Button variant="outline" onClick={handleClose} disabled={isCreating}>
               Cancel
             </Button>
-            <Button onClick={handleCreate} disabled={isCreating || !description.trim()}>
-              {isCreating ? (
-                <>
-                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Creating...
-                </>
-              ) : (
-                'Create Task'
-              )}
-            </Button>
+            {/* Create Task button - only in manual mode */}
+            {creationMode === 'manual' && (
+              <Button onClick={handleCreate} disabled={isCreating || !description.trim()}>
+                {isCreating ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Creating...
+                  </>
+                ) : (
+                  'Create Task'
+                )}
+              </Button>
+            )}
           </div>
         </DialogFooter>
           </div>
