@@ -280,7 +280,8 @@ def detect_implicit_conflicts(
 
     # Check for import removal + usage
     # (If task A removes an import and task B uses it)
-    # Note: Import conflict detection will be implemented in subtask-3-2
+    import_conflicts = _detect_import_removal_conflicts(task_analyses)
+    conflicts.extend(import_conflicts)
 
     return conflicts
 
@@ -406,6 +407,164 @@ def _task_references_function(
         referenced_functions = change.metadata.get("referenced_functions", [])
         if function_name in referenced_functions:
             return True
+
+    return False
+
+
+def _detect_import_removal_conflicts(
+    task_analyses: dict[str, FileAnalysis],
+) -> list[ConflictRegion]:
+    """
+    Detect conflicts where one task removes an import that another task uses.
+
+    This detects when task A removes an import (e.g., `from utils import helper`)
+    and task B either:
+    - Adds the same import (indicating it needs the import)
+    - Uses the imported module/function in its changes
+
+    Args:
+        task_analyses: Map of task_id -> FileAnalysis
+
+    Returns:
+        List of conflict regions for import removal conflicts
+    """
+    conflicts: list[ConflictRegion] = []
+
+    # Collect all import removals from all tasks
+    # Format: list of (task_id, import_name, change)
+    removals: list[tuple[str, str, SemanticChange | None]] = []
+
+    for task_id, analysis in task_analyses.items():
+        # Check imports_removed set
+        for import_name in analysis.imports_removed:
+            debug_detailed(
+                MODULE,
+                f"Found import removal in task {task_id}",
+                import_name=import_name,
+            )
+            removals.append((task_id, import_name, None))
+
+        # Also check for REMOVE_IMPORT changes
+        for change in analysis.changes:
+            if change.change_type == ChangeType.REMOVE_IMPORT:
+                import_name = change.target
+                if import_name and (task_id, import_name, None) not in [
+                    (t, i, None) for t, i, _ in removals
+                ]:
+                    debug_detailed(
+                        MODULE,
+                        f"Found REMOVE_IMPORT change in task {task_id}",
+                        import_name=import_name,
+                    )
+                    removals.append((task_id, import_name, change))
+
+    # For each removal, check if other tasks use or add the same import
+    for removal_task_id, import_name, removal_change in removals:
+        for other_task_id, other_analysis in task_analyses.items():
+            if other_task_id == removal_task_id:
+                continue  # Don't check against same task
+
+            # Check if other task adds the same import (indicates it needs it)
+            if import_name in other_analysis.imports_added:
+                debug_detailed(
+                    MODULE,
+                    "Import removal conflict detected (other task adds import)",
+                    removal_task=removal_task_id,
+                    using_task=other_task_id,
+                    import_name=import_name,
+                )
+
+                conflict = ConflictRegion(
+                    file_path=other_analysis.file_path,
+                    location=f"import:{import_name}",
+                    tasks_involved=[removal_task_id, other_task_id],
+                    change_types=[ChangeType.REMOVE_IMPORT, ChangeType.ADD_IMPORT],
+                    severity=ConflictSeverity.HIGH,
+                    can_auto_merge=False,
+                    merge_strategy=MergeStrategy.AI_REQUIRED,
+                    reason=(
+                        f"Task '{removal_task_id}' removes import '{import_name}', "
+                        f"but task '{other_task_id}' adds the same import"
+                    ),
+                )
+                conflicts.append(conflict)
+                continue  # Already found a conflict, no need to check usage
+
+            # Check if other task uses the import in its changes
+            uses_import = _task_uses_import(other_analysis, import_name)
+
+            if uses_import:
+                debug_detailed(
+                    MODULE,
+                    "Import removal conflict detected (other task uses import)",
+                    removal_task=removal_task_id,
+                    using_task=other_task_id,
+                    import_name=import_name,
+                )
+
+                conflict = ConflictRegion(
+                    file_path=other_analysis.file_path,
+                    location=f"import:{import_name}",
+                    tasks_involved=[removal_task_id, other_task_id],
+                    change_types=[ChangeType.REMOVE_IMPORT, ChangeType.MODIFY_FUNCTION],
+                    severity=ConflictSeverity.HIGH,
+                    can_auto_merge=False,
+                    merge_strategy=MergeStrategy.AI_REQUIRED,
+                    reason=(
+                        f"Task '{removal_task_id}' removes import '{import_name}', "
+                        f"but task '{other_task_id}' uses '{import_name}' in its changes"
+                    ),
+                )
+                conflicts.append(conflict)
+
+    return conflicts
+
+
+def _task_uses_import(
+    analysis: FileAnalysis,
+    import_name: str,
+) -> bool:
+    """
+    Check if a task's analysis uses a specific import.
+
+    This checks:
+    - Content in changes that references the import
+    - Metadata containing import references
+    - Function calls that might use the imported module
+
+    Args:
+        analysis: The FileAnalysis to check
+        import_name: The import name to look for (e.g., "utils.helper" or "helper")
+
+    Returns:
+        True if the analysis uses the import, False otherwise
+    """
+    # Extract the module/function name from the import
+    # e.g., "from utils import helper" -> check for "helper"
+    # e.g., "import utils.helper" -> check for "utils.helper" or "helper"
+    import_parts = import_name.split(".")
+    names_to_check = [import_name]  # Full import name
+    if import_parts:
+        names_to_check.append(import_parts[-1])  # Last part (e.g., "helper")
+
+    for change in analysis.changes:
+        # Check if content_after contains any of the import names
+        if change.content_after:
+            for name in names_to_check:
+                if name in change.content_after:
+                    return True
+
+        # Check metadata for imports used
+        imports_used = change.metadata.get("imports_used", [])
+        for name in names_to_check:
+            if name in imports_used:
+                return True
+
+        # Check metadata for function calls that might use the import
+        function_calls = change.metadata.get("function_calls", [])
+        for name in names_to_check:
+            if any(name in call for call in function_calls):
+                return True
 
     return False
 
