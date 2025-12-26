@@ -312,10 +312,14 @@ async def run_with_sdk(
 Current question: {full_prompt}"""
 
     if attachments:
+        # Log attachment context info for debugging
+        attachment_filenames = [a.get("filename", "unknown") for a in attachments]
         debug(
             "insights_runner",
             "Including file attachments in context",
             attachment_count=len(attachments),
+            attachment_filenames=attachment_filenames,
+            context_length=len(attachment_context),
         )
 
     debug(
@@ -549,10 +553,22 @@ def main():
             )
             with open(args.attachments_file, encoding="utf-8") as f:
                 attachments = json.load(f)
+            # Log detailed attachment info for debugging
+            attachment_info = []
+            for att in attachments:
+                info = {
+                    "filename": att.get("filename", "unknown"),
+                    "mimeType": att.get("mimeType", "unknown"),
+                    "size": att.get("size", 0),
+                    "has_data": bool(att.get("data")),
+                    "data_length": len(att.get("data", "")) if att.get("data") else 0,
+                }
+                attachment_info.append(info)
             debug_detailed(
                 "insights_runner",
                 "Loaded attachments from file",
                 attachments_count=len(attachments),
+                attachments=attachment_info,
             )
         except (json.JSONDecodeError, FileNotFoundError, OSError) as e:
             debug_error("insights_runner", f"Failed to load attachments: {e}")
