@@ -111,9 +111,6 @@ const statusSchema: RouteSchema = {
  * Determine overall health status based on system state
  */
 function determineHealthStatus(): 'healthy' | 'degraded' | 'unhealthy' {
-  // Check if server has been running for a reasonable time
-  const uptime = getServerUptime();
-
   // Check memory usage
   const memUsage = process.memoryUsage();
   const heapUsedMB = memUsage.heapUsed / 1024 / 1024;

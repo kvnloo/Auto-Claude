@@ -15,7 +15,7 @@
  * - POST   /api/tasks/:id/review - Submit task review
  */
 
-import type { FastifyInstance, FastifyRequest, FastifyReply } from 'fastify';
+import type { FastifyInstance } from 'fastify';
 import { projectStore } from '../../project-store';
 import { authenticateApiKey } from '../middleware/auth';
 import {
@@ -36,7 +36,6 @@ import type {
   StartTaskRequest,
   SubmitReviewRequest,
   Task,
-  TaskStatus,
   TaskMetadata,
 } from '../types';
 import { existsSync, readFileSync, writeFileSync, readdirSync, mkdirSync } from 'fs';
@@ -478,7 +477,7 @@ export async function registerTaskRoutes(fastify: FastifyInstance): Promise<void
     preHandler: [authenticateApiKey],
     handler: async (request, reply) => {
       const { id } = request.params;
-      const { options } = request.body || {};
+      const { options: _options } = request.body || {};
 
       const { task, project } = findTaskAndProject(id);
 

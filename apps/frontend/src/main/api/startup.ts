@@ -109,9 +109,10 @@ export interface ApiServerStatus {
 
 /**
  * Track references to AgentManager and FileWatcher for event bridge
+ * Prefixed with underscore as they are stored for debugging/future use
  */
-let agentManagerRef: AgentManager | null = null;
-let fileWatcherRef: FileWatcher | null = null;
+let _agentManagerRef: AgentManager | null = null;
+let _fileWatcherRef: FileWatcher | null = null;
 
 /**
  * Track the Fastify instance
@@ -185,8 +186,8 @@ export async function initializeApiServer(
     }
 
     // Store references for event bridge
-    agentManagerRef = agentManager;
-    fileWatcherRef = fileWatcher;
+    _agentManagerRef = agentManager;
+    _fileWatcherRef = fileWatcher;
 
     // Create the Fastify server
     if (options.debug) {
@@ -323,8 +324,8 @@ export async function shutdownApiServer(): Promise<ApiShutdownResult> {
     }
 
     // Clear references
-    agentManagerRef = null;
-    fileWatcherRef = null;
+    _agentManagerRef = null;
+    _fileWatcherRef = null;
     initializationAttempted = false;
 
     return result;

@@ -5,10 +5,17 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import type { FastifyRequest, FastifyReply, FastifyInstance } from 'fastify';
 
+// Type for auth middleware function
+type AuthMiddlewareFn = (
+  this: FastifyInstance,
+  request: FastifyRequest,
+  reply: FastifyReply,
+  done: () => void
+) => Promise<FastifyReply | void> | void;
+
 // Helper to call middleware with proper this context
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
 const callMiddleware = async (
-  middleware: any,
+  middleware: AuthMiddlewareFn,
   request: FastifyRequest,
   reply: FastifyReply,
   done: () => void
