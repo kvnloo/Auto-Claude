@@ -203,8 +203,12 @@ def cleanup_attachments_workspace(workspace_dir: str) -> None:
         debug_error("insights_runner", f"Failed to cleanup attachments workspace: {e}")
 
 
-def format_attachment_context(attachments: list, file_paths: list[str]) -> str:
-    """Format file attachments as context for the AI, with paths to actual files."""
+def format_attachment_context(attachments: list, file_paths: list[str], project_dir: str) -> str:
+    """Format file attachments as context for the AI, with paths to actual files.
+
+    Uses relative paths from the project directory so the Read tool can access
+    them within the SDK sandbox.
+    """
     if not attachments:
         return ""
 
@@ -214,10 +218,18 @@ def format_attachment_context(attachments: list, file_paths: list[str]) -> str:
         "The user has attached the following files. You can read them using the Read tool:\n"
     )
 
-    # Create a map of filename to path for lookup
+    # Create a map of filename to path for lookup, converting to relative paths
+    project_path = Path(project_dir).resolve()
     path_map = {}
     for path in file_paths:
-        path_map[Path(path).name] = path
+        abs_path = Path(path).resolve()
+        try:
+            # Convert to relative path from project directory
+            rel_path = abs_path.relative_to(project_path)
+            path_map[abs_path.name] = str(rel_path)
+        except ValueError:
+            # Path is not within project dir, use absolute path as fallback
+            path_map[abs_path.name] = str(abs_path)
 
     for attachment in attachments:
         filename = attachment.get("filename", "unknown")
@@ -243,10 +255,9 @@ def format_attachment_context(attachments: list, file_paths: list[str]) -> str:
         file_path = path_map.get(safe_filename)
         if not file_path:
             # Try to find a matching path with counter suffix
-            for path in file_paths:
-                path_obj = Path(path)
-                if path_obj.stem.startswith(Path(safe_filename).stem):
-                    file_path = path
+            for stored_name, stored_path in path_map.items():
+                if Path(stored_name).stem.startswith(Path(safe_filename).stem):
+                    file_path = stored_path
                     break
 
         if file_path:
@@ -379,7 +390,7 @@ async def run_with_sdk(
         conversation_context += f"\n{role}: {msg['content']}\n"
 
     # Build the full prompt with conversation history and attachments
-    attachment_context = format_attachment_context(attachments, file_paths)
+    attachment_context = format_attachment_context(attachments, file_paths, project_dir)
 
     full_prompt = message
     if attachment_context:
