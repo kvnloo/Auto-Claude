@@ -6,6 +6,8 @@ import { Badge } from './ui/badge';
 import { Button } from './ui/button';
 import { cn, formatRelativeTime, sanitizeMarkdownForDisplay } from '../lib/utils';
 import { PhaseProgressIndicator } from './PhaseProgressIndicator';
+import { MergeStatusIndicator } from './MergeStatusIndicator';
+import { useIsTaskMerging } from '../stores/merge-store';
 import {
   TASK_CATEGORY_LABELS,
   TASK_CATEGORY_COLORS,
@@ -43,6 +45,7 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
   const { t } = useTranslation('tasks');
   const [isStuck, setIsStuck] = useState(false);
   const [isRecovering, setIsRecovering] = useState(false);
+  const isMerging = useIsTaskMerging(task.id);
 
   const isRunning = task.status === 'in_progress';
   const executionPhase = task.executionProgress?.phase;
@@ -329,6 +332,17 @@ export function TaskCard({ task, onClick }: TaskCardProps) {
               subtasks={task.subtasks}
               isStuck={isStuck}
               isRunning={isRunning}
+            />
+          </div>
+        )}
+
+        {/* Merge status indicator - shown when merge is active or has history */}
+        {isMerging && (
+          <div className="mt-3">
+            <MergeStatusIndicator
+              taskId={task.id}
+              compact
+              showHistory={false}
             />
           </div>
         )}
