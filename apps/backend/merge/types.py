@@ -294,6 +294,91 @@ class FileAnalysis:
 
 
 @dataclass
+class DependencyConflict:
+    """
+    Represents a conflict where a change breaks downstream dependencies.
+
+    This type is used to track when modifications to a file (like removing
+    a function or changing a signature) may affect other files that depend
+    on the changed code.
+
+    Attributes:
+        change: The semantic change that causes the conflict
+        affected_files: List of file paths that depend on the changed code
+        severity: Severity level using ConflictSeverity enum
+        description: Human-readable explanation of the conflict
+    """
+
+    change: SemanticChange | None
+    affected_files: list[str]
+    severity: ConflictSeverity
+    description: str = ""
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "change": self.change.to_dict() if self.change else None,
+            "affected_files": self.affected_files,
+            "severity": self.severity.value,
+            "description": self.description,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> DependencyConflict:
+        """Create from dictionary."""
+        return cls(
+            change=SemanticChange.from_dict(data["change"])
+            if data.get("change")
+            else None,
+            affected_files=data.get("affected_files", []),
+            severity=ConflictSeverity(data["severity"]),
+            description=data.get("description", ""),
+        )
+
+
+@dataclass
+class CrossFileImpact:
+    """
+    Represents the ripple effect of a change across multiple files.
+
+    This type is used to track how changes to one file propagate through
+    the codebase via imports, function calls, and inheritance relationships.
+
+    Attributes:
+        source_file: The file where the change originated
+        change: The semantic change that has cross-file impact
+        impacted_files: List of file paths affected by this change
+        impact_type: Type of impact ('import_dependency', 'function_call', 'inheritance')
+    """
+
+    source_file: str
+    change: SemanticChange | None
+    impacted_files: list[str]
+    impact_type: str
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "source_file": self.source_file,
+            "change": self.change.to_dict() if self.change else None,
+            "impacted_files": self.impacted_files,
+            "impact_type": self.impact_type,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CrossFileImpact:
+        """Create from dictionary."""
+        return cls(
+            source_file=data["source_file"],
+            change=SemanticChange.from_dict(data["change"])
+            if data.get("change")
+            else None,
+            impacted_files=data.get("impacted_files", []),
+            impact_type=data.get("impact_type", ""),
+        )
+
+
+@dataclass
 class ConflictRegion:
     """
     A detected conflict between multiple task changes.
