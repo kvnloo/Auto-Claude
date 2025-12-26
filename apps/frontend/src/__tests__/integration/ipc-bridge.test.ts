@@ -290,6 +290,87 @@ describe('IPC Bridge Integration', () => {
     });
   });
 
+  describe('Insights operations with attachments', () => {
+    let electronAPI: Record<string, unknown>;
+
+    beforeEach(async () => {
+      vi.resetModules();
+      await import('../../preload/index');
+      electronAPI = exposedApis['electronAPI'] as Record<string, unknown>;
+    });
+
+    it('should have sendInsightsMessage method that accepts attachments', () => {
+      const testAttachment = {
+        id: 'file-1',
+        filename: 'test.txt',
+        mimeType: 'text/plain',
+        size: 1024,
+        data: 'dGVzdA=='
+      };
+
+      const sendInsightsMessage = electronAPI['sendInsightsMessage'] as (
+        projectId: string,
+        message: string,
+        modelConfig?: unknown,
+        attachments?: unknown[]
+      ) => void;
+
+      sendInsightsMessage('project-id', 'Hello', undefined, [testAttachment]);
+
+      // Verify IPC was called with the attachments parameter
+      expect(mockIpcRenderer.send).toHaveBeenCalledWith(
+        'insights:sendMessage',
+        'project-id',
+        'Hello',
+        undefined,
+        [testAttachment]
+      );
+    });
+
+    it('should pass empty attachments array when no files attached', () => {
+      const sendInsightsMessage = electronAPI['sendInsightsMessage'] as (
+        projectId: string,
+        message: string,
+        modelConfig?: unknown,
+        attachments?: unknown[]
+      ) => void;
+
+      sendInsightsMessage('project-id', 'Hello', undefined, []);
+
+      expect(mockIpcRenderer.send).toHaveBeenCalledWith(
+        'insights:sendMessage',
+        'project-id',
+        'Hello',
+        undefined,
+        []
+      );
+    });
+
+    it('should pass multiple attachments to IPC', () => {
+      const testAttachments = [
+        { id: 'file-1', filename: 'doc.pdf', mimeType: 'application/pdf', size: 2048, data: 'cGRm' },
+        { id: 'file-2', filename: 'image.png', mimeType: 'image/png', size: 4096, data: 'cG5n' }
+      ];
+
+      const sendInsightsMessage = electronAPI['sendInsightsMessage'] as (
+        projectId: string,
+        message: string,
+        modelConfig?: unknown,
+        attachments?: unknown[]
+      ) => void;
+
+      sendInsightsMessage('project-id', 'Check these files', undefined, testAttachments);
+
+      expect(mockIpcRenderer.send).toHaveBeenCalledWith(
+        'insights:sendMessage',
+        'project-id',
+        'Check these files',
+        undefined,
+        testAttachments
+      );
+    });
+  });
+
   describe('IPC channel constants', () => {
     it('should use consistent channel names', async () => {
       const { IPC_CHANNELS } = await import('../../shared/constants');
