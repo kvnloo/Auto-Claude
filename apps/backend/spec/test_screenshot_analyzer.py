@@ -24,8 +24,12 @@ import pytest
 
 from services.screenshot_analyzer import (
     ALLOWED_MIME_TYPES,
+    DANGEROUS_FILENAME_PATTERNS,
+    IMAGE_MAGIC_BYTES,
     MAX_FILE_SIZE_BYTES,
+    MAX_FILENAME_LENGTH,
     MAX_SCREENSHOTS,
+    SVG_MARKERS,
     AnalysisResult,
     ColorPalette,
     ExtractedComponent,
@@ -36,6 +40,10 @@ from services.screenshot_analyzer import (
     Typography,
     ValidationError,
     analyze_screenshots,
+    decode_base64_safely,
+    validate_content_size,
+    validate_filename_security,
+    validate_magic_bytes,
     validate_screenshot_uploads,
 )
 
@@ -294,8 +302,13 @@ class TestImageValidation:
     def test_validate_all_allowed_mime_types(
         self, analyzer: ScreenshotAnalyzer, valid_image_data: str
     ):
-        """All allowed MIME types pass validation."""
-        for mime_type in ALLOWED_MIME_TYPES:
+        """PNG MIME types pass validation when content matches.
+
+        Note: With magic bytes validation, we can only validate PNG with
+        the valid_image_data fixture since it's actual PNG data.
+        """
+        # Test PNG variants which match the fixture data
+        for mime_type in ["image/png"]:
             image = ImageAttachment(
                 id="uuid-123",
                 filename="test.img",
@@ -305,6 +318,62 @@ class TestImageValidation:
             )
             is_valid, errors = analyzer.validate_images([image])
             assert is_valid is True, f"MIME type {mime_type} should be valid"
+
+    def test_validate_jpeg_with_jpeg_data(self, analyzer: ScreenshotAnalyzer):
+        """JPEG MIME type passes with actual JPEG data."""
+        # Create valid JPEG data (minimal JPEG)
+        jpeg_data = base64.b64encode(
+            b"\xff\xd8\xff\xe0\x00\x10JFIF" + b"\x00" * 100
+        ).decode()
+        for mime_type in ["image/jpeg", "image/jpg"]:
+            image = ImageAttachment(
+                id="uuid-123",
+                filename="test.jpg",
+                mime_type=mime_type,
+                size=110,
+                data=jpeg_data,
+            )
+            is_valid, errors = analyzer.validate_images([image])
+            assert is_valid is True, f"MIME type {mime_type} should be valid: {errors}"
+
+    def test_validate_gif_with_gif_data(self, analyzer: ScreenshotAnalyzer):
+        """GIF MIME type passes with actual GIF data."""
+        gif_data = base64.b64encode(b"GIF89a" + b"\x00" * 100).decode()
+        image = ImageAttachment(
+            id="uuid-123",
+            filename="test.gif",
+            mime_type="image/gif",
+            size=106,
+            data=gif_data,
+        )
+        is_valid, errors = analyzer.validate_images([image])
+        assert is_valid is True, f"GIF should be valid: {errors}"
+
+    def test_validate_webp_with_webp_data(self, analyzer: ScreenshotAnalyzer):
+        """WebP MIME type passes with actual WebP data."""
+        webp_data = base64.b64encode(b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 100).decode()
+        image = ImageAttachment(
+            id="uuid-123",
+            filename="test.webp",
+            mime_type="image/webp",
+            size=112,
+            data=webp_data,
+        )
+        is_valid, errors = analyzer.validate_images([image])
+        assert is_valid is True, f"WebP should be valid: {errors}"
+
+    def test_validate_svg_with_svg_data(self, analyzer: ScreenshotAnalyzer):
+        """SVG MIME type passes with actual SVG data."""
+        svg_data = base64.b64encode(b'<svg xmlns="test"></svg>').decode()
+        image = ImageAttachment(
+            id="uuid-123",
+            filename="test.svg",
+            mime_type="image/svg+xml",
+            size=24,
+            data=svg_data,
+        )
+        is_valid, errors = analyzer.validate_images([image])
+        assert is_valid is True, f"SVG should be valid: {errors}"
 
     def test_validate_multiple_images_partial_failure(
         self, analyzer: ScreenshotAnalyzer, valid_image_data: str
@@ -1062,6 +1131,266 @@ class TestFileSecurity:
         assert is_valid is False
         assert any("Too many images" in e.error for e in errors)
 
+    def test_path_traversal_prevention(
+        self, analyzer: ScreenshotAnalyzer, valid_image_data: str
+    ):
+        """Path traversal attempts in filenames are blocked."""
+        dangerous_filenames = [
+            "../../../etc/passwd.png",
+            "..\\..\\windows\\system32.png",
+            "/etc/passwd.png",
+            "\\windows\\system32.png",
+        ]
+        for filename in dangerous_filenames:
+            image = ImageAttachment(
+                id="uuid-123",
+                filename=filename,
+                mime_type="image/png",
+                size=1024,
+                data=valid_image_data,
+            )
+            is_valid, errors = analyzer.validate_images([image])
+            assert is_valid is False, f"Filename '{filename}' should be rejected"
+            assert any("dangerous pattern" in e.error.lower() or "invalid filename" in e.error.lower() for e in errors)
+
+    def test_null_byte_injection_prevention(
+        self, analyzer: ScreenshotAnalyzer, valid_image_data: str
+    ):
+        """Null bytes in filenames are blocked."""
+        image = ImageAttachment(
+            id="uuid-123",
+            filename="image\x00.php.png",
+            mime_type="image/png",
+            size=1024,
+            data=valid_image_data,
+        )
+        is_valid, errors = analyzer.validate_images([image])
+        assert is_valid is False
+        assert any("dangerous pattern" in e.error.lower() or "invalid filename" in e.error.lower() for e in errors)
+
+    def test_control_character_prevention(
+        self, analyzer: ScreenshotAnalyzer, valid_image_data: str
+    ):
+        """Control characters in filenames are blocked."""
+        # Test various control characters
+        for char_code in [0x01, 0x0A, 0x0D, 0x1B]:  # SOH, LF, CR, ESC
+            filename = f"image{chr(char_code)}test.png"
+            image = ImageAttachment(
+                id="uuid-123",
+                filename=filename,
+                mime_type="image/png",
+                size=1024,
+                data=valid_image_data,
+            )
+            is_valid, errors = analyzer.validate_images([image])
+            assert is_valid is False, f"Control char 0x{char_code:02x} should be rejected"
+
+
+class TestFilenameSecurity:
+    """Test filename security validation function."""
+
+    def test_valid_filename(self):
+        """Valid filenames pass."""
+        valid_names = [
+            "screenshot.png",
+            "my-image.jpg",
+            "test_file_123.gif",
+            "image (1).png",
+            "日本語.png",
+            "émoji-🎨.png",
+        ]
+        for name in valid_names:
+            is_valid, error = validate_filename_security(name)
+            assert is_valid is True, f"Filename '{name}' should be valid: {error}"
+
+    def test_empty_filename(self):
+        """Empty filename is rejected."""
+        is_valid, error = validate_filename_security("")
+        assert is_valid is False
+        assert "empty" in error.lower()
+
+    def test_path_traversal_blocked(self):
+        """Path traversal patterns are blocked."""
+        dangerous = [
+            "../image.png",
+            "../../etc/passwd",
+            "foo/../bar.png",
+        ]
+        for name in dangerous:
+            is_valid, error = validate_filename_security(name)
+            assert is_valid is False, f"'{name}' should be blocked"
+
+    def test_absolute_paths_blocked(self):
+        """Absolute paths are blocked."""
+        is_valid, error = validate_filename_security("/etc/passwd.png")
+        assert is_valid is False
+
+    def test_excessive_length_blocked(self):
+        """Excessively long filenames are blocked."""
+        long_name = "a" * (MAX_FILENAME_LENGTH + 1) + ".png"
+        is_valid, error = validate_filename_security(long_name)
+        assert is_valid is False
+        assert "too long" in error.lower()
+
+
+class TestMagicBytesValidation:
+    """Test magic bytes validation for file type spoofing prevention."""
+
+    def test_valid_png_magic_bytes(self):
+        """Valid PNG magic bytes pass."""
+        png_header = b"\x89PNG\r\n\x1a\n" + b"\x00" * 100
+        is_valid, error = validate_magic_bytes(png_header, "image/png")
+        assert is_valid is True
+
+    def test_valid_jpeg_magic_bytes(self):
+        """Valid JPEG magic bytes pass."""
+        jpeg_header = b"\xff\xd8\xff" + b"\x00" * 100
+        is_valid, error = validate_magic_bytes(jpeg_header, "image/jpeg")
+        assert is_valid is True
+
+    def test_valid_gif_magic_bytes(self):
+        """Valid GIF magic bytes pass."""
+        # Test both GIF87a and GIF89a
+        for signature in [b"GIF87a", b"GIF89a"]:
+            gif_header = signature + b"\x00" * 100
+            is_valid, error = validate_magic_bytes(gif_header, "image/gif")
+            assert is_valid is True
+
+    def test_valid_webp_magic_bytes(self):
+        """Valid WebP magic bytes pass."""
+        # WebP: RIFF....WEBP
+        webp_header = b"RIFF\x00\x00\x00\x00WEBP" + b"\x00" * 100
+        is_valid, error = validate_magic_bytes(webp_header, "image/webp")
+        assert is_valid is True
+
+    def test_valid_svg_content(self):
+        """Valid SVG content passes."""
+        svg_contents = [
+            b'<?xml version="1.0"?><svg></svg>',
+            b'<svg xmlns="http://www.w3.org/2000/svg"></svg>',
+            b'<!DOCTYPE svg PUBLIC "-//W3C//DTD SVG 1.1//EN"><svg></svg>',
+        ]
+        for content in svg_contents:
+            is_valid, error = validate_magic_bytes(content, "image/svg+xml")
+            assert is_valid is True
+
+    def test_spoofed_mime_type_blocked(self):
+        """File claiming to be PNG but containing HTML is blocked."""
+        html_content = b"<!DOCTYPE html><html><script>alert(1)</script></html>"
+        is_valid, error = validate_magic_bytes(html_content, "image/png")
+        assert is_valid is False
+        assert "does not match" in error.lower()
+
+    def test_javascript_disguised_as_image_blocked(self):
+        """JavaScript disguised as image is blocked."""
+        js_content = b"function exploit() { /* malicious */ }" + b"\x00" * 100
+        is_valid, error = validate_magic_bytes(js_content, "image/png")
+        assert is_valid is False
+
+    def test_file_too_short_rejected(self):
+        """File too short to validate is rejected."""
+        is_valid, error = validate_magic_bytes(b"\x89PNG", "image/png")
+        assert is_valid is False
+        assert "too short" in error.lower()
+
+
+class TestBase64Security:
+    """Test safe base64 decoding."""
+
+    def test_valid_base64_decodes(self):
+        """Valid base64 decodes correctly."""
+        original = b"Hello, World!"
+        encoded = base64.b64encode(original).decode()
+        decoded, error = decode_base64_safely(encoded)
+        assert decoded == original
+        assert error == ""
+
+    def test_data_url_handled(self):
+        """Data URL format is handled."""
+        original = b"test data"
+        encoded = base64.b64encode(original).decode()
+        data_url = f"data:image/png;base64,{encoded}"
+        decoded, error = decode_base64_safely(data_url)
+        assert decoded == original
+
+    def test_empty_data_rejected(self):
+        """Empty data is rejected."""
+        decoded, error = decode_base64_safely("")
+        assert decoded is None
+        assert "empty" in error.lower()
+
+    def test_invalid_base64_rejected(self):
+        """Invalid base64 is rejected."""
+        decoded, error = decode_base64_safely("not valid base64!!!")
+        assert decoded is None
+        assert "invalid" in error.lower() or "error" in error.lower()
+
+    def test_malformed_data_url_rejected(self):
+        """Malformed data URL is rejected."""
+        decoded, error = decode_base64_safely("data:image/png;base64")  # No comma
+        assert decoded is None
+
+    def test_excessive_padding_rejected(self):
+        """Excessive base64 padding is rejected."""
+        decoded, error = decode_base64_safely("dGVzdA====")  # 4 = signs
+        assert decoded is None
+        assert "padding" in error.lower()
+
+
+class TestContentSizeValidation:
+    """Test content size validation."""
+
+    def test_valid_size_passes(self):
+        """Valid size passes."""
+        data = b"x" * 1000
+        is_valid, error = validate_content_size(data, 1000)
+        assert is_valid is True
+
+    def test_undersized_report_allowed(self):
+        """Slightly undersized report is allowed."""
+        data = b"x" * 1000
+        # Reported 800, actual 1000 - within 2x tolerance
+        is_valid, error = validate_content_size(data, 800)
+        assert is_valid is True
+
+    def test_severely_oversized_actual_rejected(self):
+        """Content much larger than reported is rejected."""
+        data = b"x" * 10000
+        # Claimed 1000, actual 10000 - way over 2x
+        is_valid, error = validate_content_size(data, 1000)
+        assert is_valid is False
+        assert "mismatch" in error.lower()
+
+    def test_exceeds_max_size_rejected(self):
+        """Content exceeding max size is rejected."""
+        # Create data larger than 10MB
+        data = b"x" * (MAX_FILE_SIZE_BYTES + 1000)
+        is_valid, error = validate_content_size(data, MAX_FILE_SIZE_BYTES + 1000)
+        assert is_valid is False
+        assert "too large" in error.lower()
+
+
+class TestSecurityConstants:
+    """Test security-related constants are properly defined."""
+
+    def test_magic_bytes_defined(self):
+        """Magic bytes are defined for main image types."""
+        assert "image/png" in IMAGE_MAGIC_BYTES
+        assert "image/jpeg" in IMAGE_MAGIC_BYTES
+        assert "image/gif" in IMAGE_MAGIC_BYTES
+        assert "image/webp" in IMAGE_MAGIC_BYTES
+
+    def test_svg_markers_defined(self):
+        """SVG markers are defined."""
+        assert len(SVG_MARKERS) > 0
+        assert any(b"svg" in marker.lower() for marker in SVG_MARKERS)
+
+    def test_dangerous_patterns_defined(self):
+        """Dangerous filename patterns are defined."""
+        assert len(DANGEROUS_FILENAME_PATTERNS) > 0
+        # Should include path traversal pattern (regex escaped as \.\.)
+        assert any("\\." in p or ".." in p for p in DANGEROUS_FILENAME_PATTERNS)
+
 
 # =============================================================================
 # EDGE CASE TESTS
@@ -1130,10 +1459,26 @@ class TestEdgeCases:
         is_valid, errors = analyzer.validate_images([image])
         assert is_valid is True
 
-    def test_very_long_filename(
+    def test_very_long_filename_at_limit(
         self, analyzer: ScreenshotAnalyzer, valid_image_data: str
     ):
-        """Very long filename is handled."""
+        """Filename at max length limit is handled."""
+        # MAX_FILENAME_LENGTH is 255, so use 251 chars + ".png" (4 chars) = 255
+        image = ImageAttachment(
+            id="uuid-123",
+            filename="a" * 251 + ".png",
+            mime_type="image/png",
+            size=1024,
+            data=valid_image_data,
+        )
+        is_valid, errors = analyzer.validate_images([image])
+        assert is_valid is True
+
+    def test_filename_exceeds_max_length_rejected(
+        self, analyzer: ScreenshotAnalyzer, valid_image_data: str
+    ):
+        """Filename exceeding max length is rejected."""
+        # 255 + 4 = 259 chars, exceeds limit
         image = ImageAttachment(
             id="uuid-123",
             filename="a" * 255 + ".png",
@@ -1142,7 +1487,8 @@ class TestEdgeCases:
             data=valid_image_data,
         )
         is_valid, errors = analyzer.validate_images([image])
-        assert is_valid is True
+        assert is_valid is False
+        assert any("too long" in e.error.lower() for e in errors)
 
 
 if __name__ == "__main__":

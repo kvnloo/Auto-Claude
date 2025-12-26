@@ -21,8 +21,10 @@ Usage:
 """
 
 import base64
+import binascii
 import json
 import os
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -38,6 +40,9 @@ MAX_FILE_SIZE_BYTES = 10 * 1024 * 1024
 # Maximum number of screenshots per analysis
 MAX_SCREENSHOTS = 10
 
+# Maximum filename length
+MAX_FILENAME_LENGTH = 255
+
 # Allowed MIME types for screenshots
 ALLOWED_MIME_TYPES = frozenset([
     "image/png",
@@ -48,8 +53,182 @@ ALLOWED_MIME_TYPES = frozenset([
     "image/svg+xml",
 ])
 
+# Image magic bytes (file signatures) for content validation
+# Maps MIME type to list of possible magic byte sequences
+IMAGE_MAGIC_BYTES: dict[str, list[bytes]] = {
+    "image/png": [b"\x89PNG\r\n\x1a\n"],
+    "image/jpeg": [b"\xff\xd8\xff"],
+    "image/jpg": [b"\xff\xd8\xff"],  # Same as jpeg
+    "image/gif": [b"GIF87a", b"GIF89a"],
+    "image/webp": [b"RIFF"],  # WebP starts with RIFF, then has WEBP after size
+}
+# SVG is text-based, so we check for XML/SVG markers instead
+SVG_MARKERS = [b"<?xml", b"<svg", b"<!DOCTYPE svg"]
+
+# Dangerous patterns in filenames (security: prevent path traversal)
+DANGEROUS_FILENAME_PATTERNS = [
+    r"\.\.",           # Parent directory traversal
+    r"^/",             # Absolute path
+    r"^\\",            # Windows absolute path
+    r"[\x00-\x1f]",    # Control characters including null bytes
+    r"[<>:\"|?*]",     # Windows reserved characters
+]
+
 # Path to the prompt template
 PROMPT_TEMPLATE_PATH = Path(__file__).parent.parent / "prompts" / "screenshot_analysis.txt"
+
+
+# =============================================================================
+# SECURITY VALIDATION FUNCTIONS
+# =============================================================================
+
+
+def validate_filename_security(filename: str) -> tuple[bool, str]:
+    """
+    Validate filename for security issues.
+
+    Checks for:
+    - Path traversal attempts (..)
+    - Absolute paths
+    - Control characters (including null bytes)
+    - Reserved characters
+    - Excessive length
+
+    Args:
+        filename: The filename to validate
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if not filename:
+        return False, "Filename is empty"
+
+    if len(filename) > MAX_FILENAME_LENGTH:
+        return False, f"Filename too long: {len(filename)} exceeds {MAX_FILENAME_LENGTH}"
+
+    for pattern in DANGEROUS_FILENAME_PATTERNS:
+        if re.search(pattern, filename):
+            return False, f"Filename contains dangerous pattern: {filename}"
+
+    return True, ""
+
+
+def validate_magic_bytes(data: bytes, mime_type: str) -> tuple[bool, str]:
+    """
+    Validate that file content matches claimed MIME type via magic bytes.
+
+    This prevents file type spoofing where an attacker claims a file is
+    an image but the actual content is something else (like HTML/JS).
+
+    Args:
+        data: Raw decoded file bytes
+        mime_type: Claimed MIME type
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    if len(data) < 8:
+        return False, "File content too short to validate"
+
+    # Handle SVG separately (text-based)
+    if mime_type == "image/svg+xml":
+        # Check for SVG markers in first 1024 bytes
+        header = data[:1024]
+        for marker in SVG_MARKERS:
+            if marker.lower() in header.lower():
+                return True, ""
+        return False, "File content does not appear to be SVG"
+
+    # Check binary image magic bytes
+    if mime_type in IMAGE_MAGIC_BYTES:
+        magic_sequences = IMAGE_MAGIC_BYTES[mime_type]
+        for magic in magic_sequences:
+            if data.startswith(magic):
+                # Special case for WebP: verify WEBP signature at offset 8
+                if mime_type == "image/webp":
+                    if len(data) >= 12 and data[8:12] == b"WEBP":
+                        return True, ""
+                    # Allow if it starts with RIFF but can't verify WEBP
+                    # (file might be truncated for size check)
+                    if len(data) < 12:
+                        return True, ""
+                else:
+                    return True, ""
+
+        return False, f"File content does not match {mime_type} signature"
+
+    # Unknown MIME type - allow but warn
+    return True, ""
+
+
+def decode_base64_safely(data: str) -> tuple[bytes | None, str]:
+    """
+    Safely decode base64 data with security checks.
+
+    Args:
+        data: Base64 encoded string
+
+    Returns:
+        Tuple of (decoded_bytes or None, error_message)
+    """
+    if not data:
+        return None, "Empty data"
+
+    # Check for data URL prefix and strip it if present
+    if data.startswith("data:"):
+        # Extract base64 portion after comma
+        parts = data.split(",", 1)
+        if len(parts) != 2:
+            return None, "Invalid data URL format"
+        data = parts[1]
+
+    # Remove any whitespace (base64 shouldn't have it but be lenient)
+    data = data.strip()
+
+    # Check for suspiciously large padding
+    if data.endswith("===="):
+        return None, "Invalid base64 padding"
+
+    try:
+        decoded = base64.b64decode(data, validate=True)
+        return decoded, ""
+    except binascii.Error as e:
+        return None, f"Invalid base64 encoding: {e}"
+    except ValueError as e:
+        return None, f"Base64 decode error: {e}"
+
+
+def validate_content_size(decoded_data: bytes, reported_size: int) -> tuple[bool, str]:
+    """
+    Validate that decoded content size is consistent with reported size.
+
+    This detects potential size manipulation attacks where the reported
+    size differs significantly from actual content.
+
+    Args:
+        decoded_data: Decoded file bytes
+        reported_size: Size reported by the client
+
+    Returns:
+        Tuple of (is_valid, error_message)
+    """
+    actual_size = len(decoded_data)
+
+    # Allow some tolerance for base64 encoding overhead differences
+    # Base64 adds ~33% overhead, but reported size should be close to actual
+    # We allow up to 50% difference to account for thumbnail vs full image
+    # and encoding variations
+    if reported_size > 0:
+        # If actual size is much larger than reported, that's suspicious
+        if actual_size > reported_size * 2:
+            return False, f"Content size mismatch: actual {actual_size} >> reported {reported_size}"
+
+    # Check against maximum size using actual decoded size
+    if actual_size > MAX_FILE_SIZE_BYTES:
+        size_mb = actual_size / (1024 * 1024)
+        return False, f"Decoded content too large: {size_mb:.1f}MB exceeds 10MB limit"
+
+    return True, ""
 
 
 # =============================================================================
@@ -282,7 +461,16 @@ class ScreenshotAnalyzer:
         self, images: list[ImageAttachment]
     ) -> tuple[bool, list[ValidationError]]:
         """
-        Validate uploaded images for analysis.
+        Validate uploaded images for analysis with comprehensive security checks.
+
+        Security validations performed:
+        - Maximum image count enforcement
+        - MIME type allowlist validation
+        - File size limits (reported and actual)
+        - Filename security (path traversal, control chars)
+        - Base64 encoding validation
+        - Magic bytes verification (content matches claimed type)
+        - Content size consistency check
 
         Args:
             images: List of ImageAttachment objects to validate
@@ -313,7 +501,19 @@ class ScreenshotAnalyzer:
             return False, errors
 
         for image in images:
-            # Check MIME type
+            # Security: Validate filename for path traversal and injection
+            filename_valid, filename_error = validate_filename_security(image.filename)
+            if not filename_valid:
+                errors.append(
+                    ValidationError(
+                        image_id=image.id,
+                        filename=image.filename,
+                        error=f"Invalid filename: {filename_error}",
+                    )
+                )
+                continue  # Skip further validation for this image
+
+            # Check MIME type against allowlist
             if image.mime_type not in ALLOWED_MIME_TYPES:
                 errors.append(
                     ValidationError(
@@ -322,8 +522,9 @@ class ScreenshotAnalyzer:
                         error=f"Invalid file type: {image.mime_type}. Allowed: PNG, JPEG, GIF, WebP, SVG",
                     )
                 )
+                continue
 
-            # Check file size
+            # Check reported file size
             if image.size > MAX_FILE_SIZE_BYTES:
                 size_mb = image.size / (1024 * 1024)
                 errors.append(
@@ -333,6 +534,7 @@ class ScreenshotAnalyzer:
                         error=f"File too large: {size_mb:.1f}MB exceeds maximum of 10MB",
                     )
                 )
+                continue
 
             # Check base64 data exists
             if not image.data:
@@ -343,18 +545,43 @@ class ScreenshotAnalyzer:
                         error="Missing image data",
                     )
                 )
-            else:
-                # Validate base64 encoding
-                try:
-                    base64.b64decode(image.data)
-                except Exception:
-                    errors.append(
-                        ValidationError(
-                            image_id=image.id,
-                            filename=image.filename,
-                            error="Invalid base64 encoding",
-                        )
+                continue
+
+            # Security: Safely decode base64 with validation
+            decoded_data, decode_error = decode_base64_safely(image.data)
+            if decoded_data is None:
+                errors.append(
+                    ValidationError(
+                        image_id=image.id,
+                        filename=image.filename,
+                        error=f"Invalid base64 encoding: {decode_error}",
                     )
+                )
+                continue
+
+            # Security: Validate actual content size
+            size_valid, size_error = validate_content_size(decoded_data, image.size)
+            if not size_valid:
+                errors.append(
+                    ValidationError(
+                        image_id=image.id,
+                        filename=image.filename,
+                        error=size_error,
+                    )
+                )
+                continue
+
+            # Security: Validate magic bytes (content matches claimed MIME type)
+            magic_valid, magic_error = validate_magic_bytes(decoded_data, image.mime_type)
+            if not magic_valid:
+                errors.append(
+                    ValidationError(
+                        image_id=image.id,
+                        filename=image.filename,
+                        error=f"Content validation failed: {magic_error}",
+                    )
+                )
+                continue
 
         return len(errors) == 0, errors
 
