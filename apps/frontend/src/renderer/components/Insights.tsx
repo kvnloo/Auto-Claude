@@ -37,6 +37,7 @@ import {
 import { loadTasks } from '../stores/task-store';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
 import { InsightsModelSelector } from './InsightsModelSelector';
+import { FileAttachmentList } from './FileAttachmentList';
 import type { InsightsChatMessage, InsightsModelConfig } from '../../shared/types';
 import {
   TASK_CATEGORY_LABELS,
@@ -62,6 +63,8 @@ export function Insights({ projectId }: InsightsProps) {
   const isLoadingSessions = useInsightsStore((state) => state.isLoadingSessions);
   const attachedFiles = useInsightsStore((state) => state.attachedFiles);
   const addAttachment = useInsightsStore((state) => state.addAttachment);
+  const removeAttachment = useInsightsStore((state) => state.removeAttachment);
+  const clearAttachments = useInsightsStore((state) => state.clearAttachments);
 
   const [inputValue, setInputValue] = useState('');
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
@@ -437,6 +440,17 @@ export function Insights({ projectId }: InsightsProps) {
             </Button>
           </div>
         </div>
+
+        {/* Attached files list */}
+        <FileAttachmentList
+          files={attachedFiles}
+          onRemove={(file) => removeAttachment(file.id)}
+          onClearAll={clearAttachments}
+          disabled={isLoading}
+          size="sm"
+          className="mt-2"
+        />
+
         <p className="mt-2 text-xs text-muted-foreground">
           Press Enter to send, Shift+Enter for new line
         </p>
