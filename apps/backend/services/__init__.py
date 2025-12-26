@@ -18,6 +18,14 @@ from .mcp_integration import (
 )
 from .orchestrator import ServiceOrchestrator
 from .recovery import RecoveryManager
+from .task_service import (
+    PostgresTaskAdapter,
+    TaskConfig,
+    TaskProgress,
+    TaskService,
+    execute_parallel_task,
+    validate_task_config,
+)
 
 __all__ = [
     "ServiceContext",
@@ -32,4 +40,11 @@ __all__ = [
     "get_available_servers",
     "get_server_status",
     "is_claude_flow_available",
+    # Task Service
+    "TaskService",
+    "TaskConfig",
+    "TaskProgress",
+    "PostgresTaskAdapter",
+    "execute_parallel_task",
+    "validate_task_config",
 ]
