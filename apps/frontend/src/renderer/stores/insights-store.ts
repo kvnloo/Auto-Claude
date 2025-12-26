@@ -8,7 +8,8 @@ import type {
   InsightsToolUsage,
   InsightsModelConfig,
   TaskMetadata,
-  Task
+  Task,
+  AttachedFile
 } from '../../shared/types';
 
 interface ToolUsage {
@@ -27,6 +28,10 @@ interface InsightsState {
   toolsUsed: InsightsToolUsage[]; // Tools used during current response
   isLoadingSessions: boolean;
 
+  // Attachment state
+  attachedFiles: AttachedFile[]; // Files attached for current message
+  isDragging: boolean; // Whether files are being dragged over drop zone
+
   // Actions
   setSession: (session: InsightsSession | null) => void;
   setSessions: (sessions: InsightsSessionSummary[]) => void;
@@ -42,6 +47,12 @@ interface InsightsState {
   finalizeStreamingMessage: (suggestedTask?: InsightsChatMessage['suggestedTask']) => void;
   clearSession: () => void;
   setLoadingSessions: (loading: boolean) => void;
+
+  // Attachment actions
+  addAttachment: (file: AttachedFile) => void;
+  removeAttachment: (fileId: string) => void;
+  clearAttachments: () => void;
+  setDragging: (isDragging: boolean) => void;
 }
 
 const initialStatus: InsightsChatStatus = {
@@ -59,6 +70,8 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
   currentTool: null,
   toolsUsed: [],
   isLoadingSessions: false,
+  attachedFiles: [],
+  isDragging: false,
 
   // Actions
   setSession: (session) => set({ session }),
@@ -189,8 +202,25 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
       pendingMessage: '',
       streamingContent: '',
       currentTool: null,
-      toolsUsed: []
-    })
+      toolsUsed: [],
+      attachedFiles: [],
+      isDragging: false
+    }),
+
+  // Attachment actions
+  addAttachment: (file) =>
+    set((state) => ({
+      attachedFiles: [...state.attachedFiles, file]
+    })),
+
+  removeAttachment: (fileId) =>
+    set((state) => ({
+      attachedFiles: state.attachedFiles.filter((f) => f.id !== fileId)
+    })),
+
+  clearAttachments: () => set({ attachedFiles: [] }),
+
+  setDragging: (isDragging) => set({ isDragging })
 }));
 
 // Helper functions
