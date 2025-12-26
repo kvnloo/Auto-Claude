@@ -50,6 +50,97 @@ export interface AnalysisResult {
   tasks: GeneratedTask[];
 }
 
+/**
+ * Backend API response types
+ */
+interface BackendTaskResponse {
+  title: string;
+  description: string;
+  type: string;
+  priority: string;
+  implementation_details?: {
+    file_path?: string;
+    component_name?: string;
+    implementation_steps?: string[];
+  };
+  acceptance_criteria?: string[];
+}
+
+interface BackendAnalysisResponse {
+  success: boolean;
+  error?: string;
+  components?: Array<{
+    type: string;
+    name: string;
+    description: string;
+  }>;
+  tasks?: BackendTaskResponse[];
+  warnings?: string[];
+  questions?: string[];
+}
+
+/**
+ * Screenshot analysis API configuration
+ * Backend runs on port 8000 by default
+ */
+const SCREENSHOT_API_BASE_URL = 'http://localhost:8000';
+
+/**
+ * Analyze screenshots using the backend vision API
+ */
+async function analyzeScreenshotsAPI(
+  images: ImageAttachment[],
+  projectContext?: string
+): Promise<{ tasks: GeneratedTask[]; warnings: string[] }> {
+  const requestBody = {
+    images: images.map((img) => ({
+      id: img.id,
+      filename: img.filename,
+      mimeType: img.mimeType,
+      size: img.size,
+      data: img.data,
+      thumbnail: img.thumbnail
+    })),
+    project_context: projectContext
+  };
+
+  const response = await fetch(`${SCREENSHOT_API_BASE_URL}/api/screenshot-analysis`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json'
+    },
+    body: JSON.stringify(requestBody)
+  });
+
+  if (!response.ok) {
+    const errorData = await response.json().catch(() => ({}));
+    const errorMessage = errorData?.detail?.error || errorData?.error || `HTTP ${response.status}`;
+    throw new Error(errorMessage);
+  }
+
+  const data: BackendAnalysisResponse = await response.json();
+
+  if (!data.success) {
+    throw new Error(data.error || 'Analysis failed');
+  }
+
+  // Convert backend tasks to frontend GeneratedTask format
+  const tasks: GeneratedTask[] = (data.tasks || []).map((task, index) => ({
+    id: `task-${Date.now()}-${index}`,
+    title: task.title,
+    description: task.description,
+    filePath: task.implementation_details?.file_path,
+    componentName: task.implementation_details?.component_name,
+    implementation: task.implementation_details?.implementation_steps || task.acceptance_criteria,
+    selected: true
+  }));
+
+  return {
+    tasks,
+    warnings: data.warnings || []
+  };
+}
+
 interface ScreenshotAnalyzerProps {
   onTasksGenerated?: (tasks: GeneratedTask[]) => void;
   disabled?: boolean;
@@ -76,6 +167,7 @@ export function ScreenshotAnalyzer({
   const [error, setError] = useState<string | null>(null);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [generatedTasks, setGeneratedTasks] = useState<GeneratedTask[]>([]);
+  const [warnings, setWarnings] = useState<string[]>([]);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState('');
   const [editingDescription, setEditingDescription] = useState('');
@@ -229,6 +321,7 @@ export function ScreenshotAnalyzer({
   const handleClearAll = useCallback(() => {
     setImages([]);
     setGeneratedTasks([]);
+    setWarnings([]);
     setError(null);
   }, []);
 
@@ -240,55 +333,34 @@ export function ScreenshotAnalyzer({
 
     setIsAnalyzing(true);
     setError(null);
+    setWarnings([]);
 
     try {
-      // TODO: Replace with actual API call in subtask-3-2
-      // For now, simulate analysis with a delay and mock response
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+      const result = await analyzeScreenshotsAPI(images);
 
-      // Mock generated tasks for UI development
-      // This will be replaced with actual API response parsing
-      const mockTasks: GeneratedTask[] = [
-        {
-          id: `task-${Date.now()}-1`,
-          title: 'Create HeaderComponent',
-          description: 'Implement the main navigation header with logo, menu items, and user actions',
-          filePath: 'src/components/Header.tsx',
-          componentName: 'Header',
-          implementation: [
-            'Add responsive navigation menu',
-            'Include logo placement',
-            'Add user dropdown with avatar'
-          ],
-          selected: true
-        },
-        {
-          id: `task-${Date.now()}-2`,
-          title: 'Create CardComponent',
-          description: 'Build a reusable card component for content display with image, title, and description',
-          filePath: 'src/components/Card.tsx',
-          componentName: 'Card',
-          implementation: [
-            'Support image thumbnail',
-            'Add title and description props',
-            'Include hover effects'
-          ],
-          selected: true
-        }
-      ];
+      setGeneratedTasks(result.tasks);
+      setWarnings(result.warnings);
 
-      setGeneratedTasks(mockTasks);
-      onTasksGenerated?.(mockTasks.filter((t) => t.selected));
+      if (result.tasks.length > 0) {
+        onTasksGenerated?.(result.tasks.filter((t) => t.selected));
+      }
     } catch (err) {
-      setError(
-        err instanceof Error
-          ? `Analysis failed: ${err.message}`
-          : 'Screenshot analysis failed. Please try again.'
-      );
+      const errorMessage = err instanceof Error ? err.message : 'Unknown error';
+
+      // Provide user-friendly error messages
+      if (errorMessage.includes('Failed to fetch') || errorMessage.includes('NetworkError')) {
+        setError('Unable to connect to analysis service. Please ensure the backend is running on port 8000.');
+      } else if (errorMessage.includes('HTTP 400')) {
+        setError('Invalid request. Please check your screenshots and try again.');
+      } else if (errorMessage.includes('HTTP 500')) {
+        setError('Analysis service error. Please try again later.');
+      } else {
+        setError(`Analysis failed: ${errorMessage}`);
+      }
     } finally {
       setIsAnalyzing(false);
     }
-  }, [canAnalyze, onTasksGenerated]);
+  }, [canAnalyze, images, onTasksGenerated]);
 
   /**
    * Toggle task selection
@@ -511,6 +583,23 @@ export function ScreenshotAnalyzer({
               </>
             )}
           </Button>
+        </div>
+      )}
+
+      {/* Warnings from analysis */}
+      {warnings.length > 0 && (
+        <div className="flex flex-col gap-1 rounded-lg bg-warning/10 border border-warning/30 p-3 text-sm text-warning-foreground">
+          <div className="flex items-center gap-2 font-medium">
+            <AlertCircle className="h-4 w-4" />
+            Analysis Warnings
+          </div>
+          <ul className="ml-6 list-disc space-y-0.5">
+            {warnings.map((warning, idx) => (
+              <li key={idx} className="text-xs text-warning-foreground/80">
+                {warning}
+              </li>
+            ))}
+          </ul>
         </div>
       )}
 
