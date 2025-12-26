@@ -129,22 +129,100 @@ Be conversational and helpful. Focus on providing actionable insights and clear 
 Keep responses concise but informative."""
 
 
-def format_attachment_context(attachments: list) -> str:
-    """Format file attachments as context for the AI."""
+def write_attachments_to_workspace(attachments: list, project_dir: str) -> tuple[list[str], str]:
+    """
+    Write file attachments to a temporary workspace directory within the sandbox.
+
+    Returns:
+        Tuple of (list of file paths, workspace directory path)
+    """
+    if not attachments:
+        return [], ""
+
+    # Create temp directory within project for sandbox access
+    workspace_dir = Path(project_dir) / ".auto-claude" / ".insights-attachments"
+    workspace_dir.mkdir(parents=True, exist_ok=True)
+
+    file_paths = []
+
+    for attachment in attachments:
+        filename = attachment.get("filename", "unknown")
+        data = attachment.get("data", "")
+
+        if not data:
+            continue
+
+        # Sanitize filename to prevent path traversal
+        safe_filename = Path(filename).name
+        if not safe_filename:
+            safe_filename = "unnamed_file"
+
+        file_path = workspace_dir / safe_filename
+
+        # Handle duplicate filenames by adding suffix
+        counter = 1
+        original_stem = file_path.stem
+        original_suffix = file_path.suffix
+        while file_path.exists():
+            file_path = workspace_dir / f"{original_stem}_{counter}{original_suffix}"
+            counter += 1
+
+        try:
+            # Decode base64 and write to file
+            decoded_data = base64.b64decode(data)
+            file_path.write_bytes(decoded_data)
+            file_paths.append(str(file_path))
+            debug(
+                "insights_runner",
+                "Wrote attachment to workspace",
+                filename=filename,
+                path=str(file_path),
+                size=len(decoded_data),
+            )
+        except Exception as e:
+            debug_error(
+                "insights_runner",
+                f"Failed to write attachment {filename}: {e}"
+            )
+
+    return file_paths, str(workspace_dir)
+
+
+def cleanup_attachments_workspace(workspace_dir: str) -> None:
+    """Clean up the temporary attachments workspace directory."""
+    if not workspace_dir:
+        return
+
+    try:
+        workspace_path = Path(workspace_dir)
+        if workspace_path.exists() and workspace_path.is_dir():
+            import shutil
+            shutil.rmtree(workspace_path)
+            debug("insights_runner", "Cleaned up attachments workspace", path=workspace_dir)
+    except Exception as e:
+        debug_error("insights_runner", f"Failed to cleanup attachments workspace: {e}")
+
+
+def format_attachment_context(attachments: list, file_paths: list[str]) -> str:
+    """Format file attachments as context for the AI, with paths to actual files."""
     if not attachments:
         return ""
 
     context_parts = []
     context_parts.append("\n## Attached Files\n")
     context_parts.append(
-        "The user has attached the following files to this message:\n"
+        "The user has attached the following files. You can read them using the Read tool:\n"
     )
+
+    # Create a map of filename to path for lookup
+    path_map = {}
+    for path in file_paths:
+        path_map[Path(path).name] = path
 
     for attachment in attachments:
         filename = attachment.get("filename", "unknown")
         mime_type = attachment.get("mimeType", "application/octet-stream")
         size = attachment.get("size", 0)
-        data = attachment.get("data", "")
 
         # Format file size for readability
         if size < 1024:
@@ -160,23 +238,22 @@ def format_attachment_context(attachments: list) -> str:
         context_parts.append(f"- **Type**: {mime_type}\n")
         context_parts.append(f"- **Size**: {size_str}\n")
 
-        # Include file content if it's a text-based file and we have data
-        if data and is_text_file(mime_type, filename):
-            try:
-                # Decode base64 data
-                decoded_data = base64.b64decode(data).decode("utf-8", errors="replace")
-                # Truncate very long files
-                max_chars = 50000
-                if len(decoded_data) > max_chars:
-                    decoded_data = (
-                        decoded_data[:max_chars] + f"\n\n... (truncated, {size_str} total)"
-                    )
-                context_parts.append(f"\n**Content:**\n```\n{decoded_data}\n```\n")
-            except Exception:
-                context_parts.append("- *Content could not be decoded*\n")
-        elif data:
-            # For binary files, just note that content is available
-            context_parts.append("- *Binary file content attached*\n")
+        # Find the file path for this attachment
+        safe_filename = Path(filename).name
+        file_path = path_map.get(safe_filename)
+        if not file_path:
+            # Try to find a matching path with counter suffix
+            for path in file_paths:
+                path_obj = Path(path)
+                if path_obj.stem.startswith(Path(safe_filename).stem):
+                    file_path = path
+                    break
+
+        if file_path:
+            context_parts.append(f"- **Path**: `{file_path}`\n")
+            context_parts.append(f"- Use `Read` tool with path `{file_path}` to view contents\n")
+        else:
+            context_parts.append("- *File could not be written to workspace*\n")
 
     return "".join(context_parts)
 
@@ -292,6 +369,9 @@ async def run_with_sdk(
     system_prompt = build_system_prompt(project_dir)
     project_path = Path(project_dir).resolve()
 
+    # Write attachments to temporary workspace so AI can access them via Read tool
+    file_paths, workspace_dir = write_attachments_to_workspace(attachments, project_dir)
+
     # Build conversation context from history
     conversation_context = ""
     for msg in history[:-1]:  # Exclude the latest message
@@ -299,7 +379,7 @@ async def run_with_sdk(
         conversation_context += f"\n{role}: {msg['content']}\n"
 
     # Build the full prompt with conversation history and attachments
-    attachment_context = format_attachment_context(attachments)
+    attachment_context = format_attachment_context(attachments, file_paths)
 
     full_prompt = message
     if attachment_context:
@@ -320,6 +400,7 @@ Current question: {full_prompt}"""
             attachment_count=len(attachments),
             attachment_filenames=attachment_filenames,
             context_length=len(attachment_context),
+            file_paths=file_paths,
         )
 
     debug(
@@ -417,7 +498,13 @@ Current question: {full_prompt}"""
                 response_length=len(response_text),
             )
 
+        # Cleanup attachments workspace after successful completion
+        cleanup_attachments_workspace(workspace_dir)
+
     except Exception as e:
+        # Cleanup attachments workspace on error too
+        cleanup_attachments_workspace(workspace_dir)
+
         print(f"Error using Claude SDK: {e}", file=sys.stderr)
         import traceback
 
