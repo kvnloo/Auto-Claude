@@ -255,18 +255,22 @@ export async function loadInsightsSession(projectId: string): Promise<void> {
 export function sendMessage(projectId: string, message: string, modelConfig?: InsightsModelConfig): void {
   const store = useInsightsStore.getState();
   const session = store.session;
+  const attachedFiles = store.attachedFiles;
 
-  // Add user message to session
+  // Add user message to session with any attachments
   const userMessage: InsightsChatMessage = {
     id: `msg-${Date.now()}`,
     role: 'user',
     content: message,
-    timestamp: new Date()
+    timestamp: new Date(),
+    // Include attachments if any files are attached
+    ...(attachedFiles.length > 0 && { attachments: [...attachedFiles] })
   };
   store.addMessage(userMessage);
 
-  // Clear pending and set status
+  // Clear pending, attachments, and set status
   store.setPendingMessage('');
+  store.clearAttachments(); // Clear attachments after adding to message
   store.clearStreamingContent();
   store.clearToolsUsed(); // Clear tools from previous response
   store.setStatus({
