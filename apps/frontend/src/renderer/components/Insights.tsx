@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react';
+import { useState, useEffect, useRef, useCallback, type ChangeEvent } from 'react';
 import {
   MessageSquare,
   Send,
@@ -44,6 +44,10 @@ import {
   TASK_COMPLEXITY_LABELS,
   TASK_COMPLEXITY_COLORS
 } from '../../shared/constants';
+import {
+  validateFiles,
+  processFilesToAttachments
+} from '../utils/fileValidation';
 
 interface InsightsProps {
   projectId: string;
@@ -56,14 +60,18 @@ export function Insights({ projectId }: InsightsProps) {
   const streamingContent = useInsightsStore((state) => state.streamingContent);
   const currentTool = useInsightsStore((state) => state.currentTool);
   const isLoadingSessions = useInsightsStore((state) => state.isLoadingSessions);
+  const attachedFiles = useInsightsStore((state) => state.attachedFiles);
+  const addAttachment = useInsightsStore((state) => state.addAttachment);
 
   const [inputValue, setInputValue] = useState('');
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
   const [taskCreated, setTaskCreated] = useState<Set<string>>(new Set());
   const [showSidebar, setShowSidebar] = useState(true);
+  const [fileError, setFileError] = useState<string | null>(null);
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   // Load session and set up listeners on mount
   useEffect(() => {
@@ -101,6 +109,58 @@ export function Insights({ projectId }: InsightsProps) {
       handleSend();
     }
   };
+
+  /**
+   * Handle file selection from the file input
+   */
+  const handleFileSelect = useCallback(
+    async (e: ChangeEvent<HTMLInputElement>) => {
+      const files = e.target.files;
+      if (!files || files.length === 0) return;
+
+      setFileError(null);
+
+      // Validate files
+      const fileArray = Array.from(files);
+      const { validFiles, errors } = validateFiles(fileArray, attachedFiles.length);
+
+      // Show first error if any
+      if (errors.length > 0) {
+        setFileError(errors[0]);
+      }
+
+      // Process valid files to attachments
+      if (validFiles.length > 0) {
+        const { attachments, errors: processErrors } = await processFilesToAttachments(
+          validFiles,
+          attachedFiles
+        );
+
+        // Add processing errors to display
+        if (processErrors.length > 0 && !fileError) {
+          setFileError(processErrors[0]);
+        }
+
+        // Add each attachment to the store
+        for (const attachment of attachments) {
+          addAttachment(attachment);
+        }
+      }
+
+      // Reset input to allow selecting the same file again
+      if (fileInputRef.current) {
+        fileInputRef.current.value = '';
+      }
+    },
+    [attachedFiles, addAttachment, fileError]
+  );
+
+  /**
+   * Open file picker dialog
+   */
+  const handlePaperclipClick = useCallback(() => {
+    fileInputRef.current?.click();
+  }, []);
 
   const handleNewSession = async () => {
     await newSession(projectId);
@@ -313,6 +373,31 @@ export function Insights({ projectId }: InsightsProps) {
 
       {/* Input */}
       <div className="border-t border-border p-4">
+        {/* Hidden file input */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          multiple
+          onChange={handleFileSelect}
+          disabled={isLoading}
+          className="hidden"
+        />
+
+        {/* File error message */}
+        {fileError && (
+          <div className="mb-2 flex items-center gap-2 rounded-lg border border-destructive/50 bg-destructive/10 p-2 text-sm text-destructive">
+            <AlertCircle className="h-4 w-4 shrink-0" />
+            <span className="flex-1">{fileError}</span>
+            <button
+              onClick={() => setFileError(null)}
+              className="shrink-0 rounded p-0.5 hover:bg-destructive/20"
+            >
+              <span className="sr-only">Dismiss</span>
+              ×
+            </button>
+          </div>
+        )}
+
         <div className="flex gap-2">
           <Textarea
             ref={textareaRef}
@@ -328,9 +413,16 @@ export function Insights({ projectId }: InsightsProps) {
               variant="outline"
               size="icon"
               disabled={isLoading}
-              title="Attach files"
+              title={attachedFiles.length > 0 ? `${attachedFiles.length} file(s) attached` : 'Attach files'}
+              onClick={handlePaperclipClick}
+              className="relative"
             >
               <Paperclip className="h-4 w-4" />
+              {attachedFiles.length > 0 && (
+                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
+                  {attachedFiles.length > 9 ? '9+' : attachedFiles.length}
+                </span>
+              )}
             </Button>
             <Button
               onClick={handleSend}
