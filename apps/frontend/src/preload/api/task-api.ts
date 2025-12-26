@@ -11,6 +11,7 @@ import type {
   TaskLogs,
   TaskLogStreamChunk
 } from '../../shared/types';
+import type { ReasoningEvent } from '../../shared/types/reasoning';
 
 export interface TaskAPI {
   // Task Operations
@@ -60,6 +61,9 @@ export interface TaskAPI {
   onTaskStatusChange: (callback: (taskId: string, status: TaskStatus) => void) => () => void;
   onTaskExecutionProgress: (
     callback: (taskId: string, progress: import('../../shared/types').ExecutionProgress) => void
+  ) => () => void;
+  onTaskReasoningEvent: (
+    callback: (taskId: string, event: ReasoningEvent) => void
   ) => () => void;
 
   // Task Phase Logs
@@ -223,6 +227,22 @@ export const createTaskAPI = (): TaskAPI => ({
     ipcRenderer.on(IPC_CHANNELS.TASK_EXECUTION_PROGRESS, handler);
     return () => {
       ipcRenderer.removeListener(IPC_CHANNELS.TASK_EXECUTION_PROGRESS, handler);
+    };
+  },
+
+  onTaskReasoningEvent: (
+    callback: (taskId: string, event: ReasoningEvent) => void
+  ): (() => void) => {
+    const handler = (
+      _event: Electron.IpcRendererEvent,
+      taskId: string,
+      event: ReasoningEvent
+    ): void => {
+      callback(taskId, event);
+    };
+    ipcRenderer.on(IPC_CHANNELS.TASK_REASONING_EVENT, handler);
+    return () => {
+      ipcRenderer.removeListener(IPC_CHANNELS.TASK_REASONING_EVENT, handler);
     };
   },
 

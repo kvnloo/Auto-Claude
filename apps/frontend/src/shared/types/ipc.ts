@@ -94,6 +94,7 @@ import type {
   RoadmapFeatureStatus,
   RoadmapGenerationStatus
 } from './roadmap';
+import type { ReasoningEvent } from './reasoning';
 import type {
   LinearTeam,
   LinearProject,
@@ -161,6 +162,7 @@ export interface ElectronAPI {
   onTaskLog: (callback: (taskId: string, log: string) => void) => () => void;
   onTaskStatusChange: (callback: (taskId: string, status: TaskStatus) => void) => () => void;
   onTaskExecutionProgress: (callback: (taskId: string, progress: ExecutionProgress) => void) => () => void;
+  onTaskReasoningEvent: (callback: (taskId: string, event: ReasoningEvent) => void) => () => void;
 
   // Terminal operations
   createTerminal: (options: TerminalCreateOptions) => Promise<IPCResult>;

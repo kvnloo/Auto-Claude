@@ -1,12 +1,29 @@
+import { useEffect, useCallback, useRef } from 'react';
 import { motion, AnimatePresence } from 'motion/react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../lib/utils';
-import { useReasoningStore, getPhaseColor } from '../../stores/reasoning-store';
-import type { AgentStatus, ReasoningProgress, ReasoningStats } from '../../../shared/types/reasoning';
+import {
+  useReasoningStore,
+  getPhaseColor,
+  startMonitoringTask,
+  stopMonitoringTask,
+  handleAgentCompleted,
+  handleAgentError
+} from '../../stores/reasoning-store';
+import type {
+  AgentStatus,
+  ReasoningProgress,
+  ReasoningStats,
+  ReasoningEvent,
+  ReasoningPhase,
+  DecisionType
+} from '../../../shared/types/reasoning';
 
 interface AgentReasoningDashboardProps {
   /** Optional CSS class name */
   className?: string;
+  /** Task ID to monitor for reasoning events. If provided, listens to IPC events for this task. */
+  taskId?: string | null;
 }
 
 // Status display configuration
@@ -18,6 +35,9 @@ const STATUS_CONFIG: Record<AgentStatus, { colorClass: string; bgClass: string; 
   completed: { colorClass: 'text-success', bgClass: 'bg-success/20', labelKey: 'reasoning.status.completed', fallback: 'Completed' },
   error: { colorClass: 'text-destructive', bgClass: 'bg-destructive/20', labelKey: 'reasoning.status.error', fallback: 'Error' },
 };
+
+// Throttle interval for log updates (max 10 updates/sec = 100ms)
+const THROTTLE_INTERVAL_MS = 100;
 
 /**
  * Agent Reasoning Dashboard - Main container component
@@ -31,7 +51,7 @@ const STATUS_CONFIG: Record<AgentStatus, { colorClass: string; bgClass: string; 
  * - Bottom: Decision tree visualization (full width)
  * - Inspector panel (conditional overlay/sidebar)
  */
-export function AgentReasoningDashboard({ className }: AgentReasoningDashboardProps) {
+export function AgentReasoningDashboard({ className, taskId }: AgentReasoningDashboardProps) {
   const { t } = useTranslation('tasks');
 
   // Get state from reasoning store
@@ -44,10 +64,220 @@ export function AgentReasoningDashboard({ className }: AgentReasoningDashboardPr
   const hasError = useReasoningStore((state) => state.hasError);
   const lastError = useReasoningStore((state) => state.lastError);
   const stats = useReasoningStore((state) => state.stats);
+  const storeTaskId = useReasoningStore((state) => state.taskId);
+
+  // Get store actions
+  const addNode = useReasoningStore((state) => state.addNode);
+  const updateNodeStatus = useReasoningStore((state) => state.updateNodeStatus);
+  const updateReasoning = useReasoningStore((state) => state.updateReasoning);
+  const updateProgress = useReasoningStore((state) => state.updateProgress);
+  const setAgentStatus = useReasoningStore((state) => state.setAgentStatus);
+  const setError = useReasoningStore((state) => state.setError);
+
+  // Throttling refs for batching updates
+  const lastUpdateTimeRef = useRef<number>(0);
+  const pendingUpdatesRef = useRef<ReasoningEvent[]>([]);
+  const throttleTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   const statusConfig = STATUS_CONFIG[agentStatus] || STATUS_CONFIG.idle;
   const isActive = agentStatus === 'running' || agentStatus === 'paused';
   const hasDecisions = nodes.length > 0;
+
+  /**
+   * Process a batch of reasoning events
+   * Handles different event types and updates the store accordingly
+   */
+  const processReasoningEvents = useCallback((events: ReasoningEvent[]) => {
+    for (const event of events) {
+      switch (event.type) {
+        case 'reasoning_start':
+          // Agent started reasoning - reset and prepare for new session
+          if (event.taskId) {
+            startMonitoringTask(event.taskId);
+          }
+          break;
+
+        case 'reasoning_update':
+          // Live reasoning text update
+          if (event.reasoning) {
+            updateReasoning(event.reasoning);
+          }
+          break;
+
+        case 'decision_made':
+          // A new decision was made - add node to tree
+          if (event.decision) {
+            addNode({
+              id: event.decision.id || `decision-${Date.now()}`,
+              label: event.decision.label || 'Decision',
+              type: (event.decision.type as DecisionType) || 'reasoning',
+              reasoning: event.decision.reasoning || '',
+              parentId: event.decision.parentId,
+              context: event.decision.context,
+              toolName: event.decision.toolName,
+              toolInput: event.decision.toolInput,
+              subtaskId: event.decision.subtaskId,
+            });
+          }
+          break;
+
+        case 'decision_completed':
+          // A decision completed successfully
+          if (event.decision?.id) {
+            updateNodeStatus({
+              nodeId: event.decision.id,
+              status: 'completed',
+              result: event.decision.result,
+            });
+          }
+          break;
+
+        case 'decision_failed':
+          // A decision failed
+          if (event.decision?.id) {
+            updateNodeStatus({
+              nodeId: event.decision.id,
+              status: 'failed',
+              error: event.error || event.decision.error,
+            });
+          }
+          break;
+
+        case 'progress_update':
+          // Progress changed
+          if (event.progress) {
+            updateProgress({
+              phase: (event.progress.phase as ReasoningPhase) || 'idle',
+              phaseProgress: event.progress.phaseProgress || 0,
+              message: event.progress.message,
+              currentSubtask: event.progress.currentSubtask,
+            });
+          }
+          break;
+
+        case 'agent_stopped':
+          // Agent stopped/crashed
+          stopMonitoringTask();
+          if (event.error) {
+            setError(event.error);
+          }
+          break;
+
+        case 'agent_completed':
+          // Agent completed successfully
+          handleAgentCompleted();
+          break;
+      }
+    }
+  }, [addNode, updateNodeStatus, updateReasoning, updateProgress, setError]);
+
+  /**
+   * Throttled handler for reasoning events
+   * Batches rapid updates to max 10/sec to prevent UI lag
+   */
+  const handleReasoningEvent = useCallback((eventTaskId: string, event: ReasoningEvent) => {
+    // Only process events for the monitored task
+    if (taskId && eventTaskId !== taskId) {
+      return;
+    }
+
+    // Add to pending updates
+    pendingUpdatesRef.current.push(event);
+
+    const now = Date.now();
+    const timeSinceLastUpdate = now - lastUpdateTimeRef.current;
+
+    // If enough time has passed, process immediately
+    if (timeSinceLastUpdate >= THROTTLE_INTERVAL_MS) {
+      const events = pendingUpdatesRef.current;
+      pendingUpdatesRef.current = [];
+      lastUpdateTimeRef.current = now;
+      processReasoningEvents(events);
+    } else if (!throttleTimerRef.current) {
+      // Otherwise, schedule a batch update
+      throttleTimerRef.current = setTimeout(() => {
+        const events = pendingUpdatesRef.current;
+        pendingUpdatesRef.current = [];
+        lastUpdateTimeRef.current = Date.now();
+        throttleTimerRef.current = null;
+        processReasoningEvents(events);
+      }, THROTTLE_INTERVAL_MS - timeSinceLastUpdate);
+    }
+  }, [taskId, processReasoningEvents]);
+
+  /**
+   * Handle execution progress events (maps to reasoning phase updates)
+   */
+  const handleExecutionProgress = useCallback((eventTaskId: string, executionProgress: {
+    phase: string;
+    phaseProgress: number;
+    overallProgress: number;
+    message?: string;
+  }) => {
+    // Only process events for the monitored task
+    if (taskId && eventTaskId !== taskId) {
+      return;
+    }
+
+    // Map execution phase to reasoning phase
+    const phaseMap: Record<string, ReasoningPhase> = {
+      idle: 'idle',
+      planning: 'planning',
+      coding: 'coding',
+      qa_review: 'qa_review',
+      qa_fixing: 'qa_fixing',
+      complete: 'complete',
+      failed: 'failed',
+    };
+
+    const reasoningPhase = phaseMap[executionProgress.phase] || 'idle';
+
+    updateProgress({
+      phase: reasoningPhase,
+      phaseProgress: executionProgress.phaseProgress,
+      message: executionProgress.message,
+    });
+
+    // Update agent status based on phase
+    if (executionProgress.phase === 'complete') {
+      setAgentStatus('completed');
+    } else if (executionProgress.phase === 'failed') {
+      setAgentStatus('error');
+    } else if (executionProgress.phase !== 'idle') {
+      setAgentStatus('running');
+    }
+  }, [taskId, updateProgress, setAgentStatus]);
+
+  // Set up IPC event listeners when taskId changes
+  useEffect(() => {
+    if (!taskId) {
+      return;
+    }
+
+    // Initialize monitoring for this task
+    if (storeTaskId !== taskId) {
+      startMonitoringTask(taskId);
+    }
+
+    // Set up reasoning event listener
+    const cleanupReasoning = window.electronAPI.onTaskReasoningEvent(handleReasoningEvent);
+
+    // Set up execution progress listener
+    const cleanupProgress = window.electronAPI.onTaskExecutionProgress(handleExecutionProgress);
+
+    // Cleanup on unmount or taskId change
+    return () => {
+      cleanupReasoning();
+      cleanupProgress();
+
+      // Clear any pending throttled updates
+      if (throttleTimerRef.current) {
+        clearTimeout(throttleTimerRef.current);
+        throttleTimerRef.current = null;
+      }
+      pendingUpdatesRef.current = [];
+    };
+  }, [taskId, storeTaskId, handleReasoningEvent, handleExecutionProgress]);
 
   return (
     <div className={cn('flex h-full flex-col overflow-hidden', className)}>
