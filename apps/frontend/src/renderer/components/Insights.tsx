@@ -129,7 +129,7 @@ export function Insights({ projectId }: InsightsProps) {
     // Score files by match quality
     return attachedFiles
       .map(file => {
-        const name = file.name.toLowerCase();
+        const name = file.filename.toLowerCase();
         let score = 0;
 
         // Exact name match (highest priority)
@@ -295,7 +295,7 @@ export function Insights({ projectId }: InsightsProps) {
         if (autocomplete.show) {
           e.preventDefault();
           if (filteredFiles[selectedIndex]) {
-            handleAutocompleteSelect(filteredFiles[selectedIndex].name);
+            handleAutocompleteSelect(filteredFiles[selectedIndex].filename);
           }
         }
         break;
@@ -307,7 +307,7 @@ export function Insights({ projectId }: InsightsProps) {
         if (autocomplete.show) {
           e.preventDefault();
           if (filteredFiles[selectedIndex]) {
-            handleAutocompleteSelect(filteredFiles[selectedIndex].name);
+            handleAutocompleteSelect(filteredFiles[selectedIndex].filename);
           }
         }
         break;
@@ -807,12 +807,12 @@ export function Insights({ projectId }: InsightsProps) {
                         'focus:outline-none transition-colors',
                         index === selectedIndex && 'bg-accent text-accent-foreground'
                       )}
-                      onClick={() => handleAutocompleteSelect(file.name)}
+                      onClick={() => handleAutocompleteSelect(file.filename)}
                       onMouseEnter={() => setSelectedIndex(index)}
                     >
                       <File className="h-4 w-4 text-muted-foreground shrink-0" />
                       <div className="flex-1 min-w-0">
-                        <div className="font-medium truncate">{file.name}</div>
+                        <div className="font-medium truncate">{file.filename}</div>
                         <div className="text-xs text-muted-foreground">
                           {(file.size / 1024).toFixed(1)} KB
                         </div>

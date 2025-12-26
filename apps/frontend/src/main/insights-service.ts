@@ -3,7 +3,8 @@ import type {
   InsightsSession,
   InsightsSessionSummary,
   InsightsChatMessage,
-  InsightsModelConfig
+  InsightsModelConfig,
+  AttachedFile
 } from '../shared/types';
 import { InsightsConfig } from './insights/config';
 import { InsightsPaths } from './insights/paths';
@@ -116,7 +117,8 @@ export class InsightsService extends EventEmitter {
     projectId: string,
     projectPath: string,
     message: string,
-    modelConfig?: InsightsModelConfig
+    modelConfig?: InsightsModelConfig,
+    attachments?: AttachedFile[]
   ): Promise<void> {
     // Cancel any existing session
     this.executor.cancelSession(projectId);
@@ -139,21 +141,32 @@ export class InsightsService extends EventEmitter {
       session.title = this.storage.generateTitle(message);
     }
 
-    // Add user message
+    // Add user message with optional attachments
     const userMessage: InsightsChatMessage = {
       id: `msg-${Date.now()}`,
       role: 'user',
       content: message,
-      timestamp: new Date()
+      timestamp: new Date(),
+      // Include attachments if provided
+      ...(attachments && attachments.length > 0 && { attachments })
     };
     session.messages.push(userMessage);
     session.updatedAt = new Date();
     this.sessionManager.saveSession(projectPath, session);
 
-    // Build conversation history for context
+    // Build conversation history for context (includes attachment metadata)
     const conversationHistory = session.messages.map(m => ({
       role: m.role,
-      content: m.content
+      content: m.content,
+      // Include attachment info if present (without base64 data for history)
+      ...(m.attachments && m.attachments.length > 0 && {
+        attachments: m.attachments.map(a => ({
+          id: a.id,
+          filename: a.filename,
+          mimeType: a.mimeType,
+          size: a.size
+        }))
+      })
     }));
 
     // Use provided modelConfig or fall back to session's config
@@ -161,6 +174,7 @@ export class InsightsService extends EventEmitter {
 
     try {
       // Execute insights query
+      // Note: attachments are passed in subtask-9-2 which updates InsightsExecutor
       const result = await this.executor.execute(
         projectId,
         projectPath,
