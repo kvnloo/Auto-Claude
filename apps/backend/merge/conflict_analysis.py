@@ -17,10 +17,17 @@ import logging
 from collections import defaultdict
 
 from .compatibility_rules import CompatibilityRule
+from .semantic_analyzer import (
+    analyze_cross_file_impact,
+    build_dependency_graph,
+    detect_dependency_conflicts,
+)
 from .types import (
     ChangeType,
     ConflictRegion,
     ConflictSeverity,
+    CrossFileImpact,
+    DependencyConflict,
     FileAnalysis,
     MergeStrategy,
     SemanticChange,
@@ -117,6 +124,38 @@ def detect_conflicts(
     if implicit_conflicts:
         debug_detailed(MODULE, f"Found {len(implicit_conflicts)} implicit conflicts")
     conflicts.extend(implicit_conflicts)
+
+    # Build dependency graph for advanced conflict detection
+    dependency_graph = build_dependency_graph(task_analyses)
+    debug_detailed(
+        MODULE,
+        "Built dependency graph for conflict detection",
+        nodes=dependency_graph.number_of_nodes(),
+        edges=dependency_graph.number_of_edges(),
+    )
+
+    # Detect dependency conflicts (changes that break downstream modules)
+    dependency_conflicts = detect_dependency_conflicts(task_analyses, dependency_graph)
+    if dependency_conflicts:
+        debug_detailed(
+            MODULE, f"Found {len(dependency_conflicts)} dependency conflicts"
+        )
+        # Convert DependencyConflict to ConflictRegion
+        for dep_conflict in dependency_conflicts:
+            conflict_region = _dependency_conflict_to_region(dep_conflict)
+            conflicts.append(conflict_region)
+
+    # Analyze cross-file impact (ripple effects across the codebase)
+    cross_file_impacts = analyze_cross_file_impact(task_analyses, dependency_graph)
+    if cross_file_impacts:
+        debug_detailed(
+            MODULE, f"Found {len(cross_file_impacts)} cross-file impacts"
+        )
+        # Convert significant impacts to ConflictRegion warnings
+        for impact in cross_file_impacts:
+            conflict_region = _cross_file_impact_to_region(impact)
+            if conflict_region:
+                conflicts.append(conflict_region)
 
     return conflicts
 
@@ -591,3 +630,86 @@ def analyze_compatibility(
         return (rule.compatible, rule.strategy, rule.reason)
     else:
         return (False, MergeStrategy.AI_REQUIRED, "No compatibility rule defined")
+
+
+def _dependency_conflict_to_region(dep_conflict: DependencyConflict) -> ConflictRegion:
+    """
+    Convert a DependencyConflict to a ConflictRegion for unified conflict handling.
+
+    Args:
+        dep_conflict: The dependency conflict to convert
+
+    Returns:
+        ConflictRegion representing the dependency conflict
+    """
+    change = dep_conflict.change
+    file_path = change.metadata.get("file_path", "unknown")
+
+    return ConflictRegion(
+        file_path=file_path,
+        location=f"dependency:{change.target}",
+        tasks_involved=[],  # Dependency conflicts don't have specific task IDs
+        change_types=[change.change_type],
+        severity=dep_conflict.severity,
+        can_auto_merge=False,
+        merge_strategy=MergeStrategy.AI_REQUIRED,
+        reason=dep_conflict.description,
+    )
+
+
+def _cross_file_impact_to_region(impact: CrossFileImpact) -> ConflictRegion | None:
+    """
+    Convert a CrossFileImpact to a ConflictRegion if significant enough.
+
+    Only converts impacts with HIGH or CRITICAL severity implications
+    to avoid noise from low-impact changes.
+
+    Args:
+        impact: The cross-file impact to potentially convert
+
+    Returns:
+        ConflictRegion if the impact is significant, None otherwise
+    """
+    change = impact.change
+
+    # Determine severity based on impact type and number of affected files
+    num_impacted = len(impact.impacted_files)
+
+    # Only create conflict regions for significant impacts
+    if num_impacted < 1:
+        return None
+
+    # Determine severity based on scope of impact
+    if num_impacted > 5:
+        severity = ConflictSeverity.HIGH
+    elif num_impacted > 2:
+        severity = ConflictSeverity.MEDIUM
+    else:
+        severity = ConflictSeverity.LOW
+
+    # For low severity impacts, only report for critical change types
+    critical_change_types = {
+        ChangeType.REMOVE_FUNCTION,
+        ChangeType.REMOVE_CLASS,
+        ChangeType.REMOVE_METHOD,
+        ChangeType.RENAME_FUNCTION,
+    }
+    if severity == ConflictSeverity.LOW and change.change_type not in critical_change_types:
+        return None
+
+    impacted_summary = (
+        f"{num_impacted} file(s)"
+        if num_impacted > 3
+        else ", ".join(impact.impacted_files)
+    )
+
+    return ConflictRegion(
+        file_path=impact.source_file,
+        location=f"impact:{change.target}",
+        tasks_involved=[],  # Cross-file impacts don't have specific task IDs
+        change_types=[change.change_type],
+        severity=severity,
+        can_auto_merge=False,
+        merge_strategy=MergeStrategy.AI_REQUIRED,
+        reason=f"{impact.impact_type}: Change to '{change.target}' affects {impacted_summary}",
+    )
