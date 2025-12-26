@@ -456,3 +456,96 @@ export interface TaskStartOptions {
   model?: string;
   baseBranch?: string; // Override base branch for worktree creation
 }
+
+// =============================================================================
+// Merge Tracking Types
+// =============================================================================
+// Types for real-time merge progress tracking and history persistence.
+// These complement the existing MergeConflict/MergeStats types used for
+// smart merge conflict analysis.
+
+/**
+ * Current status of a merge operation.
+ * These states represent the lifecycle of a merge:
+ * - idle: No merge in progress
+ * - merging: Merge operation is running
+ * - resolving: Conflicts are being resolved
+ * - complete: Merge finished successfully
+ * - failed: Merge failed (unresolved conflicts or error)
+ * - timeout: Merge exceeded time limit
+ */
+export type MergeStatus = 'idle' | 'merging' | 'resolving' | 'complete' | 'failed' | 'timeout';
+
+/**
+ * Health indicator for merge outcomes.
+ * Three-state system providing nuanced merge status:
+ * - pass: Clean merge with no conflicts (green)
+ * - warning: Conflicts occurred but were resolved (yellow)
+ * - fail: Unresolved conflicts remain (red)
+ */
+export type MergeHealth = 'pass' | 'warning' | 'fail';
+
+/**
+ * Simple conflict tracking for merge progress.
+ * This is separate from the detailed MergeConflict used in smart merge
+ * analysis - this type is optimized for progress tracking and history.
+ */
+export interface MergeProgressConflict {
+  filePath: string;          // Path to the file with the conflict
+  resolved: boolean;         // Whether the conflict has been resolved
+  resolutionMethod?: string; // How resolved: 'auto', 'ai', 'manual'
+  details?: string;          // Additional information about the conflict
+}
+
+/**
+ * Real-time merge progress tracking for UI updates.
+ * Used by the Zustand store to track active merge operations.
+ */
+export interface MergeProgress {
+  taskId: string;            // The task whose changes are being merged
+  status: MergeStatus;       // Current status of the merge
+  health: MergeHealth;       // Health indicator based on conflicts
+  progress: number;          // Progress percentage (0-100)
+  currentStep?: string;      // Description of current merge step
+  conflicts: MergeProgressConflict[];  // Conflicts encountered
+  conflictsResolved: number; // Count of resolved conflicts
+  startedAt?: string;        // ISO timestamp when merge began
+  elapsedTime?: number;      // Elapsed time in milliseconds
+}
+
+/**
+ * Complete record of a single merge attempt.
+ * Used for merge history persistence and retrieval.
+ */
+export interface MergeAttempt {
+  id: string;                 // Unique identifier for this merge attempt
+  taskId: string;             // The task whose changes were merged
+  worktreePath: string;       // Path to the worktree being merged
+  startedAt: string;          // ISO timestamp when merge began
+  completedAt?: string;       // ISO timestamp when merge finished
+  status: MergeStatus;        // Final status of the merge
+  health: MergeHealth;        // Health indicator based on conflict resolution
+  conflicts: MergeProgressConflict[];  // Conflicts encountered during merge
+  progressPercent: number;    // Final progress (should be 100 if complete)
+  currentStep?: string;       // Last step description
+  errorMessage?: string;      // Error details if merge failed
+  isFastForward: boolean;     // Whether this was a fast-forward merge
+  commitHash?: string;        // The resulting merge commit hash (if successful)
+  durationSeconds: number;    // Total time taken for the merge
+}
+
+/**
+ * Helper function to calculate merge health from conflict statistics.
+ */
+export function calculateMergeHealth(
+  conflictsDetected: number,
+  conflictsResolved: number
+): MergeHealth {
+  if (conflictsDetected === 0) {
+    return 'pass'; // Clean merge
+  } else if (conflictsResolved >= conflictsDetected) {
+    return 'warning'; // Conflicts but all resolved
+  } else {
+    return 'fail'; // Unresolved conflicts remain
+  }
+}
