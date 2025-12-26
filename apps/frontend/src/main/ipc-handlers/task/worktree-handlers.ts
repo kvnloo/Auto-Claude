@@ -1,6 +1,6 @@
 import { ipcMain, BrowserWindow } from 'electron';
 import { IPC_CHANNELS, AUTO_BUILD_PATHS } from '../../../shared/constants';
-import type { IPCResult, WorktreeStatus, WorktreeDiff, WorktreeDiffFile, WorktreeMergeResult, WorktreeDiscardResult, WorktreeListResult, WorktreeListItem } from '../../../shared/types';
+import type { IPCResult, WorktreeStatus, WorktreeDiff, WorktreeDiffFile, WorktreeMergeResult, WorktreeDiscardResult, WorktreeListResult, WorktreeListItem, MergeHealth, MergeStatus } from '../../../shared/types';
 import path from 'path';
 import { existsSync, readdirSync, statSync, readFileSync } from 'fs';
 import { execSync, spawn, spawnSync } from 'child_process';
@@ -10,6 +10,112 @@ import { getEffectiveSourcePath } from '../../auto-claude-updater';
 import { getProfileEnv } from '../../rate-limit-detector';
 import { findTaskAndProject } from './shared';
 import { parsePythonCommand } from '../../python-detector';
+
+/**
+ * Interface for raw merge progress events from Python backend.
+ * Matches MergeProgressEvent.to_dict() output from merge/orchestrator.py
+ */
+interface RawMergeProgressEvent {
+  file_path: string;
+  task_ids: string[];
+  step: string;  // MergeProgressStep enum value
+  progress_percent: number;
+  message: string;
+  conflicts_detected: number;
+  conflicts_resolved: number;
+  error: string | null;
+  metadata: Record<string, unknown>;
+}
+
+/**
+ * Parsed merge progress data sent via IPC to the renderer.
+ * This is transformed from RawMergeProgressEvent to TypeScript naming conventions.
+ */
+interface MergeProgressData {
+  taskId: string;
+  filePath: string;
+  taskIds: string[];
+  step: string;
+  progressPercent: number;
+  message: string;
+  conflictsDetected: number;
+  conflictsResolved: number;
+  error: string | null;
+  metadata: Record<string, unknown>;
+  // Derived fields
+  health: MergeHealth;
+  status: MergeStatus;
+}
+
+/**
+ * Try to parse a line as a JSON merge progress event.
+ * Returns null if the line is not a valid merge progress event.
+ */
+function parseMergeProgressEvent(line: string): RawMergeProgressEvent | null {
+  try {
+    // Only try to parse lines that look like JSON objects
+    const trimmed = line.trim();
+    if (!trimmed.startsWith('{') || !trimmed.endsWith('}')) {
+      return null;
+    }
+
+    const parsed = JSON.parse(trimmed);
+
+    // Validate it has the required fields for a merge progress event
+    if (
+      typeof parsed.file_path === 'string' &&
+      Array.isArray(parsed.task_ids) &&
+      typeof parsed.step === 'string' &&
+      typeof parsed.progress_percent === 'number'
+    ) {
+      return parsed as RawMergeProgressEvent;
+    }
+
+    return null;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Transform raw Python merge progress event to TypeScript format for IPC.
+ */
+function transformMergeProgressEvent(raw: RawMergeProgressEvent, taskId: string): MergeProgressData {
+  // Derive status from step
+  let status: MergeStatus = 'merging';
+  if (raw.step === 'file_complete') {
+    status = 'complete';
+  } else if (raw.step === 'file_failed') {
+    status = 'failed';
+  } else if (raw.step === 'resolving_conflicts') {
+    status = 'resolving';
+  }
+
+  // Derive health from conflict counts
+  let health: MergeHealth = 'pass';
+  if (raw.conflicts_detected === 0) {
+    health = 'pass';
+  } else if (raw.conflicts_resolved >= raw.conflicts_detected) {
+    health = 'warning';
+  } else {
+    health = 'fail';
+  }
+
+  return {
+    taskId,
+    filePath: raw.file_path,
+    taskIds: raw.task_ids,
+    step: raw.step,
+    progressPercent: raw.progress_percent,
+    message: raw.message,
+    conflictsDetected: raw.conflicts_detected,
+    conflictsResolved: raw.conflicts_resolved,
+    error: raw.error,
+    metadata: raw.metadata || {},
+    health,
+    status,
+  };
+}
 
 /**
  * Read the stored base branch from task_metadata.json
@@ -371,6 +477,12 @@ export function registerWorktreeHandlers(
           let timeoutId: NodeJS.Timeout | null = null;
           let resolved = false;
 
+          // Track merge progress state for IPC events
+          let totalConflictsDetected = 0;
+          let totalConflictsResolved = 0;
+          let conflictAlreadyReported = false;
+          let mergeStartTime = Date.now();
+
           // Parse Python command to handle space-separated commands like "py -3"
           const [pythonCommand, pythonBaseArgs] = parsePythonCommand(pythonPath);
           const mergeProcess = spawn(pythonCommand, [...pythonBaseArgs, ...args], {
@@ -387,6 +499,7 @@ export function registerWorktreeHandlers(
 
           let stdout = '';
           let stderr = '';
+          let outputBuffer = ''; // Buffer for partial lines
 
           // Set up timeout to kill hung processes
           timeoutId = setTimeout(() => {
@@ -434,6 +547,43 @@ export function registerWorktreeHandlers(
             const chunk = data.toString();
             stdout += chunk;
             debug('STDOUT:', chunk);
+
+            // Parse stdout for JSON merge progress events
+            // Buffer partial lines to handle chunked output
+            outputBuffer += chunk;
+            const lines = outputBuffer.split('\n');
+            // Keep the last partial line in the buffer
+            outputBuffer = lines.pop() || '';
+
+            for (const line of lines) {
+              const progressEvent = parseMergeProgressEvent(line);
+              if (progressEvent) {
+                // Update aggregate conflict counts
+                totalConflictsDetected = Math.max(totalConflictsDetected, progressEvent.conflicts_detected);
+                totalConflictsResolved = Math.max(totalConflictsResolved, progressEvent.conflicts_resolved);
+
+                // Transform and emit progress event via IPC
+                const progressData = transformMergeProgressEvent(progressEvent, taskId);
+
+                const mainWindow = getMainWindow();
+                if (mainWindow) {
+                  // Emit MERGE_PROGRESS event
+                  mainWindow.webContents.send(IPC_CHANNELS.MERGE_PROGRESS, taskId, progressData);
+
+                  // Emit MERGE_CONFLICT_DETECTED once when conflicts are first detected
+                  if (progressEvent.conflicts_detected > 0 && !conflictAlreadyReported) {
+                    conflictAlreadyReported = true;
+                    mainWindow.webContents.send(IPC_CHANNELS.MERGE_CONFLICT_DETECTED, taskId, {
+                      conflictsDetected: progressEvent.conflicts_detected,
+                      filePath: progressEvent.file_path,
+                      message: `Conflicts detected in ${progressEvent.file_path}`,
+                    });
+                  }
+                }
+
+                debug('Emitted MERGE_PROGRESS:', progressData.step, progressData.progressPercent + '%');
+              }
+            }
           });
 
           mergeProcess.stderr.on('data', (data: Buffer) => {
@@ -576,6 +726,22 @@ export function registerWorktreeHandlers(
               const mainWindow = getMainWindow();
               if (mainWindow) {
                 mainWindow.webContents.send(IPC_CHANNELS.TASK_STATUS_CHANGE, taskId, newStatus);
+
+                // Emit MERGE_COMPLETE event with final status
+                const durationMs = Date.now() - mergeStartTime;
+                mainWindow.webContents.send(IPC_CHANNELS.MERGE_COMPLETE, taskId, {
+                  success: true,
+                  taskId,
+                  status: newStatus === 'done' ? 'complete' as MergeStatus : 'complete' as MergeStatus,
+                  health: totalConflictsDetected === 0 ? 'pass' as MergeHealth :
+                    (totalConflictsResolved >= totalConflictsDetected ? 'warning' as MergeHealth : 'fail' as MergeHealth),
+                  message,
+                  conflictsDetected: totalConflictsDetected,
+                  conflictsResolved: totalConflictsResolved,
+                  durationMs,
+                  staged,
+                });
+                debug('Emitted MERGE_COMPLETE:', { taskId, conflictsDetected: totalConflictsDetected, durationMs });
               }
 
               resolve({
@@ -592,6 +758,24 @@ export function registerWorktreeHandlers(
               // Check if there were conflicts
               const hasConflicts = stdout.includes('conflict') || stderr.includes('conflict');
               debug('Merge failed. hasConflicts:', hasConflicts);
+
+              // Emit MERGE_COMPLETE with failure status
+              const mainWindow = getMainWindow();
+              if (mainWindow) {
+                const durationMs = Date.now() - mergeStartTime;
+                mainWindow.webContents.send(IPC_CHANNELS.MERGE_COMPLETE, taskId, {
+                  success: false,
+                  taskId,
+                  status: 'failed' as MergeStatus,
+                  health: 'fail' as MergeHealth,
+                  message: hasConflicts ? 'Merge conflicts detected' : `Merge failed: ${stderr || stdout}`,
+                  conflictsDetected: totalConflictsDetected,
+                  conflictsResolved: totalConflictsResolved,
+                  durationMs,
+                  hasConflicts,
+                });
+                debug('Emitted MERGE_COMPLETE (failed):', { taskId, hasConflicts });
+              }
 
               resolve({
                 success: true,
