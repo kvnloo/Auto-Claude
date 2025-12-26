@@ -23,8 +23,12 @@ import {
   isFileChangeAction,
   isNovelty,
   countFilesChanged,
+  calculateSubtaskRelevance,
+  calculateSubtaskRelevanceScores,
+  sortSubtasksByRelevance,
   type ScoredAction,
   type ScoringContext,
+  type SubtaskRelevanceScore,
 } from '../actionScoring';
 import type { TaskLogEntry, TaskLogEntryType, TaskLogPhase } from '../../../shared/types/task';
 
@@ -682,6 +686,182 @@ describe('Action Scoring Algorithm', () => {
 
       subtask1Result.forEach((r) => expect(r.action.subtask_id).toBe('subtask-1'));
       subtask2Result.forEach((r) => expect(r.action.subtask_id).toBe('subtask-2'));
+    });
+  });
+
+  describe('Subtask Relevance Scoring', () => {
+    describe('calculateSubtaskRelevance', () => {
+      it('should return zero scores for subtask with no actions', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', content: 'Action 1' }),
+        ];
+
+        const result = calculateSubtaskRelevance(actions, 'subtask-2');
+
+        expect(result.subtaskId).toBe('subtask-2');
+        expect(result.totalScore).toBe(0);
+        expect(result.actionCount).toBe(0);
+        expect(result.averageScore).toBe(0);
+        expect(result.hasErrors).toBe(false);
+        expect(result.hasDecisions).toBe(false);
+        expect(result.topScore).toBe(0);
+      });
+
+      it('should calculate correct scores for subtask with actions', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', type: 'error', content: 'Error occurred' }),
+          createTestAction({ subtask_id: 'subtask-1', tool_name: 'Edit', content: 'Fixed issue' }),
+          createTestAction({ subtask_id: 'subtask-1', content: 'Some text' }),
+        ];
+
+        const result = calculateSubtaskRelevance(actions, 'subtask-1');
+
+        expect(result.subtaskId).toBe('subtask-1');
+        expect(result.actionCount).toBe(3);
+        expect(result.totalScore).toBeGreaterThan(0);
+        expect(result.hasErrors).toBe(true);
+        expect(result.hasDecisions).toBe(true);
+        expect(result.topScore).toBeGreaterThanOrEqual(SCORING_WEIGHTS.ERROR);
+      });
+
+      it('should detect subtasks with errors', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', type: 'error', content: 'Error occurred' }),
+        ];
+
+        const result = calculateSubtaskRelevance(actions, 'subtask-1');
+
+        expect(result.hasErrors).toBe(true);
+      });
+
+      it('should detect subtasks without errors', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', content: 'Some text' }),
+        ];
+
+        const result = calculateSubtaskRelevance(actions, 'subtask-1');
+
+        expect(result.hasErrors).toBe(false);
+      });
+
+      it('should detect subtasks with decisions', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', tool_name: 'Edit', content: 'Editing file' }),
+        ];
+
+        const result = calculateSubtaskRelevance(actions, 'subtask-1');
+
+        expect(result.hasDecisions).toBe(true);
+      });
+    });
+
+    describe('calculateSubtaskRelevanceScores', () => {
+      it('should calculate scores for multiple subtasks', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', type: 'error', content: 'Error' }),
+          createTestAction({ subtask_id: 'subtask-2', tool_name: 'Edit', content: 'Edit' }),
+          createTestAction({ subtask_id: 'subtask-3', content: 'Text' }),
+        ];
+
+        const result = calculateSubtaskRelevanceScores(actions, ['subtask-1', 'subtask-2', 'subtask-3']);
+
+        expect(result.size).toBe(3);
+        expect(result.get('subtask-1')?.hasErrors).toBe(true);
+        expect(result.get('subtask-2')?.hasDecisions).toBe(true);
+        expect(result.get('subtask-3')?.hasErrors).toBe(false);
+      });
+
+      it('should return empty map for empty subtask list', () => {
+        const actions = [createTestAction({ subtask_id: 'subtask-1' })];
+        const result = calculateSubtaskRelevanceScores(actions, []);
+
+        expect(result.size).toBe(0);
+      });
+    });
+
+    describe('sortSubtasksByRelevance', () => {
+      it('should sort subtasks by relevance score (highest first)', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', content: 'Text only' }),
+          createTestAction({ subtask_id: 'subtask-2', type: 'error', content: 'Error occurred' }),
+          createTestAction({ subtask_id: 'subtask-3', tool_name: 'Edit', content: 'Edit' }),
+        ];
+
+        const subtaskIds = ['subtask-1', 'subtask-2', 'subtask-3'];
+        const scores = calculateSubtaskRelevanceScores(actions, subtaskIds);
+        const sorted = sortSubtasksByRelevance(subtaskIds, scores);
+
+        // subtask-2 should be first (has error, highest priority)
+        expect(sorted[0]).toBe('subtask-2');
+      });
+
+      it('should prioritize subtasks with errors', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', tool_name: 'Edit', content: 'Edit', tool_input: '/file.ts' }),
+          createTestAction({ subtask_id: 'subtask-1', tool_name: 'Write', content: 'Write', tool_input: '/file2.ts' }),
+          createTestAction({ subtask_id: 'subtask-2', type: 'error', content: 'Error' }),
+        ];
+
+        const subtaskIds = ['subtask-1', 'subtask-2'];
+        const scores = calculateSubtaskRelevanceScores(actions, subtaskIds);
+        const sorted = sortSubtasksByRelevance(subtaskIds, scores);
+
+        // subtask-2 should be first due to error even though subtask-1 has more actions
+        expect(sorted[0]).toBe('subtask-2');
+      });
+
+      it('should use action count as secondary sort when scores are similar', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', content: 'Text 1' }),
+          createTestAction({ subtask_id: 'subtask-2', content: 'Text 2' }),
+          createTestAction({ subtask_id: 'subtask-2', content: 'Text 3' }),
+          createTestAction({ subtask_id: 'subtask-2', content: 'Text 4' }),
+        ];
+
+        const subtaskIds = ['subtask-1', 'subtask-2'];
+        const scores = calculateSubtaskRelevanceScores(actions, subtaskIds);
+        const sorted = sortSubtasksByRelevance(subtaskIds, scores);
+
+        // subtask-2 should be first (more actions)
+        expect(sorted[0]).toBe('subtask-2');
+      });
+
+      it('should handle empty relevance scores gracefully', () => {
+        const subtaskIds = ['subtask-1', 'subtask-2'];
+        const scores = new Map<string, SubtaskRelevanceScore>();
+
+        const sorted = sortSubtasksByRelevance(subtaskIds, scores);
+
+        // Should return same order when no scores available
+        expect(sorted).toEqual(subtaskIds);
+      });
+
+      it('should handle partial relevance scores', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-1', type: 'error', content: 'Error' }),
+        ];
+
+        const subtaskIds = ['subtask-1', 'subtask-2'];
+        const scores = calculateSubtaskRelevanceScores(actions, ['subtask-1']); // Only score subtask-1
+        const sorted = sortSubtasksByRelevance(subtaskIds, scores);
+
+        // subtask-1 should be first (has score), subtask-2 at end (no score)
+        expect(sorted[0]).toBe('subtask-1');
+      });
+
+      it('should not mutate original array', () => {
+        const actions = [
+          createTestAction({ subtask_id: 'subtask-2', type: 'error', content: 'Error' }),
+        ];
+
+        const subtaskIds = ['subtask-1', 'subtask-2'];
+        const originalOrder = [...subtaskIds];
+        const scores = calculateSubtaskRelevanceScores(actions, subtaskIds);
+
+        sortSubtasksByRelevance(subtaskIds, scores);
+
+        expect(subtaskIds).toEqual(originalOrder);
+      });
     });
   });
 });

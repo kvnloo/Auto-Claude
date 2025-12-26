@@ -443,3 +443,137 @@ export function getScoreReason(scoredAction: ScoredAction): string {
 
   return reasons.length > 0 ? reasons.join(', ') : 'Standard action';
 }
+
+/**
+ * Subtask relevance score with aggregate data
+ */
+export interface SubtaskRelevanceScore {
+  subtaskId: string;
+  totalScore: number;
+  actionCount: number;
+  averageScore: number;
+  hasErrors: boolean;
+  hasDecisions: boolean;
+  topScore: number; // Highest single action score
+}
+
+/**
+ * Calculate the relevance score for a subtask based on its actions
+ *
+ * The relevance score is a combination of:
+ * - Total aggregate score of all actions
+ * - Top action score (to prioritize subtasks with critical actions)
+ * - Presence of errors (higher priority)
+ *
+ * @param actions - All actions from phase logs
+ * @param subtaskId - The subtask ID to calculate relevance for
+ * @returns SubtaskRelevanceScore with aggregated scoring data
+ */
+export function calculateSubtaskRelevance(
+  actions: TaskLogEntry[],
+  subtaskId: string
+): SubtaskRelevanceScore {
+  const subtaskActions = actions.filter((a) => a.subtask_id === subtaskId);
+
+  if (subtaskActions.length === 0) {
+    return {
+      subtaskId,
+      totalScore: 0,
+      actionCount: 0,
+      averageScore: 0,
+      hasErrors: false,
+      hasDecisions: false,
+      topScore: 0,
+    };
+  }
+
+  // Score all subtask actions
+  const context: ScoringContext = {
+    averageDuration: calculateAverageDuration(subtaskActions),
+    seenToolTypes: new Set<string>(),
+  };
+
+  const scoredActions = subtaskActions.map((action, index) =>
+    scoreAction(action, index, context)
+  );
+
+  // Aggregate scores
+  const totalScore = scoredActions.reduce((sum, sa) => sum + sa.score, 0);
+  const topScore = Math.max(...scoredActions.map((sa) => sa.score));
+  const hasErrors = scoredActions.some((sa) => sa.scoreBreakdown.error >= SCORING_WEIGHTS.ERROR);
+  const hasDecisions = scoredActions.some((sa) => sa.scoreBreakdown.decision > 0);
+
+  return {
+    subtaskId,
+    totalScore,
+    actionCount: subtaskActions.length,
+    averageScore: totalScore / subtaskActions.length,
+    hasErrors,
+    hasDecisions,
+    topScore,
+  };
+}
+
+/**
+ * Calculate relevance scores for multiple subtasks
+ *
+ * @param actions - All actions from phase logs
+ * @param subtaskIds - Array of subtask IDs to calculate relevance for
+ * @returns Map of subtask ID to relevance score
+ */
+export function calculateSubtaskRelevanceScores(
+  actions: TaskLogEntry[],
+  subtaskIds: string[]
+): Map<string, SubtaskRelevanceScore> {
+  const scores = new Map<string, SubtaskRelevanceScore>();
+
+  for (const subtaskId of subtaskIds) {
+    scores.set(subtaskId, calculateSubtaskRelevance(actions, subtaskId));
+  }
+
+  return scores;
+}
+
+/**
+ * Sort subtasks by relevance score
+ *
+ * Primary sort: By composite relevance score (errors weighted heavily)
+ * Secondary sort: By action count (more actions = more activity)
+ * Tertiary sort: By original order (for stable sorting)
+ *
+ * @param subtaskIds - Array of subtask IDs
+ * @param relevanceScores - Map of subtask ID to relevance score
+ * @returns Sorted array of subtask IDs (most relevant first)
+ */
+export function sortSubtasksByRelevance(
+  subtaskIds: string[],
+  relevanceScores: Map<string, SubtaskRelevanceScore>
+): string[] {
+  return [...subtaskIds].sort((a, b) => {
+    const scoreA = relevanceScores.get(a);
+    const scoreB = relevanceScores.get(b);
+
+    // Handle missing scores (put at end)
+    if (!scoreA && !scoreB) return 0;
+    if (!scoreA) return 1;
+    if (!scoreB) return -1;
+
+    // Composite score: prioritize errors, then top score, then total
+    const compositeA =
+      (scoreA.hasErrors ? 1000 : 0) + scoreA.topScore * 10 + scoreA.totalScore;
+    const compositeB =
+      (scoreB.hasErrors ? 1000 : 0) + scoreB.topScore * 10 + scoreB.totalScore;
+
+    if (compositeB !== compositeA) {
+      return compositeB - compositeA; // Descending
+    }
+
+    // Secondary: action count (more activity = more relevant)
+    if (scoreB.actionCount !== scoreA.actionCount) {
+      return scoreB.actionCount - scoreA.actionCount;
+    }
+
+    // Tertiary: stable sort by original index
+    return subtaskIds.indexOf(a) - subtaskIds.indexOf(b);
+  });
+}
