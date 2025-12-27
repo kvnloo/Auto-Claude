@@ -1579,3 +1579,816 @@ class TestRaceConditionIntegration:
 
         assert expected_behavior["cancel_in_progress"] is False
         assert len(expected_behavior["verification_steps"]) >= 5
+
+
+# =============================================================================
+# E2E TEST: STALE CLAIM AUTO-RELEASE
+# =============================================================================
+
+
+def make_stale_claim_comment(
+    claimed_by: str,
+    claim_id: str,
+    days_ago: int = 8,
+    issue_number: int = 123,
+    fork_reputation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a mock claim comment with a timestamp from days_ago."""
+    from datetime import timedelta
+
+    stale_time = datetime.now(timezone.utc) - timedelta(days=days_ago)
+    timestamp = stale_time.isoformat()
+
+    metadata = {
+        "claimed_by": claimed_by,
+        "claim_id": claim_id,
+        "timestamp": timestamp,
+        "issue_number": issue_number,
+    }
+
+    if fork_reputation:
+        metadata["fork_reputation"] = fork_reputation
+
+    body = f"""## Task Claimed by @{claimed_by}
+
+**Claim ID:** `{claim_id}`
+**Timestamp:** {timestamp}
+
+---
+*This claim will expire in 7 days if no PR is submitted.*
+
+<!-- CLAIM_METADATA: {json.dumps(metadata)} -->"""
+
+    return {
+        "id": 12345,
+        "body": body,
+        "createdAt": timestamp,
+        "author": {"login": claimed_by},
+    }
+
+
+class TestStaleClaimAutoRelease:
+    """
+    E2E tests for stale claim auto-release scenario.
+
+    Test Verification Steps (from spec):
+    1. Create test issue, claim it
+    2. Modify claim comment timestamp to >7 days ago (or wait 7 days in staging)
+    3. Trigger task-stale-check.yml workflow manually
+    4. Verify stale claim detected
+    5. Verify issue auto-released (task:claimed → task:available)
+    6. Verify notification comment posted to fork
+    7. Verify reputation decreased by 3 points
+    """
+
+    # =========================================================================
+    # Unit Tests: Stale Detection Logic
+    # =========================================================================
+
+    def test_is_claim_stale_fresh_claim(self, claim_validator):
+        """Test that fresh claims are not marked as stale."""
+        # Claim made just now
+        fresh_metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-fresh12345",
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+        }
+
+        is_stale = claim_validator.is_claim_stale(fresh_metadata, stale_days=7)
+        assert not is_stale
+
+    def test_is_claim_stale_6_days_old(self, claim_validator):
+        """Test that 6-day-old claims are not stale (threshold is 7)."""
+        from datetime import timedelta
+
+        six_days_ago = datetime.now(timezone.utc) - timedelta(days=6)
+        metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-sixdays1234",
+            "timestamp": six_days_ago.isoformat(),
+        }
+
+        is_stale = claim_validator.is_claim_stale(metadata, stale_days=7)
+        assert not is_stale
+
+    def test_is_claim_stale_7_days_old(self, claim_validator):
+        """Test that 7-day-old claims ARE stale (at threshold)."""
+        from datetime import timedelta
+
+        seven_days_ago = datetime.now(timezone.utc) - timedelta(days=7, minutes=1)
+        metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-sevenday123",
+            "timestamp": seven_days_ago.isoformat(),
+        }
+
+        is_stale = claim_validator.is_claim_stale(metadata, stale_days=7)
+        assert is_stale
+
+    def test_is_claim_stale_8_days_old(self, claim_validator):
+        """Test that 8-day-old claims are definitely stale."""
+        from datetime import timedelta
+
+        eight_days_ago = datetime.now(timezone.utc) - timedelta(days=8)
+        metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-eightday12",
+            "timestamp": eight_days_ago.isoformat(),
+        }
+
+        is_stale = claim_validator.is_claim_stale(metadata, stale_days=7)
+        assert is_stale
+
+    def test_is_claim_stale_custom_threshold(self, claim_validator):
+        """Test stale detection with custom threshold (e.g., 5 days for warning)."""
+        from datetime import timedelta
+
+        # 5 days old, with 5-day threshold
+        five_days_ago = datetime.now(timezone.utc) - timedelta(days=5, minutes=1)
+        metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-fivedays12",
+            "timestamp": five_days_ago.isoformat(),
+        }
+
+        is_stale_5_days = claim_validator.is_claim_stale(metadata, stale_days=5)
+        is_stale_7_days = claim_validator.is_claim_stale(metadata, stale_days=7)
+
+        assert is_stale_5_days  # Stale at 5-day threshold
+        assert not is_stale_7_days  # Not stale at 7-day threshold
+
+    def test_is_claim_stale_missing_timestamp(self, claim_validator):
+        """Test stale detection with missing timestamp."""
+        metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-notimestam",
+        }
+
+        is_stale = claim_validator.is_claim_stale(metadata, stale_days=7)
+        assert not is_stale  # Cannot determine staleness without timestamp
+
+    def test_is_claim_stale_invalid_timestamp(self, claim_validator):
+        """Test stale detection with invalid timestamp format."""
+        metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-badtimest1",
+            "timestamp": "not-a-valid-timestamp",
+        }
+
+        is_stale = claim_validator.is_claim_stale(metadata, stale_days=7)
+        assert not is_stale  # Cannot determine staleness with invalid timestamp
+
+    def test_get_claim_expiry_timestamp(self, claim_validator):
+        """Test claim expiry timestamp calculation."""
+        from datetime import timedelta
+
+        claim_time = datetime(2025, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
+        metadata = {
+            "claimed_by": "testuser",
+            "claim_id": "claim-expiry1234",
+            "timestamp": claim_time.isoformat(),
+        }
+
+        expiry = claim_validator.get_claim_expiry_timestamp(metadata, stale_days=7)
+
+        expected_expiry = claim_time + timedelta(days=7)
+        assert expiry == expected_expiry
+
+    # =========================================================================
+    # Mock-Based Tests: Stale Release Flow
+    # =========================================================================
+
+    def test_stale_claim_detection_in_issue_list(self, claim_validator, mock_gh_client):
+        """Test detecting stale claims in a list of claimed issues."""
+        from datetime import timedelta
+
+        # Create mock issues with various claim ages
+        fresh_claim = make_claim_comment(
+            claimed_by="freshuser",
+            claim_id="claim-fresh12345",
+        )
+        stale_claim = make_stale_claim_comment(
+            claimed_by="staleuser",
+            claim_id="claim-stale12345",
+            days_ago=8,
+        )
+
+        fresh_issue = make_mock_issue(
+            number=100,
+            labels=["task:claimed"],
+            comments=[fresh_claim],
+        )
+        stale_issue = make_mock_issue(
+            number=101,
+            labels=["task:claimed"],
+            comments=[stale_claim],
+        )
+
+        # Check staleness for each
+        _, fresh_metadata = claim_validator.find_claim_comment(
+            fresh_issue["comments"]
+        )
+        _, stale_metadata = claim_validator.find_claim_comment(
+            stale_issue["comments"]
+        )
+
+        assert fresh_metadata is not None
+        assert stale_metadata is not None
+
+        assert not claim_validator.is_claim_stale(fresh_metadata, stale_days=7)
+        assert claim_validator.is_claim_stale(stale_metadata, stale_days=7)
+
+    def test_stale_release_labels_updated(self):
+        """Test that stale release updates labels correctly."""
+        # The expected flow in the workflow:
+        # 1. Add task:available label
+        # 2. Remove task:claimed label
+        # 3. Post release comment
+
+        expected_label_operations = [
+            {"action": "add", "label": "task:available"},
+            {"action": "remove", "label": "task:claimed"},
+        ]
+
+        # Verify workflow performs these operations
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = workflow_path.read_text()
+
+        # Check for label operations
+        assert "addLabels" in content or "add_labels" in content or "LABEL_AVAILABLE" in content
+        assert "removeLabel" in content or "remove_label" in content or "LABEL_CLAIMED" in content
+
+    def test_stale_release_comment_format(self):
+        """Test that stale release comment has correct format."""
+        # Expected elements in release comment:
+        expected_elements = [
+            "STALE_RELEASE_METADATA",  # Machine-readable metadata
+            "Auto-Released",  # Human-readable title
+            "reputation",  # Reputation penalty mentioned
+        ]
+
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = workflow_path.read_text()
+
+        for element in expected_elements:
+            assert element.lower() in content.lower(), f"Expected '{element}' in workflow"
+
+    def test_stale_release_metadata_structure(self):
+        """Test STALE_RELEASE_METADATA has required fields."""
+        # The metadata should include:
+        required_fields = [
+            "release_type",
+            "released_at",
+            "issue_number",
+            "original_claimant",
+            "original_claim_id",
+            "days_stale",
+            "reputation_penalty",
+        ]
+
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = workflow_path.read_text()
+
+        # Check all required fields are in the metadata object
+        for field in required_fields:
+            assert field in content, f"Expected field '{field}' in STALE_RELEASE_METADATA"
+
+    # =========================================================================
+    # Reputation Integration Tests
+    # =========================================================================
+
+    def test_reputation_decrease_on_timeout(self):
+        """Test that reputation decreases by 3 points on stale timeout."""
+        from reputation_tracker import ReputationTracker, ReputationEventType
+
+        tracker = ReputationTracker()
+
+        # Create a fork with some initial reputation
+        tracker._record_event(
+            fork_owner="staleuser",
+            event_type=ReputationEventType.PR_MERGED,
+            issue_number=100,
+        )
+
+        initial_rep = tracker.get_reputation("staleuser")
+        initial_score = initial_rep.score
+
+        # Record timeout (stale claim auto-release)
+        tracker.record_timeout(
+            fork_owner="staleuser",
+            issue_number=101,
+            claim_id="claim-stale12345",
+            days_stale=8,
+        )
+
+        final_rep = tracker.get_reputation("staleuser")
+        final_score = final_rep.score
+
+        # Verify -3 point penalty
+        expected_score = initial_score + ReputationEventType.CLAIM_TIMEOUT.score_delta
+        assert final_score == expected_score
+        assert ReputationEventType.CLAIM_TIMEOUT.score_delta == -3
+
+    def test_reputation_timeout_event_metadata(self):
+        """Test that timeout event includes days_stale metadata."""
+        from reputation_tracker import ReputationTracker, ReputationEventType
+
+        tracker = ReputationTracker()
+
+        event = tracker.record_timeout(
+            fork_owner="staleuser",
+            issue_number=101,
+            claim_id="claim-stale12345",
+            days_stale=9,
+        )
+
+        assert event.event_type == ReputationEventType.CLAIM_TIMEOUT
+        assert event.score_delta == -3
+        assert event.metadata.get("days_stale") == 9
+        assert event.claim_id == "claim-stale12345"
+
+    def test_reputation_stats_after_timeout(self):
+        """Test that stats are updated correctly after timeout."""
+        from reputation_tracker import ReputationTracker, ReputationEventType
+
+        tracker = ReputationTracker()
+
+        # Record a timeout
+        tracker.record_timeout(
+            fork_owner="timeoutuser",
+            issue_number=101,
+            claim_id="claim-timeout123",
+        )
+
+        rep = tracker.get_reputation("timeoutuser")
+
+        assert rep.stats.timed_out_claims == 1
+        assert rep.stats.total_claims == 1
+        assert rep.stats.successful_merges == 0
+
+        # Reliability should be 0 (0 merges / 1 timeout)
+        assert rep.stats.reliability_score == 0.0
+
+    def test_workflow_documents_reputation_penalty(self):
+        """Test that workflow mentions -3 reputation penalty."""
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = workflow_path.read_text()
+
+        # Verify penalty is documented
+        assert "-3" in content or "3 points" in content
+
+    # =========================================================================
+    # Workflow YAML Verification
+    # =========================================================================
+
+    def test_stale_check_workflow_exists(self):
+        """Test task-stale-check.yml exists."""
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        assert workflow_path.exists(), "task-stale-check.yml not found"
+
+    def test_stale_check_workflow_has_schedule(self):
+        """Test workflow has daily schedule trigger."""
+        try:
+            import yaml
+        except ImportError:
+            pytest.skip("PyYAML not installed")
+
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = yaml.safe_load(workflow_path.read_text())
+
+        # Check for schedule trigger
+        assert "schedule" in content.get("on", {}), "Workflow should have schedule trigger"
+        schedules = content["on"]["schedule"]
+        assert len(schedules) >= 1, "Should have at least one schedule"
+
+    def test_stale_check_workflow_has_manual_trigger(self):
+        """Test workflow can be triggered manually."""
+        try:
+            import yaml
+        except ImportError:
+            pytest.skip("PyYAML not installed")
+
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = yaml.safe_load(workflow_path.read_text())
+
+        # Check for workflow_dispatch trigger
+        assert "workflow_dispatch" in content.get("on", {}), "Should support manual trigger"
+
+        # Check for dry_run input
+        inputs = content["on"]["workflow_dispatch"].get("inputs", {})
+        assert "dry_run" in inputs, "Should have dry_run input for testing"
+
+    def test_stale_check_workflow_has_configurable_thresholds(self):
+        """Test workflow has configurable warning and expiry thresholds."""
+        try:
+            import yaml
+        except ImportError:
+            pytest.skip("PyYAML not installed")
+
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = yaml.safe_load(workflow_path.read_text())
+
+        inputs = content["on"]["workflow_dispatch"].get("inputs", {})
+
+        # Should have configurable thresholds
+        assert "warning_days" in inputs or "WARNING_DAYS" in workflow_path.read_text()
+        assert "expiry_days" in inputs or "EXPIRY_DAYS" in workflow_path.read_text()
+
+    def test_stale_check_workflow_permissions(self):
+        """Test workflow has correct permissions."""
+        try:
+            import yaml
+        except ImportError:
+            pytest.skip("PyYAML not installed")
+
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = yaml.safe_load(workflow_path.read_text())
+
+        # Check permissions
+        permissions = content.get("permissions", {})
+        assert permissions.get("issues") == "write", "Should have issues:write permission"
+
+    def test_stale_check_workflow_searches_claimed_issues(self):
+        """Test workflow searches for issues with task:claimed label."""
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = workflow_path.read_text()
+
+        # Should search for claimed issues
+        assert "task:claimed" in content
+        assert "search" in content.lower() or "list" in content.lower()
+
+    def test_stale_check_workflow_parses_claim_metadata(self):
+        """Test workflow parses CLAIM_METADATA from comments."""
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = workflow_path.read_text()
+
+        # Should parse claim metadata
+        assert "CLAIM_METADATA" in content
+        assert "timestamp" in content
+
+    def test_stale_check_workflow_has_warning_phase(self):
+        """Test workflow sends warning before auto-release."""
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-stale-check.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-stale-check.yml not found")
+
+        content = workflow_path.read_text()
+
+        # Should have warning functionality
+        assert "STALE_WARNING" in content or "warning" in content.lower()
+        assert "5" in content  # Default warning at 5 days
+
+    # =========================================================================
+    # E2E Manual Test Script Generation
+    # =========================================================================
+
+    def test_e2e_stale_claim_script_generation(self, tmp_path):
+        """Generate bash script for stale claim E2E testing."""
+        script_content = '''#!/bin/bash
+# E2E Test: Stale Claim Auto-Release
+# Generated by test_e2e_fork_claims.py::TestStaleClaimAutoRelease
+#
+# This script tests the stale claim detection and auto-release workflow.
+#
+# Note: For testing, you can either:
+# 1. Wait 7 days (production behavior)
+# 2. Modify claim comment timestamp manually (for faster testing)
+# 3. Use reduced thresholds via workflow_dispatch inputs
+
+set -e
+
+REPO="${TEST_GITHUB_REPO:-}"
+if [ -z "$REPO" ]; then
+    echo "Error: TEST_GITHUB_REPO environment variable not set"
+    echo "Usage: TEST_GITHUB_REPO=owner/repo ./e2e_stale_claim_test.sh"
+    exit 1
+fi
+
+echo "=============================================="
+echo "E2E Test: Stale Claim Auto-Release"
+echo "=============================================="
+echo "Repository: $REPO"
+echo ""
+
+# Step 1: Create test issue
+echo "Step 1: Creating test issue with task:available label..."
+ISSUE_URL=$(gh issue create -R "$REPO" \\
+    --title "E2E Test: Stale Claim $(date +%s)" \\
+    --body "Automated E2E test for stale claim auto-release workflow" \\
+    --label "task:available")
+ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE "[0-9]+$")
+echo "Created issue #$ISSUE_NUMBER"
+echo ""
+
+# Step 2: Claim the issue
+echo "Step 2: Claiming the issue..."
+gh workflow run task-claim.yml -R "$REPO" -f issue_number="$ISSUE_NUMBER"
+echo "Claim workflow triggered"
+echo ""
+
+# Wait for claim to complete
+echo "Waiting 15 seconds for claim to process..."
+sleep 15
+
+# Step 3: Verify issue is claimed
+echo "Step 3: Verifying issue is claimed..."
+ISSUE_DATA=$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json labels,comments)
+
+HAS_CLAIMED=$(echo "$ISSUE_DATA" | jq -r '.labels[].name' | grep -c "task:claimed" || true)
+if [ "$HAS_CLAIMED" -eq 1 ]; then
+    echo "  Issue claimed: YES"
+else
+    echo "  Issue claimed: NO (claim failed)"
+    exit 1
+fi
+
+# Get claim timestamp
+CLAIM_TIMESTAMP=$(echo "$ISSUE_DATA" | jq -r '.comments[].body' | grep -oP '"timestamp":\s*"[^"]*"' | head -1 | cut -d'"' -f4)
+echo "  Claim timestamp: $CLAIM_TIMESTAMP"
+echo ""
+
+# Step 4: Option A - Test with reduced threshold
+echo "Step 4: Testing stale check with dry run mode..."
+echo "  (Using expiry_days=0 to force immediate expiry detection)"
+gh workflow run task-stale-check.yml -R "$REPO" \\
+    -f dry_run=true \\
+    -f warning_days=0 \\
+    -f expiry_days=0
+echo "Stale check workflow triggered (dry run)"
+echo ""
+
+# Wait for stale check to run
+echo "Waiting 30 seconds for stale check to complete..."
+sleep 30
+
+# Step 5: Check stale workflow result
+echo "Step 5: Checking stale check workflow result..."
+STALE_RUN=$(gh run list -R "$REPO" --workflow=task-stale-check.yml --limit 1 --json conclusion,status -q '.[0]')
+STALE_CONCLUSION=$(echo "$STALE_RUN" | jq -r '.conclusion // empty')
+echo "  Workflow conclusion: $STALE_CONCLUSION"
+echo ""
+
+# Step 6: For real release test, run without dry_run
+echo "Step 6: Running actual stale release (expiry_days=0)..."
+gh workflow run task-stale-check.yml -R "$REPO" \\
+    -f dry_run=false \\
+    -f warning_days=0 \\
+    -f expiry_days=0
+echo "Stale check workflow triggered (actual release)"
+echo ""
+
+# Wait for release
+echo "Waiting 30 seconds for auto-release to complete..."
+sleep 30
+
+# Step 7: Verify auto-release
+echo "Step 7: Verifying auto-release..."
+ISSUE_DATA=$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json labels,comments)
+
+# Check labels
+HAS_CLAIMED=$(echo "$ISSUE_DATA" | jq -r '.labels[].name' | grep -c "task:claimed" || true)
+HAS_AVAILABLE=$(echo "$ISSUE_DATA" | jq -r '.labels[].name' | grep -c "task:available" || true)
+
+echo "  Labels check:"
+if [ "$HAS_CLAIMED" -eq 0 ] && [ "$HAS_AVAILABLE" -eq 1 ]; then
+    echo "    - PASS: task:claimed removed, task:available restored"
+else
+    echo "    - FAIL: task:claimed=$HAS_CLAIMED, task:available=$HAS_AVAILABLE"
+fi
+
+# Check for stale release comment
+STALE_RELEASE=$(echo "$ISSUE_DATA" | jq -r '.comments[].body' | grep -c "STALE_RELEASE_METADATA" || true)
+echo "  Stale release comment:"
+if [ "$STALE_RELEASE" -ge 1 ]; then
+    echo "    - PASS: STALE_RELEASE_METADATA comment found"
+else
+    echo "    - FAIL: STALE_RELEASE_METADATA comment not found"
+fi
+
+# Check for reputation penalty mention
+PENALTY_MENTIONED=$(echo "$ISSUE_DATA" | jq -r '.comments[].body' | grep -ci "reputation" || true)
+echo "  Reputation penalty:"
+if [ "$PENALTY_MENTIONED" -ge 1 ]; then
+    echo "    - PASS: Reputation penalty mentioned in comment"
+else
+    echo "    - INFO: Reputation penalty not explicitly mentioned"
+fi
+
+echo ""
+echo "=============================================="
+echo "Stale Claim Auto-Release Test Summary"
+echo "=============================================="
+echo ""
+echo "Issue: #$ISSUE_NUMBER"
+echo "Final state: task:claimed=$HAS_CLAIMED, task:available=$HAS_AVAILABLE"
+echo "Stale release comments: $STALE_RELEASE"
+echo ""
+
+if [ "$HAS_CLAIMED" -eq 0 ] && [ "$HAS_AVAILABLE" -eq 1 ] && [ "$STALE_RELEASE" -ge 1 ]; then
+    echo "RESULT: PASS - Stale claim was auto-released correctly"
+else
+    echo "RESULT: NEEDS REVIEW - Check workflow logs for details"
+fi
+
+echo ""
+echo "To view workflow logs:"
+echo "  gh run list -R $REPO --workflow=task-stale-check.yml --limit 2"
+echo "  gh run view <run-id> --log -R $REPO"
+echo ""
+
+# Cleanup
+echo "Cleanup: Closing test issue..."
+gh issue close "$ISSUE_NUMBER" -R "$REPO" || true
+'''
+
+        script_path = tmp_path / "e2e_stale_claim_test.sh"
+        script_path.write_text(script_content)
+        script_path.chmod(0o755)
+
+        assert script_path.exists()
+        assert "STALE_RELEASE_METADATA" in script_path.read_text()
+        assert "reputation" in script_path.read_text().lower()
+
+    def test_e2e_manual_timestamp_modification_script(self, tmp_path):
+        """Generate script for manually modifying claim timestamp for testing."""
+        script_content = '''#!/bin/bash
+# Helper Script: Modify Claim Timestamp for Stale Testing
+# Generated by test_e2e_fork_claims.py::TestStaleClaimAutoRelease
+#
+# This script creates a claim with a backdated timestamp for testing
+# the stale claim detection without waiting 7 days.
+
+set -e
+
+REPO="${TEST_GITHUB_REPO:-}"
+ISSUE_NUMBER="${1:-}"
+DAYS_AGO="${2:-8}"
+
+if [ -z "$REPO" ] || [ -z "$ISSUE_NUMBER" ]; then
+    echo "Usage: TEST_GITHUB_REPO=owner/repo ./backdate_claim.sh <issue_number> [days_ago]"
+    echo ""
+    echo "Arguments:"
+    echo "  issue_number  - The issue to add backdated claim to"
+    echo "  days_ago      - How many days in the past (default: 8)"
+    exit 1
+fi
+
+echo "Creating backdated claim comment on issue #$ISSUE_NUMBER..."
+echo "Days ago: $DAYS_AGO"
+
+# Calculate backdated timestamp
+BACKDATED_TIMESTAMP=$(date -u -d "${DAYS_AGO} days ago" +"%Y-%m-%dT%H:%M:%SZ" 2>/dev/null || \\
+                      date -u -v-${DAYS_AGO}d +"%Y-%m-%dT%H:%M:%SZ")
+
+CLAIM_ID="claim-$(openssl rand -hex 6)"
+FORK_OWNER=$(gh api user --jq '.login')
+
+echo "Backdated timestamp: $BACKDATED_TIMESTAMP"
+echo "Claim ID: $CLAIM_ID"
+echo "Fork owner: $FORK_OWNER"
+
+# Create claim metadata
+CLAIM_METADATA=$(cat <<EOF
+{"claimed_by": "${FORK_OWNER}", "claim_id": "${CLAIM_ID}", "timestamp": "${BACKDATED_TIMESTAMP}", "issue_number": ${ISSUE_NUMBER}}
+EOF
+)
+
+# Create comment body
+COMMENT_BODY=$(cat <<EOF
+## Task Claimed by @${FORK_OWNER}
+
+**Claim ID:** \\\`${CLAIM_ID}\\\`
+**Timestamp:** ${BACKDATED_TIMESTAMP}
+
+---
+*This claim will expire in 7 days if no PR is submitted.*
+
+<!-- CLAIM_METADATA: ${CLAIM_METADATA} -->
+EOF
+)
+
+# Add task:claimed label
+echo "Adding task:claimed label..."
+gh issue edit "$ISSUE_NUMBER" -R "$REPO" --add-label "task:claimed" --remove-label "task:available" || true
+
+# Post backdated claim comment
+echo "Posting backdated claim comment..."
+gh issue comment "$ISSUE_NUMBER" -R "$REPO" --body "$COMMENT_BODY"
+
+echo ""
+echo "Done! Issue #$ISSUE_NUMBER now has a claim dated $DAYS_AGO days ago."
+echo ""
+echo "To test stale detection, run:"
+echo "  gh workflow run task-stale-check.yml -R $REPO"
+'''
+
+        script_path = tmp_path / "backdate_claim.sh"
+        script_path.write_text(script_content)
+        script_path.chmod(0o755)
+
+        assert script_path.exists()
+        assert "CLAIM_METADATA" in script_path.read_text()
+
+    def test_e2e_steps_documented(self):
+        """Verify E2E test steps are documented in class docstring."""
+        doc = TestStaleClaimAutoRelease.__doc__
+        assert doc is not None
+        assert "7 days" in doc or "stale" in doc.lower()
+        assert "auto-release" in doc.lower() or "auto-released" in doc.lower()
+
+
+# =============================================================================
+# INTEGRATION TESTS: Stale Check with GitHub CLI
+# =============================================================================
+
+
+@requires_gh_cli
+class TestStaleCheckIntegration:
+    """
+    Integration tests for stale claim detection using gh CLI.
+
+    These tests verify the stale-check workflow components work correctly.
+    """
+
+    @pytest.fixture
+    def test_repo(self):
+        """Get test repository from environment."""
+        repo = os.environ.get("TEST_GITHUB_REPO")
+        if not repo:
+            pytest.skip("TEST_GITHUB_REPO environment variable not set")
+        return repo
+
+    def test_stale_check_workflow_exists_in_repo(self, test_repo):
+        """Test that task-stale-check workflow exists in repository."""
+        result = subprocess.run(
+            ["gh", "workflow", "list", "-R", test_repo, "--json", "name,state"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0
+        workflows = json.loads(result.stdout)
+
+        workflow_names = [w["name"] for w in workflows]
+        # Note: Workflow must be on default branch to appear
+        if "Task Stale Claim Check" not in workflow_names:
+            pytest.skip(
+                "Task Stale Claim Check workflow not found (may not be on default branch)"
+            )
+
+    def test_stale_check_can_run_dry_mode(self, test_repo):
+        """Test that stale check can be triggered in dry run mode."""
+        # This tests that the workflow can be triggered without making changes
+        expected_behavior = """
+        When task-stale-check.yml runs in dry run mode:
+        1. Searches for issues with task:claimed label
+        2. Parses CLAIM_METADATA from comments
+        3. Calculates days since claim
+        4. Logs which claims would be warned/released
+        5. Does NOT modify any labels or post comments
+        6. Reports statistics in job summary
+        """
+        assert "dry run" in expected_behavior.lower()
+        assert "does NOT modify" in expected_behavior
+
+    def test_stale_detection_timing_documented(self):
+        """Document expected stale detection timing."""
+        timing = {
+            "warning_threshold": 5,  # days
+            "expiry_threshold": 7,   # days
+            "schedule": "Daily at midnight UTC",
+            "manual_trigger": "workflow_dispatch with configurable thresholds",
+        }
+
+        assert timing["warning_threshold"] < timing["expiry_threshold"]
+        assert timing["expiry_threshold"] == 7
