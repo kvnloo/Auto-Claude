@@ -597,6 +597,9 @@ export interface ElectronAPI {
 
   // GitHub API (nested for organized access)
   github: import('../../preload/api/modules/github-api').GitHubAPI;
+
+  // Explorer API (nested for organized access)
+  explorer: import('../../preload/api/modules/explorer-api').ExplorerAPI;
 }
 
 declare global {

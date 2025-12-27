@@ -139,7 +139,7 @@ export async function loadProjectGraph(projectId: string): Promise<void> {
   });
 
   try {
-    const result = await window.electronAPI.getExplorerGraph(projectId);
+    const result = await window.electronAPI.explorer.getGraph(projectId);
     if (result.success && result.data) {
       store.setGraph(result.data);
       store.setLoadingStatus({
@@ -184,7 +184,7 @@ export async function refreshProjectGraph(projectId: string): Promise<void> {
   });
 
   try {
-    const result = await window.electronAPI.refreshExplorerGraph(projectId);
+    const result = await window.electronAPI.explorer.refreshGraph(projectId);
     if (result.success && result.data) {
       store.setGraph(result.data);
       store.setLoadingStatus({
@@ -226,7 +226,7 @@ export async function getNodeInfo(
   store.setSelectedNodeId(nodeId);
 
   try {
-    const result = await window.electronAPI.getExplorerNodeInfo(projectId, nodeId);
+    const result = await window.electronAPI.explorer.getNodeInfo(projectId, nodeId);
     if (result.success && result.data) {
       store.setSelectedNodeInfo(result.data);
     } else {
