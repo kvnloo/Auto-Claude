@@ -188,9 +188,40 @@ export function registerGetRepositories(): void {
 }
 
 /**
+ * Detect if the configured repository is a fork
+ */
+export function registerDetectFork(): void {
+  ipcMain.handle(
+    IPC_CHANNELS.GITHUB_DETECT_FORK,
+    async (_, projectId: string): Promise<IPCResult<ForkStatusResult>> => {
+      const project = projectStore.getProject(projectId);
+      if (!project) {
+        return { success: false, error: 'Project not found' };
+      }
+
+      const config = getGitHubConfig(project);
+      if (!config) {
+        return { success: false, error: 'No GitHub token or repository configured' };
+      }
+
+      try {
+        const forkStatus = await detectForkStatus(config.token, config.repo);
+        return { success: true, data: forkStatus };
+      } catch (error) {
+        return {
+          success: false,
+          error: error instanceof Error ? error.message : 'Failed to detect fork status'
+        };
+      }
+    }
+  );
+}
+
+/**
  * Register all repository-related handlers
  */
 export function registerRepositoryHandlers(): void {
   registerCheckConnection();
   registerGetRepositories();
+  registerDetectFork();
 }
