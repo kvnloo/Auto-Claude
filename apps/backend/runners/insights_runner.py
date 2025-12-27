@@ -249,38 +249,32 @@ def cleanup_sdk_settings_file(settings_file: Path) -> None:
             debug_error("insights_runner", f"Failed to cleanup SDK settings file: {e}")
 
 
-def format_attachment_context(attachments: list, file_paths: list[str], project_dir: str) -> str:
-    """Format file attachments as context for the AI, with paths to actual files.
+def format_attachment_context(attachments: list) -> str:
+    """Format file attachments as context for the AI.
 
-    Uses relative paths from the project directory so the Read tool can access
-    them within the SDK sandbox.
+    For text files: includes the content directly in the prompt (avoiding sandbox Read issues).
+    For binary files: includes metadata only (content not readable by AI anyway).
+
+    This approach avoids the SDK sandbox exit code 2 issue that occurs when the AI
+    attempts to use the Read tool on attached files.
     """
     if not attachments:
         return ""
 
+    # Maximum size for inline content (50KB) - larger files get truncated
+    MAX_INLINE_SIZE = 50 * 1024
+
     context_parts = []
     context_parts.append("\n## Attached Files\n")
     context_parts.append(
-        "The user has attached the following files. You can read them using the Read tool:\n"
+        "The user has attached the following files. Text file contents are included below:\n"
     )
-
-    # Create a map of filename to path for lookup, converting to relative paths
-    project_path = Path(project_dir).resolve()
-    path_map = {}
-    for path in file_paths:
-        abs_path = Path(path).resolve()
-        try:
-            # Convert to relative path from project directory
-            rel_path = abs_path.relative_to(project_path)
-            path_map[abs_path.name] = str(rel_path)
-        except ValueError:
-            # Path is not within project dir, use absolute path as fallback
-            path_map[abs_path.name] = str(abs_path)
 
     for attachment in attachments:
         filename = attachment.get("filename", "unknown")
         mime_type = attachment.get("mimeType", "application/octet-stream")
         size = attachment.get("size", 0)
+        data = attachment.get("data", "")
 
         # Format file size for readability
         if size < 1024:
@@ -296,21 +290,37 @@ def format_attachment_context(attachments: list, file_paths: list[str], project_
         context_parts.append(f"- **Type**: {mime_type}\n")
         context_parts.append(f"- **Size**: {size_str}\n")
 
-        # Find the file path for this attachment
-        safe_filename = Path(filename).name
-        file_path = path_map.get(safe_filename)
-        if not file_path:
-            # Try to find a matching path with counter suffix
-            for stored_name, stored_path in path_map.items():
-                if Path(stored_name).stem.startswith(Path(safe_filename).stem):
-                    file_path = stored_path
-                    break
+        # For text files, include content directly in the prompt
+        if is_text_file(mime_type, filename) and data:
+            try:
+                # Decode base64 content
+                decoded_data = base64.b64decode(data)
+                try:
+                    text_content = decoded_data.decode("utf-8")
+                except UnicodeDecodeError:
+                    # Try latin-1 as fallback for some text files
+                    try:
+                        text_content = decoded_data.decode("latin-1")
+                    except UnicodeDecodeError:
+                        context_parts.append("- *Could not decode file as text*\n")
+                        continue
 
-        if file_path:
-            context_parts.append(f"- **Path**: `{file_path}`\n")
-            context_parts.append(f"- Use `Read` tool with path `{file_path}` to view contents\n")
+                # Truncate if too large
+                if len(text_content) > MAX_INLINE_SIZE:
+                    text_content = text_content[:MAX_INLINE_SIZE] + "\n\n... [content truncated - file too large] ..."
+                    context_parts.append(f"- *Content truncated (showing first {MAX_INLINE_SIZE // 1024}KB)*\n")
+
+                # Determine language for syntax highlighting
+                ext = filename.rsplit(".", 1)[-1].lower() if "." in filename else ""
+                lang = ext if ext else ""
+
+                context_parts.append(f"\n```{lang}\n{text_content}\n```\n")
+
+            except Exception as e:
+                context_parts.append(f"- *Could not read file content: {e}*\n")
         else:
-            context_parts.append("- *File could not be written to workspace*\n")
+            # Binary file - just note that it's attached
+            context_parts.append("- *Binary file - content not displayed*\n")
 
     return "".join(context_parts)
 
@@ -426,9 +436,6 @@ async def run_with_sdk(
     system_prompt = build_system_prompt(project_dir)
     project_path = Path(project_dir).resolve()
 
-    # Write attachments to temporary workspace so AI can access them via Read tool
-    file_paths, workspace_dir = write_attachments_to_workspace(attachments, project_dir)
-
     # Build conversation context from history
     conversation_context = ""
     for msg in history[:-1]:  # Exclude the latest message
@@ -436,7 +443,8 @@ async def run_with_sdk(
         conversation_context += f"\n{role}: {msg['content']}\n"
 
     # Build the full prompt with conversation history and attachments
-    attachment_context = format_attachment_context(attachments, file_paths, project_dir)
+    # Note: File content is included inline (no need to write to workspace)
+    attachment_context = format_attachment_context(attachments)
 
     full_prompt = message
     if attachment_context:
@@ -453,11 +461,10 @@ Current question: {full_prompt}"""
         attachment_filenames = [a.get("filename", "unknown") for a in attachments]
         debug(
             "insights_runner",
-            "Including file attachments in context",
+            "Including file attachments in context (inline)",
             attachment_count=len(attachments),
             attachment_filenames=attachment_filenames,
             context_length=len(attachment_context),
-            file_paths=file_paths,
         )
 
     debug(
@@ -562,12 +569,10 @@ Current question: {full_prompt}"""
             )
 
         # Cleanup after successful completion
-        cleanup_attachments_workspace(workspace_dir)
         cleanup_sdk_settings_file(settings_file)
 
     except Exception as e:
         # Cleanup on error too
-        cleanup_attachments_workspace(workspace_dir)
         cleanup_sdk_settings_file(settings_file)
 
         print(f"Error using Claude SDK: {e}", file=sys.stderr)
