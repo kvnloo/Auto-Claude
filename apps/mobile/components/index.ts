@@ -31,3 +31,12 @@ export { default as ProjectListItem } from './ProjectListItem';
 export { default as IssueListItem } from './IssueListItem';
 export { default as PRListItem } from './PRListItem';
 export { default as TerminalListItem } from './TerminalListItem';
+
+// Connection Components
+export {
+  default as ConnectionStatus,
+  ConnectionStatusBadge,
+  ConnectionStatusIcon,
+  ConnectionStatusBar,
+  useConnectionState,
+} from './ConnectionStatus';
