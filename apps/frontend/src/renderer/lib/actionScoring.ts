@@ -577,3 +577,253 @@ export function sortSubtasksByRelevance(
     return subtaskIds.indexOf(a) - subtaskIds.indexOf(b);
   });
 }
+
+/**
+ * File operation type for categorizing file interactions
+ */
+export type FileOperationType = 'read' | 'edit' | 'write' | 'delete' | 'search' | 'bash';
+
+/**
+ * Extracted file information from log actions
+ */
+export interface ExtractedFile {
+  path: string;
+  filename: string;
+  operation: FileOperationType;
+  timestamp: string;
+  toolName?: string;
+}
+
+/**
+ * Summary of files touched during a subtask
+ */
+export interface FilesSummary {
+  files: ExtractedFile[];
+  uniqueFiles: string[];
+  byOperation: Map<FileOperationType, ExtractedFile[]>;
+  modifiedFiles: string[]; // Files that were edited/written (most important)
+  readFiles: string[]; // Files that were only read
+}
+
+/**
+ * Extract file path from tool_input string
+ * Handles various formats: direct paths, JSON inputs, etc.
+ */
+function extractFilePathFromInput(input: string): string | null {
+  if (!input) return null;
+
+  // Trim whitespace
+  const trimmed = input.trim();
+
+  // Direct file path (starts with / or ./ or contains typical file extensions)
+  if (trimmed.startsWith('/') || trimmed.startsWith('./')) {
+    // Extract just the path part (before any space or newline)
+    const pathMatch = trimmed.match(/^([^\s\n]+)/);
+    if (pathMatch) {
+      return pathMatch[1];
+    }
+  }
+
+  // Try to parse as JSON and extract file_path or path
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (parsed.file_path) return parsed.file_path;
+    if (parsed.path) return parsed.path;
+    if (parsed.filename) return parsed.filename;
+  } catch {
+    // Not JSON, try regex patterns
+  }
+
+  // Look for file path patterns in the string
+  const pathPatterns = [
+    // Absolute paths
+    /\/[\w\-./]+\.[a-z]{1,6}/gi,
+    // Relative paths with extension
+    /\.\/[\w\-./]+\.[a-z]{1,6}/gi,
+    // Paths in quotes
+    /"([^"]+\.[a-z]{1,6})"/gi,
+    /'([^']+\.[a-z]{1,6})'/gi,
+  ];
+
+  for (const pattern of pathPatterns) {
+    const match = trimmed.match(pattern);
+    if (match && match.length > 0) {
+      // Clean up the match (remove quotes if present)
+      const cleanPath = match[0].replace(/^["']|["']$/g, '');
+      return cleanPath;
+    }
+  }
+
+  return null;
+}
+
+/**
+ * Get filename from a path
+ */
+function getFilename(path: string): string {
+  const parts = path.split('/');
+  return parts[parts.length - 1] || path;
+}
+
+/**
+ * Map tool name to operation type
+ */
+function getOperationType(toolName: string | undefined): FileOperationType {
+  if (!toolName) return 'bash';
+
+  const tool = toolName.toLowerCase();
+
+  if (tool === 'read') return 'read';
+  if (tool === 'edit' || tool === 'notebookedit') return 'edit';
+  if (tool === 'write') return 'write';
+  if (tool === 'delete') return 'delete';
+  if (tool === 'grep' || tool === 'glob') return 'search';
+  if (tool === 'bash') return 'bash';
+
+  // Default for unknown tools
+  return 'bash';
+}
+
+/**
+ * Extract files from a single action
+ */
+export function extractFilesFromAction(action: TaskLogEntry): ExtractedFile[] {
+  const files: ExtractedFile[] = [];
+
+  // Only process tool actions
+  if (action.type !== 'tool_start' && action.type !== 'tool_end') {
+    return files;
+  }
+
+  // Skip tool_end to avoid duplicates
+  if (action.type === 'tool_end') {
+    return files;
+  }
+
+  const operation = getOperationType(action.tool_name);
+
+  // Skip search operations for now (they don't represent specific files)
+  if (operation === 'search') {
+    return files;
+  }
+
+  // Try to extract file path from tool_input
+  if (action.tool_input) {
+    const filePath = extractFilePathFromInput(action.tool_input);
+    if (filePath) {
+      files.push({
+        path: filePath,
+        filename: getFilename(filePath),
+        operation,
+        timestamp: action.timestamp,
+        toolName: action.tool_name,
+      });
+    }
+  }
+
+  // Also check detail field for additional file references
+  if (action.detail && files.length === 0) {
+    const filePath = extractFilePathFromInput(action.detail);
+    if (filePath) {
+      files.push({
+        path: filePath,
+        filename: getFilename(filePath),
+        operation,
+        timestamp: action.timestamp,
+        toolName: action.tool_name,
+      });
+    }
+  }
+
+  return files;
+}
+
+/**
+ * Extract all files from a list of actions
+ */
+export function extractFilesFromActions(actions: TaskLogEntry[]): ExtractedFile[] {
+  const files: ExtractedFile[] = [];
+
+  for (const action of actions) {
+    const extracted = extractFilesFromAction(action);
+    files.push(...extracted);
+  }
+
+  return files;
+}
+
+/**
+ * Get a summary of files touched during a subtask
+ */
+export function getFilesSummary(actions: TaskLogEntry[], subtaskId?: string): FilesSummary {
+  // Filter by subtask if specified
+  const filteredActions = subtaskId
+    ? actions.filter(a => a.subtask_id === subtaskId)
+    : actions;
+
+  // Extract all files
+  const files = extractFilesFromActions(filteredActions);
+
+  // Group by operation type
+  const byOperation = new Map<FileOperationType, ExtractedFile[]>();
+  for (const file of files) {
+    const existing = byOperation.get(file.operation) ?? [];
+    existing.push(file);
+    byOperation.set(file.operation, existing);
+  }
+
+  // Get unique file paths
+  const uniqueFilesSet = new Set<string>();
+  for (const file of files) {
+    uniqueFilesSet.add(file.path);
+  }
+  const uniqueFiles = Array.from(uniqueFilesSet);
+
+  // Determine modified vs read-only files
+  const modifiedFilesSet = new Set<string>();
+  const allFilesSet = new Set<string>();
+
+  for (const file of files) {
+    allFilesSet.add(file.path);
+    if (file.operation === 'edit' || file.operation === 'write' || file.operation === 'delete') {
+      modifiedFilesSet.add(file.path);
+    }
+  }
+
+  // Read-only files are those that were read but never modified
+  const readFilesSet = new Set<string>();
+  for (const file of files) {
+    if (file.operation === 'read' && !modifiedFilesSet.has(file.path)) {
+      readFilesSet.add(file.path);
+    }
+  }
+
+  return {
+    files,
+    uniqueFiles,
+    byOperation,
+    modifiedFiles: Array.from(modifiedFilesSet),
+    readFiles: Array.from(readFilesSet),
+  };
+}
+
+/**
+ * Get the most important files for a subtask (modified files first, then read files)
+ * Limited to a maximum number for display purposes
+ */
+export function getImportantFiles(
+  actions: TaskLogEntry[],
+  subtaskId: string,
+  maxFiles: number = 5
+): { modified: string[]; read: string[] } {
+  const summary = getFilesSummary(actions, subtaskId);
+
+  // Prioritize modified files
+  const modified = summary.modifiedFiles.slice(0, maxFiles);
+
+  // Fill remaining slots with read-only files
+  const remainingSlots = Math.max(0, maxFiles - modified.length);
+  const read = summary.readFiles.slice(0, remainingSlots);
+
+  return { modified, read };
+}

@@ -15,6 +15,9 @@ import {
   AlertTriangle,
   Sparkles,
   Layers,
+  FileEdit,
+  Eye,
+  FolderOpen,
 } from 'lucide-react';
 import { Badge } from '../ui/badge';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../ui/collapsible';
@@ -32,6 +35,10 @@ interface SubtaskActionListProps {
   showSubphaseGrouping?: boolean;
   /** Optional callback when "View all logs" is clicked */
   onViewAllLogs?: () => void;
+  /** Files that were modified (edited/written) during this subtask */
+  modifiedFiles?: string[];
+  /** Files that were read (but not modified) during this subtask */
+  readFiles?: string[];
 }
 
 /**
@@ -302,6 +309,96 @@ function SubphaseGroup({ subphase, actions, defaultExpanded = true }: SubphaseGr
 }
 
 /**
+ * Get filename from a path
+ */
+function getFilenameFromPath(path: string): string {
+  const parts = path.split('/');
+  return parts[parts.length - 1] || path;
+}
+
+/**
+ * Files Section Component
+ * Displays modified and read files in a compact format
+ */
+interface FilesSectionProps {
+  modifiedFiles?: string[];
+  readFiles?: string[];
+}
+
+function FilesSection({ modifiedFiles = [], readFiles = [] }: FilesSectionProps) {
+  const hasFiles = modifiedFiles.length > 0 || readFiles.length > 0;
+
+  if (!hasFiles) {
+    return null;
+  }
+
+  return (
+    <div className="mb-3 p-2 bg-secondary/30 rounded-lg border border-border/50">
+      <div className="flex items-center gap-1.5 text-xs font-medium text-muted-foreground mb-2">
+        <FolderOpen className="h-3.5 w-3.5" />
+        <span>Files Touched</span>
+      </div>
+      <div className="space-y-1.5">
+        {/* Modified Files */}
+        {modifiedFiles.length > 0 && (
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70">
+              <FileEdit className="h-3 w-3 text-purple-500" />
+              <span>Modified</span>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {modifiedFiles.map((file) => (
+                <Tooltip key={file}>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 font-mono bg-purple-500/5 border-purple-500/30 text-purple-600 dark:text-purple-400"
+                    >
+                      <FileEdit className="h-2.5 w-2.5 mr-1" />
+                      {getFilenameFromPath(file)}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="font-mono text-xs max-w-md break-all">
+                    {file}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        )}
+        {/* Read Files */}
+        {readFiles.length > 0 && (
+          <div className="space-y-1">
+            <div className="flex items-center gap-1 text-[10px] text-muted-foreground/70">
+              <Eye className="h-3 w-3 text-blue-500" />
+              <span>Read</span>
+            </div>
+            <div className="flex flex-wrap gap-1">
+              {readFiles.map((file) => (
+                <Tooltip key={file}>
+                  <TooltipTrigger asChild>
+                    <Badge
+                      variant="outline"
+                      className="text-[10px] px-1.5 py-0 font-mono bg-blue-500/5 border-blue-500/30 text-blue-600 dark:text-blue-400"
+                    >
+                      <Eye className="h-2.5 w-2.5 mr-1" />
+                      {getFilenameFromPath(file)}
+                    </Badge>
+                  </TooltipTrigger>
+                  <TooltipContent side="top" className="font-mono text-xs max-w-md break-all">
+                    {file}
+                  </TooltipContent>
+                </Tooltip>
+              ))}
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
  * SubtaskActionList Component
  *
  * Displays the top N most relevant actions for a subtask, grouped by subphase.
@@ -312,6 +409,8 @@ export function SubtaskActionList({
   maxActions = 5,
   showSubphaseGrouping = true,
   onViewAllLogs,
+  modifiedFiles,
+  readFiles,
 }: SubtaskActionListProps) {
   // Limit to maxActions and group by subphase
   const displayActions = useMemo(() => {
@@ -335,6 +434,9 @@ export function SubtaskActionList({
 
   return (
     <div className="space-y-2">
+      {/* Files Section - shows modified and read files */}
+      <FilesSection modifiedFiles={modifiedFiles} readFiles={readFiles} />
+
       {/* Header with action count */}
       <div className="flex items-center justify-between text-xs text-muted-foreground px-1">
         <span className="flex items-center gap-1.5">

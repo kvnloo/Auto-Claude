@@ -26,9 +26,15 @@ import {
   calculateSubtaskRelevance,
   calculateSubtaskRelevanceScores,
   sortSubtasksByRelevance,
+  extractFilesFromAction,
+  extractFilesFromActions,
+  getFilesSummary,
+  getImportantFiles,
   type ScoredAction,
   type ScoringContext,
   type SubtaskRelevanceScore,
+  type ExtractedFile,
+  type FilesSummary,
 } from '../actionScoring';
 import type { TaskLogEntry, TaskLogEntryType, TaskLogPhase } from '../../../shared/types/task';
 
@@ -861,6 +867,321 @@ describe('Action Scoring Algorithm', () => {
         sortSubtasksByRelevance(subtaskIds, scores);
 
         expect(subtaskIds).toEqual(originalOrder);
+      });
+    });
+  });
+
+  /**
+   * File Extraction Tests
+   */
+  describe('File Extraction', () => {
+    describe('extractFilesFromAction', () => {
+      it('should extract file path from Read tool action', () => {
+        const action = createTestAction({
+          type: 'tool_start',
+          tool_name: 'Read',
+          tool_input: '/src/components/App.tsx',
+        });
+
+        const files = extractFilesFromAction(action);
+
+        expect(files).toHaveLength(1);
+        expect(files[0].path).toBe('/src/components/App.tsx');
+        expect(files[0].filename).toBe('App.tsx');
+        expect(files[0].operation).toBe('read');
+      });
+
+      it('should extract file path from Edit tool action', () => {
+        const action = createTestAction({
+          type: 'tool_start',
+          tool_name: 'Edit',
+          tool_input: '/src/lib/utils.ts',
+        });
+
+        const files = extractFilesFromAction(action);
+
+        expect(files).toHaveLength(1);
+        expect(files[0].path).toBe('/src/lib/utils.ts');
+        expect(files[0].operation).toBe('edit');
+      });
+
+      it('should extract file path from Write tool action', () => {
+        const action = createTestAction({
+          type: 'tool_start',
+          tool_name: 'Write',
+          tool_input: '/src/new-file.ts',
+        });
+
+        const files = extractFilesFromAction(action);
+
+        expect(files).toHaveLength(1);
+        expect(files[0].path).toBe('/src/new-file.ts');
+        expect(files[0].operation).toBe('write');
+      });
+
+      it('should skip tool_end actions to avoid duplicates', () => {
+        const action = createTestAction({
+          type: 'tool_end',
+          tool_name: 'Read',
+          tool_input: '/src/file.ts',
+        });
+
+        const files = extractFilesFromAction(action);
+
+        expect(files).toHaveLength(0);
+      });
+
+      it('should skip non-tool actions', () => {
+        const action = createTestAction({
+          type: 'text',
+          content: 'Some text about /src/file.ts',
+        });
+
+        const files = extractFilesFromAction(action);
+
+        expect(files).toHaveLength(0);
+      });
+
+      it('should handle relative paths', () => {
+        const action = createTestAction({
+          type: 'tool_start',
+          tool_name: 'Read',
+          tool_input: './src/components/Button.tsx',
+        });
+
+        const files = extractFilesFromAction(action);
+
+        expect(files).toHaveLength(1);
+        expect(files[0].path).toBe('./src/components/Button.tsx');
+        expect(files[0].filename).toBe('Button.tsx');
+      });
+
+      it('should extract file from detail when tool_input is empty', () => {
+        const action = createTestAction({
+          type: 'tool_start',
+          tool_name: 'Edit',
+          tool_input: '',
+          detail: 'Editing /src/config.json',
+        });
+
+        const files = extractFilesFromAction(action);
+
+        expect(files).toHaveLength(1);
+        expect(files[0].path).toBe('/src/config.json');
+      });
+    });
+
+    describe('extractFilesFromActions', () => {
+      it('should extract files from multiple actions', () => {
+        const actions = [
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/file1.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Edit',
+            tool_input: '/src/file2.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Write',
+            tool_input: '/src/file3.ts',
+          }),
+        ];
+
+        const files = extractFilesFromActions(actions);
+
+        expect(files).toHaveLength(3);
+        expect(files.map(f => f.path)).toEqual([
+          '/src/file1.ts',
+          '/src/file2.ts',
+          '/src/file3.ts',
+        ]);
+      });
+
+      it('should skip Grep and Glob tools (search operations)', () => {
+        const actions = [
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Grep',
+            tool_input: 'searchPattern',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Glob',
+            tool_input: '**/*.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/file.ts',
+          }),
+        ];
+
+        const files = extractFilesFromActions(actions);
+
+        expect(files).toHaveLength(1);
+        expect(files[0].path).toBe('/src/file.ts');
+      });
+    });
+
+    describe('getFilesSummary', () => {
+      it('should categorize files by operation type', () => {
+        const actions = [
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/read-only.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Edit',
+            tool_input: '/src/modified.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Write',
+            tool_input: '/src/written.ts',
+          }),
+        ];
+
+        const summary = getFilesSummary(actions);
+
+        expect(summary.modifiedFiles).toContain('/src/modified.ts');
+        expect(summary.modifiedFiles).toContain('/src/written.ts');
+        expect(summary.readFiles).toContain('/src/read-only.ts');
+      });
+
+      it('should not include read file in readFiles if it was also modified', () => {
+        const actions = [
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/file.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Edit',
+            tool_input: '/src/file.ts',
+          }),
+        ];
+
+        const summary = getFilesSummary(actions);
+
+        expect(summary.modifiedFiles).toContain('/src/file.ts');
+        expect(summary.readFiles).not.toContain('/src/file.ts');
+      });
+
+      it('should filter by subtask_id when specified', () => {
+        const actions = [
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/subtask1-file.ts',
+            subtask_id: 'subtask-1',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/subtask2-file.ts',
+            subtask_id: 'subtask-2',
+          }),
+        ];
+
+        const summary = getFilesSummary(actions, 'subtask-1');
+
+        expect(summary.uniqueFiles).toHaveLength(1);
+        expect(summary.uniqueFiles).toContain('/src/subtask1-file.ts');
+        expect(summary.uniqueFiles).not.toContain('/src/subtask2-file.ts');
+      });
+
+      it('should return unique file paths', () => {
+        const actions = [
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/file.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/file.ts',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Edit',
+            tool_input: '/src/file.ts',
+          }),
+        ];
+
+        const summary = getFilesSummary(actions);
+
+        expect(summary.uniqueFiles).toHaveLength(1);
+        expect(summary.modifiedFiles).toHaveLength(1);
+      });
+    });
+
+    describe('getImportantFiles', () => {
+      it('should prioritize modified files over read files', () => {
+        const actions = [
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/read1.ts',
+            subtask_id: 'subtask-1',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Read',
+            tool_input: '/src/read2.ts',
+            subtask_id: 'subtask-1',
+          }),
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Edit',
+            tool_input: '/src/edited.ts',
+            subtask_id: 'subtask-1',
+          }),
+        ];
+
+        const result = getImportantFiles(actions, 'subtask-1', 2);
+
+        // Modified file should come first
+        expect(result.modified).toContain('/src/edited.ts');
+        // Read files fill remaining slots
+        expect(result.read).toHaveLength(1);
+      });
+
+      it('should limit to maxFiles parameter', () => {
+        const actions = Array.from({ length: 10 }, (_, i) =>
+          createTestAction({
+            type: 'tool_start',
+            tool_name: 'Edit',
+            tool_input: `/src/file${i}.ts`,
+            subtask_id: 'subtask-1',
+          })
+        );
+
+        const result = getImportantFiles(actions, 'subtask-1', 3);
+
+        expect(result.modified).toHaveLength(3);
+      });
+
+      it('should return empty arrays when no files found', () => {
+        const actions = [
+          createTestAction({
+            type: 'text',
+            content: 'Some text',
+            subtask_id: 'subtask-1',
+          }),
+        ];
+
+        const result = getImportantFiles(actions, 'subtask-1');
+
+        expect(result.modified).toHaveLength(0);
+        expect(result.read).toHaveLength(0);
       });
     });
   });

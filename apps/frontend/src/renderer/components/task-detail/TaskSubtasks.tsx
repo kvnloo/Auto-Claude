@@ -5,7 +5,7 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { Collapsible, CollapsibleTrigger, CollapsibleContent } from '../ui/collapsible';
 import { cn, calculateProgress } from '../../lib/utils';
-import { filterTopActions, calculateSubtaskRelevanceScores, sortSubtasksByRelevance } from '../../lib/actionScoring';
+import { filterTopActions, calculateSubtaskRelevanceScores, sortSubtasksByRelevance, getImportantFiles } from '../../lib/actionScoring';
 import { SubtaskActionList } from './SubtaskActionList';
 import type { Task, TaskLogs, TaskLogEntry } from '../../../shared/types';
 
@@ -178,6 +178,10 @@ export function TaskSubtasks({ task, phaseLogs, onViewAllLogs }: TaskSubtasksPro
               const hasActions = actionCount > 0;
               // Only compute scored actions when expanded (memoized via useCallback)
               const scoredActions = isExpanded ? getSubtaskActions(subtask.id) : [];
+              // Get files touched during this subtask (only when expanded)
+              const importantFiles = isExpanded && hasActions
+                ? getImportantFiles(allEntries, subtask.id, 5)
+                : { modified: [], read: [] };
               // Get relevance score for this subtask
               const relevanceScore = relevanceScores.get(subtask.id);
               // Original index (1-based) for display
@@ -321,6 +325,8 @@ export function TaskSubtasks({ task, phaseLogs, onViewAllLogs }: TaskSubtasksPro
                             maxActions={5}
                             showSubphaseGrouping={true}
                             onViewAllLogs={onViewAllLogs}
+                            modifiedFiles={importantFiles.modified}
+                            readFiles={importantFiles.read}
                           />
                         </div>
                       </div>
