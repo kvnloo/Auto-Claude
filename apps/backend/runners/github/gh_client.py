@@ -711,3 +711,440 @@ class GHClient:
             # Last commit is the HEAD
             return commits[-1].get("oid")
         return None
+
+    # =========================================================================
+    # Claim metadata methods for distributed task coordination
+    # =========================================================================
+
+    # Claim label constants
+    LABEL_AVAILABLE = "task:available"
+    LABEL_CLAIMED = "task:claimed"
+
+    # Pattern for parsing claim metadata from HTML comments
+    _CLAIM_METADATA_PATTERN = None
+
+    @classmethod
+    def _get_claim_metadata_pattern(cls):
+        """Get compiled regex pattern for claim metadata (lazy initialization)."""
+        if cls._CLAIM_METADATA_PATTERN is None:
+            import re
+            cls._CLAIM_METADATA_PATTERN = re.compile(
+                r"<!--\s*CLAIM_METADATA:\s*(\{.*?\})\s*-->", re.DOTALL
+            )
+        return cls._CLAIM_METADATA_PATTERN
+
+    def parse_claim_metadata(self, comment_body: str) -> dict[str, Any] | None:
+        """
+        Parse claim metadata from a GitHub comment body.
+
+        Expects JSON in an HTML comment format:
+        <!-- CLAIM_METADATA: {"claimed_by": "user", "claim_id": "xxx", ...} -->
+
+        Args:
+            comment_body: The comment body text
+
+        Returns:
+            Parsed metadata dict with keys like 'claimed_by', 'claim_id',
+            'timestamp', 'fork_reputation', or None if not found/invalid
+        """
+        if not comment_body:
+            return None
+
+        pattern = self._get_claim_metadata_pattern()
+        match = pattern.search(comment_body)
+        if not match:
+            return None
+
+        try:
+            return json.loads(match.group(1))
+        except json.JSONDecodeError:
+            logger.warning("Failed to parse claim metadata JSON from comment")
+            return None
+
+    def format_claim_comment(
+        self,
+        fork_owner: str,
+        claim_id: str,
+        reputation_data: dict[str, Any] | None = None,
+        issue_number: int | None = None,
+    ) -> str:
+        """
+        Format a claim comment for posting to GitHub.
+
+        Creates a human-readable comment with embedded machine-readable metadata.
+
+        Args:
+            fork_owner: GitHub username of the fork owner
+            claim_id: Unique claim identifier (e.g., "claim-abc123def456")
+            reputation_data: Optional reputation info dict with keys:
+                - score: int
+                - tier: str (new, bronze, silver, gold, platinum)
+                - total_claims: int
+                - successful_merges: int
+                - reliability_score: float (0-1)
+            issue_number: Optional issue number for metadata
+
+        Returns:
+            Formatted comment body with embedded CLAIM_METADATA JSON
+        """
+        from datetime import datetime, timezone
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        # Build metadata dict
+        metadata: dict[str, Any] = {
+            "claimed_by": fork_owner,
+            "claim_id": claim_id,
+            "timestamp": timestamp,
+        }
+
+        if issue_number is not None:
+            metadata["issue_number"] = issue_number
+
+        # Add reputation if provided
+        if reputation_data:
+            metadata["fork_reputation"] = reputation_data
+
+        # Build human-readable comment
+        lines = [
+            f"## Task Claimed by @{fork_owner}",
+            "",
+            f"**Claim ID:** `{claim_id}`",
+            f"**Timestamp:** {timestamp}",
+            "",
+        ]
+
+        # Add reputation info if available
+        if reputation_data:
+            score = reputation_data.get("score", 0)
+            tier = reputation_data.get("tier", "new")
+            merges = reputation_data.get("successful_merges", 0)
+            reliability = reputation_data.get("reliability_score", 0.0)
+
+            lines.extend([
+                "### Fork Reputation",
+                f"- **Score:** {score} ({tier})",
+                f"- **Completed Tasks:** {merges}",
+                f"- **Reliability:** {reliability:.0%}",
+                "",
+            ])
+
+        lines.extend([
+            "---",
+            "*This claim will expire in 7 days if no PR is submitted.*",
+            "",
+            f"<!-- CLAIM_METADATA: {json.dumps(metadata)} -->",
+        ])
+
+        return "\n".join(lines)
+
+    async def post_claim_comment(
+        self,
+        issue_number: int,
+        fork_owner: str,
+        claim_id: str,
+        reputation_data: dict[str, Any] | None = None,
+    ) -> None:
+        """
+        Post a claim comment to an issue.
+
+        This atomically posts a formatted claim comment with embedded metadata
+        that can be parsed by parse_claim_metadata().
+
+        Args:
+            issue_number: Issue number to comment on
+            fork_owner: GitHub username of the fork owner
+            claim_id: Unique claim identifier
+            reputation_data: Optional reputation info dict
+
+        Raises:
+            GHCommandError: If the comment fails to post
+        """
+        comment_body = self.format_claim_comment(
+            fork_owner=fork_owner,
+            claim_id=claim_id,
+            reputation_data=reputation_data,
+            issue_number=issue_number,
+        )
+        await self.issue_comment(issue_number, comment_body)
+        logger.info(
+            f"Posted claim comment for @{fork_owner} on issue #{issue_number} "
+            f"(claim_id: {claim_id})"
+        )
+
+    async def get_claim_status(
+        self,
+        issue_number: int,
+    ) -> dict[str, Any]:
+        """
+        Get the claim status of an issue.
+
+        Checks labels and comments to determine if an issue is claimed,
+        available, or in an unknown state.
+
+        Args:
+            issue_number: Issue number to check
+
+        Returns:
+            Dict with claim status:
+            {
+                "status": "claimed" | "available" | "unknown",
+                "issue_number": int,
+                "labels": list[str],
+                "has_available_label": bool,
+                "has_claimed_label": bool,
+                "claim_metadata": dict | None,  # From most recent claim comment
+                "claimed_by": str | None,
+                "claim_id": str | None,
+                "claim_timestamp": str | None,
+            }
+        """
+        # Fetch issue with labels and comments
+        issue_data = await self.issue_get(
+            issue_number,
+            json_fields=["number", "title", "state", "labels", "comments"],
+        )
+
+        # Extract labels
+        labels_raw = issue_data.get("labels", [])
+        labels: list[str] = []
+        for label in labels_raw:
+            if isinstance(label, str):
+                labels.append(label)
+            elif isinstance(label, dict):
+                name = label.get("name")
+                if name:
+                    labels.append(name)
+
+        has_available = self.LABEL_AVAILABLE in labels
+        has_claimed = self.LABEL_CLAIMED in labels
+
+        # Try to find claim metadata from comments
+        claim_metadata: dict[str, Any] | None = None
+        comments = issue_data.get("comments", [])
+
+        # Sort comments by createdAt descending to find most recent claim
+        sorted_comments = sorted(
+            comments,
+            key=lambda c: c.get("createdAt", c.get("created_at", "")),
+            reverse=True,
+        )
+
+        for comment in sorted_comments:
+            body = comment.get("body", "")
+            metadata = self.parse_claim_metadata(body)
+            if metadata and metadata.get("claim_id"):
+                claim_metadata = metadata
+                break
+
+        # Determine status
+        if has_claimed and not has_available:
+            status = "claimed"
+        elif has_available and not has_claimed:
+            status = "available"
+        elif has_claimed and has_available:
+            # Conflicting state - likely needs reconciliation
+            status = "claimed"  # Prefer claimed in conflict
+            logger.warning(
+                f"Issue #{issue_number} has conflicting labels "
+                f"(both {self.LABEL_AVAILABLE} and {self.LABEL_CLAIMED})"
+            )
+        else:
+            status = "unknown"
+
+        return {
+            "status": status,
+            "issue_number": issue_number,
+            "labels": labels,
+            "has_available_label": has_available,
+            "has_claimed_label": has_claimed,
+            "claim_metadata": claim_metadata,
+            "claimed_by": claim_metadata.get("claimed_by") if claim_metadata else None,
+            "claim_id": claim_metadata.get("claim_id") if claim_metadata else None,
+            "claim_timestamp": claim_metadata.get("timestamp") if claim_metadata else None,
+        }
+
+    def format_release_comment(
+        self,
+        fork_owner: str,
+        claim_id: str | None = None,
+        reason: str | None = None,
+    ) -> str:
+        """
+        Format a release comment for posting to GitHub.
+
+        Args:
+            fork_owner: GitHub username of the fork owner releasing the claim
+            claim_id: Optional claim ID being released
+            reason: Optional reason for release
+
+        Returns:
+            Formatted release comment body
+        """
+        from datetime import datetime, timezone
+
+        timestamp = datetime.now(timezone.utc).isoformat()
+
+        lines = [
+            f"## Task Released by @{fork_owner}",
+            "",
+            f"**Released At:** {timestamp}",
+        ]
+
+        if claim_id:
+            lines.append(f"**Claim ID:** `{claim_id}`")
+
+        if reason:
+            lines.extend(["", f"**Reason:** {reason}"])
+
+        lines.extend([
+            "",
+            "---",
+            "*This task is now available for claiming by other contributors.*",
+        ])
+
+        return "\n".join(lines)
+
+    async def post_release_comment(
+        self,
+        issue_number: int,
+        fork_owner: str,
+        claim_id: str | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """
+        Post a release comment to an issue.
+
+        Args:
+            issue_number: Issue number to comment on
+            fork_owner: GitHub username of the fork owner
+            claim_id: Optional claim ID being released
+            reason: Optional reason for release
+
+        Raises:
+            GHCommandError: If the comment fails to post
+        """
+        comment_body = self.format_release_comment(
+            fork_owner=fork_owner,
+            claim_id=claim_id,
+            reason=reason,
+        )
+        await self.issue_comment(issue_number, comment_body)
+        logger.info(
+            f"Posted release comment for @{fork_owner} on issue #{issue_number}"
+        )
+
+    async def claim_issue(
+        self,
+        issue_number: int,
+        fork_owner: str,
+        claim_id: str,
+        reputation_data: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """
+        Claim an issue by updating labels and posting a claim comment.
+
+        This is a convenience method that performs the full claim operation:
+        1. Adds task:claimed label
+        2. Removes task:available label
+        3. Posts claim comment with metadata
+
+        Args:
+            issue_number: Issue number to claim
+            fork_owner: GitHub username of the fork owner
+            claim_id: Unique claim identifier
+            reputation_data: Optional reputation info dict
+
+        Returns:
+            Dict with claim result:
+            {
+                "success": bool,
+                "issue_number": int,
+                "claim_id": str,
+                "claimed_by": str,
+            }
+
+        Raises:
+            GHCommandError: If any step fails
+        """
+        # Add claimed label
+        await self.issue_add_labels(issue_number, [self.LABEL_CLAIMED])
+
+        # Remove available label (don't raise on error - might not exist)
+        await self.issue_remove_labels(issue_number, [self.LABEL_AVAILABLE])
+
+        # Post claim comment
+        await self.post_claim_comment(
+            issue_number=issue_number,
+            fork_owner=fork_owner,
+            claim_id=claim_id,
+            reputation_data=reputation_data,
+        )
+
+        logger.info(
+            f"Successfully claimed issue #{issue_number} for @{fork_owner} "
+            f"(claim_id: {claim_id})"
+        )
+
+        return {
+            "success": True,
+            "issue_number": issue_number,
+            "claim_id": claim_id,
+            "claimed_by": fork_owner,
+        }
+
+    async def release_issue(
+        self,
+        issue_number: int,
+        fork_owner: str,
+        claim_id: str | None = None,
+        reason: str | None = None,
+    ) -> dict[str, Any]:
+        """
+        Release a claimed issue by updating labels and posting a release comment.
+
+        This is a convenience method that performs the full release operation:
+        1. Removes task:claimed label
+        2. Adds task:available label
+        3. Posts release comment
+
+        Args:
+            issue_number: Issue number to release
+            fork_owner: GitHub username of the fork owner
+            claim_id: Optional claim ID being released
+            reason: Optional reason for release
+
+        Returns:
+            Dict with release result:
+            {
+                "success": bool,
+                "issue_number": int,
+                "released_by": str,
+            }
+
+        Raises:
+            GHCommandError: If any step fails
+        """
+        # Remove claimed label (don't raise on error - might not exist)
+        await self.issue_remove_labels(issue_number, [self.LABEL_CLAIMED])
+
+        # Add available label
+        await self.issue_add_labels(issue_number, [self.LABEL_AVAILABLE])
+
+        # Post release comment
+        await self.post_release_comment(
+            issue_number=issue_number,
+            fork_owner=fork_owner,
+            claim_id=claim_id,
+            reason=reason,
+        )
+
+        logger.info(
+            f"Successfully released issue #{issue_number} by @{fork_owner}"
+        )
+
+        return {
+            "success": True,
+            "issue_number": issue_number,
+            "released_by": fork_owner,
+        }
