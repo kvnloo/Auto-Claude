@@ -1073,4 +1073,520 @@ describe('Fork Detection Integration Tests', () => {
       });
     });
   });
+
+  /**
+   * Manual Parent Repository Override Integration Tests
+   *
+   * These tests verify that manually configured parent repositories work correctly
+   * for loading issues and PRs from upstream repositories.
+   *
+   * End-to-end verification steps:
+   * 1. Enter manual parent repo in settings (owner/repo format)
+   * 2. Save configuration
+   * 3. Verify issues and PRs now load from manually configured parent
+   * 4. Test with invalid parent repo - verify error handling
+   */
+  describe('Manual Parent Repository Override Integration Tests', () => {
+    const manualOverrideProject = {
+      id: 'manual-override-project-id',
+      name: 'Manual Override Project',
+      path: '/test/manual-override-project',
+      autoBuildPath: '.auto-claude'
+    } as import('../../../../shared/types').Project;
+
+    const mockManuallyConfiguredParentIssues = [
+      {
+        id: 200,
+        number: 42,
+        title: 'Issue from manually configured parent',
+        body: 'This issue is from a manually configured parent repository',
+        state: 'open',
+        labels: [{ name: 'enhancement', color: '00ff00' }],
+        assignees: [],
+        user: { login: 'upstream-maintainer', avatar_url: 'https://avatars.githubusercontent.com/u/999' },
+        created_at: '2024-02-01T00:00:00Z',
+        updated_at: '2024-02-02T00:00:00Z',
+        comments: 3,
+        url: 'https://api.github.com/repos/upstream-org/main-project/issues/42',
+        html_url: 'https://github.com/upstream-org/main-project/issues/42'
+      },
+      {
+        id: 201,
+        number: 43,
+        title: 'Another upstream issue',
+        body: 'Another issue from the manually configured parent',
+        state: 'open',
+        labels: [],
+        assignees: [],
+        user: { login: 'contributor', avatar_url: 'https://avatars.githubusercontent.com/u/888' },
+        created_at: '2024-02-03T00:00:00Z',
+        updated_at: '2024-02-04T00:00:00Z',
+        comments: 0,
+        url: 'https://api.github.com/repos/upstream-org/main-project/issues/43',
+        html_url: 'https://github.com/upstream-org/main-project/issues/43'
+      }
+    ];
+
+    const mockManuallyConfiguredParentPRs = [
+      {
+        number: 100,
+        title: 'Feature PR from manual parent',
+        body: 'This PR is from the manually configured parent repository',
+        state: 'open',
+        user: { login: 'contributor', avatar_url: 'https://avatars.githubusercontent.com/u/777' },
+        head: { ref: 'feature-branch' },
+        base: { ref: 'main' },
+        additions: 100,
+        deletions: 20,
+        changed_files: 5,
+        assignees: [],
+        created_at: '2024-02-05T00:00:00Z',
+        updated_at: '2024-02-06T00:00:00Z',
+        html_url: 'https://github.com/upstream-org/main-project/pull/100'
+      }
+    ];
+
+    beforeEach(() => {
+      mockGetProject.mockReturnValue(manualOverrideProject);
+      mockExistsSync.mockReturnValue(true);
+    });
+
+    describe('Manual parent repo configuration loading', () => {
+      it('should load manually configured parent repo from .env', async () => {
+        // Simulate user entering manual parent repo in settings (owner/repo format)
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        const { getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        expect(config).not.toBeNull();
+        expect(config?.isFork).toBe(true);
+        expect(config?.parentRepo).toBe('upstream-org/main-project');
+      });
+
+      it('should load parent repo even when IS_FORK is not explicitly set', async () => {
+        // Manual parent repo configured, but IS_FORK not set (implicit override scenario)
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        const { getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        expect(config).not.toBeNull();
+        expect(config?.parentRepo).toBe('upstream-org/main-project');
+        // Note: isFork is not set, so issues will still load from fork repo
+        // This tests that parentRepo is stored even without isFork
+      });
+
+      it('should handle GitHub URL format for manual parent repo', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=https://github.com/upstream-org/main-project'
+        );
+
+        const { getGitHubConfig, normalizeRepoReference } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        expect(config?.parentRepo).toBe('https://github.com/upstream-org/main-project');
+        // The normalization happens when using the repo
+        expect(normalizeRepoReference(config?.parentRepo || '')).toBe('upstream-org/main-project');
+      });
+
+      it('should handle git URL format for manual parent repo', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=git@github.com:upstream-org/main-project.git'
+        );
+
+        const { getGitHubConfig, normalizeRepoReference } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        expect(config?.parentRepo).toBe('git@github.com:upstream-org/main-project.git');
+        expect(normalizeRepoReference(config?.parentRepo || '')).toBe('upstream-org/main-project');
+      });
+    });
+
+    describe('Issue loading from manually configured parent', () => {
+      it('should load issues from manually configured parent repo', async () => {
+        // Step 2 of verification: Config saved, now verify issues load from manual parent
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockManuallyConfiguredParentIssues
+        });
+
+        const { registerGetIssues } = await import('../issue-handlers');
+        registerGetIssues();
+
+        const result = await invokeHandler('github:getIssues', {}, 'manual-override-project-id', 'open') as {
+          success: boolean;
+          data?: unknown[];
+        };
+
+        expect(result.success).toBe(true);
+        expect(result.data).toHaveLength(2);
+
+        // Verify API was called with manually configured parent repo
+        expect(mockFetch).toHaveBeenCalledWith(
+          'https://api.github.com/repos/upstream-org/main-project/issues?state=open&per_page=100&sort=updated',
+          expect.any(Object)
+        );
+      });
+
+      it('should load single issue from manually configured parent repo', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockManuallyConfiguredParentIssues[0]
+        });
+
+        const { registerGetIssue } = await import('../issue-handlers');
+        registerGetIssue();
+
+        const result = await invokeHandler('github:getIssue', {}, 'manual-override-project-id', 42) as {
+          success: boolean;
+          data?: { number: number; title: string };
+        };
+
+        expect(result.success).toBe(true);
+        expect(result.data?.number).toBe(42);
+        expect(result.data?.title).toBe('Issue from manually configured parent');
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          'https://api.github.com/repos/upstream-org/main-project/issues/42',
+          expect.any(Object)
+        );
+      });
+
+      it('should load issue comments from manually configured parent repo', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        const mockComments = [
+          { id: 1, body: 'Comment from upstream', user: { login: 'upstream-maintainer', avatar_url: '' } }
+        ];
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockComments
+        });
+
+        const { registerGetIssueComments } = await import('../issue-handlers');
+        registerGetIssueComments();
+
+        const result = await invokeHandler('github:getIssueComments', {}, 'manual-override-project-id', 42) as {
+          success: boolean;
+          data?: unknown[];
+        };
+
+        expect(result.success).toBe(true);
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          'https://api.github.com/repos/upstream-org/main-project/issues/42/comments',
+          expect.any(Object)
+        );
+      });
+    });
+
+    describe('getTargetRepo with manual parent override', () => {
+      it('should use manually configured parent for issues/PRs', async () => {
+        const { getTargetRepo } = await import('../utils');
+
+        const config = {
+          token: 'test-token',
+          repo: 'my-fork/project',
+          isFork: true,
+          parentRepo: 'upstream-org/main-project' // Manually configured
+        };
+
+        // For issues/PRs, should use the manual parent
+        const issueRepo = getTargetRepo(config, true);
+        expect(issueRepo).toBe('upstream-org/main-project');
+      });
+
+      it('should use fork repo for code operations even with manual parent configured', async () => {
+        const { getTargetRepo } = await import('../utils');
+
+        const config = {
+          token: 'test-token',
+          repo: 'my-fork/project',
+          isFork: true,
+          parentRepo: 'upstream-org/main-project'
+        };
+
+        // For code operations, should use fork repo
+        const codeRepo = getTargetRepo(config, false);
+        expect(codeRepo).toBe('my-fork/project');
+      });
+
+      it('should override auto-detected parent with manual value', async () => {
+        const { getTargetRepo } = await import('../utils');
+
+        // Simulate scenario where user manually overrides the detected parent
+        // (e.g., pointing to a different upstream fork)
+        const config = {
+          token: 'test-token',
+          repo: 'user/forked-repo',
+          isFork: true,
+          parentRepo: 'different-upstream/different-project' // Manual override
+        };
+
+        const issueRepo = getTargetRepo(config, true);
+        expect(issueRepo).toBe('different-upstream/different-project');
+      });
+
+      it('should handle URL format for manually configured parent', async () => {
+        const { getTargetRepo } = await import('../utils');
+
+        const config = {
+          token: 'test-token',
+          repo: 'my-fork/project',
+          isFork: true,
+          parentRepo: 'https://github.com/upstream-org/main-project.git'
+        };
+
+        const issueRepo = getTargetRepo(config, true);
+        expect(issueRepo).toBe('upstream-org/main-project'); // Should be normalized
+      });
+    });
+
+    describe('Error handling for invalid manual parent repo', () => {
+      it('should handle 404 from manually configured parent repo (deleted or wrong)', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=nonexistent-org/deleted-repo'
+        );
+
+        const { githubFetchWithFallback } = await import('../utils');
+        const { getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        expect(config).not.toBeNull();
+
+        // First call to nonexistent parent returns 404, second call to fork succeeds
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 404,
+            statusText: 'Not Found',
+            text: async () => 'Repository not found'
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => [] // Empty issues from fork
+          });
+
+        const result = await githubFetchWithFallback(
+          config!,
+          '/repos/{repo}/issues',
+          true
+        );
+
+        // Should have fallen back to fork repo
+        expect(result.usedFallback).toBe(true);
+        expect(result.usedRepo).toBe('my-fork/project');
+      });
+
+      it('should handle 403 from manually configured parent repo (no access)', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=private-org/private-repo'
+        );
+
+        const { githubFetchWithFallback, getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        // First call to private parent returns 403
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: false,
+            status: 403,
+            statusText: 'Forbidden',
+            text: async () => 'Must have push access to view repository pull requests'
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => []
+          });
+
+        const result = await githubFetchWithFallback(
+          config!,
+          '/repos/{repo}/pulls',
+          true
+        );
+
+        expect(result.usedFallback).toBe(true);
+        expect(result.usedRepo).toBe('my-fork/project');
+      });
+
+      it('should not attempt fallback when fork repo itself fails', async () => {
+        // Scenario: User configured wrong fork repo, not a fallback scenario
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=wrong/repo'
+        );
+
+        const { githubFetchWithFallback, getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: async () => 'Repository not found'
+        });
+
+        await expect(
+          githubFetchWithFallback(config!, '/repos/{repo}/issues', true)
+        ).rejects.toThrow('GitHub API error: 404 Not Found');
+
+        // Only one fetch call (no fallback for non-fork repos)
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('Manual override without fork detection', () => {
+      it('should use fork repo when parentRepo set but isFork is not set', async () => {
+        // User manually set parent repo but forgot to set IS_FORK=true
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        const { getTargetRepo, getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        // Without isFork=true, should use fork repo (parentRepo is ignored)
+        const issueRepo = getTargetRepo(config!, true);
+        expect(issueRepo).toBe('my-fork/project');
+      });
+
+      it('should use parent repo when both IS_FORK=true and GITHUB_PARENT_REPO are set', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        const { getTargetRepo, getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        const issueRepo = getTargetRepo(config!, true);
+        expect(issueRepo).toBe('upstream-org/main-project');
+      });
+    });
+
+    describe('Complete manual override workflow simulation', () => {
+      it('should complete full workflow: configure manual parent, load issues and PRs', async () => {
+        // Step 1 & 2: User enters manual parent repo and saves configuration
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=upstream-org/main-project'
+        );
+
+        // Verify config is loaded correctly
+        const { getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        expect(config?.parentRepo).toBe('upstream-org/main-project');
+        expect(config?.isFork).toBe(true);
+
+        // Step 3: Verify issues load from manually configured parent
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockManuallyConfiguredParentIssues
+        });
+
+        const { registerGetIssues } = await import('../issue-handlers');
+        registerGetIssues();
+
+        const issuesResult = await invokeHandler('github:getIssues', {}, 'manual-override-project-id', 'open') as {
+          success: boolean;
+          data?: unknown[];
+        };
+
+        expect(issuesResult.success).toBe(true);
+        expect(issuesResult.data).toHaveLength(2);
+        expect(mockFetch).toHaveBeenCalledWith(
+          'https://api.github.com/repos/upstream-org/main-project/issues?state=open&per_page=100&sort=updated',
+          expect.any(Object)
+        );
+      });
+
+      it('should handle scenario where user clears manual override', async () => {
+        // User clears the manual parent repo (empty string)
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true'
+          // No GITHUB_PARENT_REPO - user cleared it
+        );
+
+        const { getTargetRepo, getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(manualOverrideProject);
+
+        // Even with isFork=true, without parentRepo, should use fork
+        const issueRepo = getTargetRepo(config!, true);
+        expect(issueRepo).toBe('my-fork/project');
+      });
+
+      it('should allow switching from one parent to another', async () => {
+        // First config with one parent
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=org-a/project-a'
+        );
+
+        const { getTargetRepo, getGitHubConfig } = await import('../utils');
+        let config = getGitHubConfig(manualOverrideProject);
+
+        expect(getTargetRepo(config!, true)).toBe('org-a/project-a');
+
+        // User switches to a different parent
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=test-token\nGITHUB_REPO=my-fork/project\nIS_FORK=true\nGITHUB_PARENT_REPO=org-b/project-b'
+        );
+
+        config = getGitHubConfig(manualOverrideProject);
+        expect(getTargetRepo(config!, true)).toBe('org-b/project-b');
+      });
+    });
+
+    describe('Validation edge cases for manual parent repo input', () => {
+      it('should handle parent repo with special characters in name', async () => {
+        const { normalizeRepoReference } = await import('../utils');
+
+        // Test repos with dots, hyphens, underscores
+        expect(normalizeRepoReference('org.name/repo-name_v2')).toBe('org.name/repo-name_v2');
+        expect(normalizeRepoReference('my-org/my.project')).toBe('my-org/my.project');
+        expect(normalizeRepoReference('org_123/repo_456')).toBe('org_123/repo_456');
+      });
+
+      it('should handle parent repo with trailing slash', async () => {
+        const { normalizeRepoReference } = await import('../utils');
+
+        // This is an edge case - URLs sometimes have trailing slashes
+        expect(normalizeRepoReference('https://github.com/owner/repo/')).toBe('owner/repo/');
+      });
+
+      it('should handle whitespace in parent repo input', async () => {
+        const { normalizeRepoReference } = await import('../utils');
+
+        // Trailing and leading whitespace is trimmed for plain owner/repo format
+        expect(normalizeRepoReference('  owner/repo  ')).toBe('owner/repo');
+
+        // For URLs, the function expects properly formatted input
+        // In practice, UI input is trimmed before being saved to config
+        expect(normalizeRepoReference('https://github.com/owner/repo')).toBe('owner/repo');
+
+        // Test that the function correctly trims after URL normalization
+        expect(normalizeRepoReference('https://github.com/owner/repo  ')).toBe('owner/repo');
+      });
+
+      it('should handle empty parent repo gracefully', async () => {
+        const { normalizeRepoReference } = await import('../utils');
+
+        expect(normalizeRepoReference('')).toBe('');
+        expect(normalizeRepoReference('   ')).toBe('');
+      });
+    });
+  });
 });
