@@ -12,10 +12,15 @@ from .insights_runner import main as run_insights
 from .roadmap_runner import main as run_roadmap
 from .spec_runner import main as run_spec
 
+# Autonomous mode runner
+# Import directly: from runners.autonomous_runner import AutonomousRunner
+from .autonomous_runner import main as run_autonomous
+
 __all__ = [
     "run_spec",
     "run_roadmap",
     "run_ideation",
     "run_insights",
     "run_ai_analyzer",
+    "run_autonomous",
 ]
