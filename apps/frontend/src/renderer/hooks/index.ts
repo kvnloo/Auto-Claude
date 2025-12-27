@@ -7,3 +7,4 @@ export { useGitHubConnection } from './useGitHubConnection';
 export { useInfrastructureStatus } from './useInfrastructureStatus';
 export { useIpcListeners } from './useIpc';
 export { useVirtualizedTree } from './useVirtualizedTree';
+export { useReviewChat } from './useReviewChat';
