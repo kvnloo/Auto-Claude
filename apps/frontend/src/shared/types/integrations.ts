@@ -77,6 +77,17 @@ export interface GitHubRepository {
     login: string;
     avatarUrl?: string;
   };
+  fork?: boolean;
+  parentRepository?: {
+    id: number;
+    name: string;
+    fullName: string;
+    owner: {
+      login: string;
+      avatarUrl?: string;
+    };
+    url: string;
+  };
 }
 
 export interface GitHubIssue {
