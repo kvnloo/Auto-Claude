@@ -234,13 +234,6 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
             <span>{UI_SCALE_MAX}%</span>
           </div>
         </div>
-
-        {/* Preview hint */}
-        <div className="rounded-lg bg-muted/50 border border-border p-4 text-sm">
-          <p className="text-muted-foreground">
-            {t('scale.preview')}
-          </p>
-        </div>
       </div>
     </SettingsSection>
   );
