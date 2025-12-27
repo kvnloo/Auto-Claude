@@ -76,6 +76,45 @@ const mockGraphData: GraphData = {
         endLine: 80,
         signature: 'render(): JSX.Element'
       }
+    },
+    {
+      id: 'func-init',
+      name: 'initialize',
+      type: 'function',
+      filePath: 'src/main.ts',
+      depth: 4,
+      metadata: {
+        loc: 15,
+        startLine: 5,
+        endLine: 20,
+        signature: 'initialize(): void'
+      }
+    },
+    {
+      id: 'symbol-state',
+      name: 'appState',
+      type: 'symbol',
+      filePath: 'src/App.tsx',
+      depth: 5,
+      metadata: {
+        loc: 5,
+        startLine: 12,
+        endLine: 16,
+        docstring: 'Application state object'
+      }
+    },
+    {
+      id: 'symbol-config',
+      name: 'CONFIG',
+      type: 'symbol',
+      filePath: 'src/main.ts',
+      depth: 5,
+      metadata: {
+        loc: 3,
+        startLine: 1,
+        endLine: 3,
+        docstring: 'Configuration constants'
+      }
     }
   ],
   edges: [
@@ -108,28 +147,52 @@ const mockGraphData: GraphData = {
       source: 'file-main',
       target: 'file-app',
       type: 'imports'
+    },
+    {
+      id: 'edge-6',
+      source: 'file-main',
+      target: 'func-init',
+      type: 'contains'
+    },
+    {
+      id: 'edge-7',
+      source: 'class-app',
+      target: 'symbol-state',
+      type: 'contains'
+    },
+    {
+      id: 'edge-8',
+      source: 'file-main',
+      target: 'symbol-config',
+      type: 'contains'
+    },
+    {
+      id: 'edge-9',
+      source: 'func-render',
+      target: 'symbol-state',
+      type: 'calls'
     }
   ],
   projectId: 'mock-project',
   rootPath: '/mock/project',
   generatedAt: new Date(),
   stats: {
-    totalNodes: 5,
+    totalNodes: 8,
     nodesByType: {
       directory: 1,
       file: 2,
       class: 1,
-      function: 1,
-      symbol: 0
+      function: 2,
+      symbol: 2
     } as Record<NodeType, number>,
     edgesByType: {
       imports: 1,
-      calls: 0,
+      calls: 1,
       inherits: 0,
-      contains: 4
+      contains: 7
     } as Record<EdgeType, number>,
     filesParsed: 2,
-    totalLoc: 200,
+    totalLoc: 253,
     languages: ['typescript'] as ParserLanguage[],
     parseDurationMs: 100
   }
