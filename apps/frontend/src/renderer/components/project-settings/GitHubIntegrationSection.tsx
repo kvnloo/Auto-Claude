@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Github, RefreshCw, KeyRound, Info, CheckCircle2, GitFork, Loader2, Search } from 'lucide-react';
+import { Github, RefreshCw, KeyRound, Info, CheckCircle2, GitFork, Loader2, Search, AlertCircle, AlertTriangle } from 'lucide-react';
 import { CollapsibleSection } from './CollapsibleSection';
 import { StatusBadge } from './StatusBadge';
 import { PasswordInput } from './PasswordInput';
@@ -241,6 +241,23 @@ export function GitHubIntegrationSection({
             </div>
           )}
 
+          {/* Warning: Fork detected but parent inaccessible */}
+          {gitHubConnectionStatus?.connected && gitHubConnectionStatus?.isFork && !gitHubConnectionStatus?.parentRepository && (
+            <div className="rounded-lg border border-warning/30 bg-warning/5 p-3">
+              <div className="flex items-start gap-3">
+                <AlertTriangle className="h-5 w-5 text-warning mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-foreground">Parent Repository Inaccessible</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    This repository is a fork, but the parent repository could not be accessed.
+                    This may be due to permissions or the parent being private.
+                    You can manually specify the parent repository below to enable issue syncing from the upstream repository.
+                  </p>
+                </div>
+              </div>
+            </div>
+          )}
+
           {/* Fork Detection Button */}
           {envConfig.githubToken && envConfig.githubRepo && gitHubConnectionStatus?.connected && (
             <div className="space-y-2">
@@ -272,7 +289,13 @@ export function GitHubIntegrationSection({
                 </Button>
               </div>
               {forkDetectionError && (
-                <p className="text-xs text-destructive">{forkDetectionError}</p>
+                <div className="flex items-start gap-2 rounded-lg bg-destructive/10 border border-destructive/30 p-3 text-sm text-destructive">
+                  <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                  <div className="flex-1">
+                    <p className="font-medium">Fork Detection Failed</p>
+                    <p className="text-xs mt-1 opacity-90">{forkDetectionError}</p>
+                  </div>
+                </div>
               )}
               {!gitHubConnectionStatus?.isFork && !isDetectingFork && !forkDetectionError && (
                 <p className="text-xs text-muted-foreground">
