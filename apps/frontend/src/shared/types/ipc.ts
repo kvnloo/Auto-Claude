@@ -595,6 +595,20 @@ export interface ElectronAPI {
     }) => void
   ) => () => void;
 
+  // Connection status operations (multi-instance support)
+  getBackendMode: () => Promise<IPCResult<'primary' | 'secondary'>>;
+  getConnectionStatus: () => Promise<IPCResult<{
+    state: 'disconnected' | 'connecting' | 'connected' | 'reconnecting';
+    isActive: boolean;
+    backendAddress: string | null;
+    eventsReceived: number;
+    reconnectAttempts: number;
+  }>>;
+  reconnect: () => Promise<IPCResult<void>>;
+  onConnectionStatusChange: (
+    callback: (state: 'disconnected' | 'connecting' | 'connected' | 'reconnecting') => void
+  ) => () => void;
+
   // GitHub API (nested for organized access)
   github: import('../../preload/api/modules/github-api').GitHubAPI;
 }

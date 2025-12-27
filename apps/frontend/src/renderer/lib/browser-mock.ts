@@ -170,7 +170,28 @@ const browserMockAPI: ElectronAPI = {
     onAnalyzePreviewProgress: () => () => {},
     onAnalyzePreviewComplete: () => () => {},
     onAnalyzePreviewError: () => () => {}
-  }
+  },
+
+  // Connection status operations (multi-instance support)
+  getBackendMode: async () => ({
+    success: true,
+    data: 'primary' as const
+  }),
+  getConnectionStatus: async () => ({
+    success: true,
+    data: {
+      state: 'connected' as const,
+      isActive: false,
+      backendAddress: null,
+      eventsReceived: 0,
+      reconnectAttempts: 0
+    }
+  }),
+  reconnect: async () => ({
+    success: true,
+    data: undefined
+  }),
+  onConnectionStatusChange: () => () => {}
 };
 
 /**
