@@ -29,3 +29,5 @@ export { default as TerminalOutput } from './TerminalOutput';
 // List Item Components
 export { default as ProjectListItem } from './ProjectListItem';
 export { default as IssueListItem } from './IssueListItem';
+export { default as PRListItem } from './PRListItem';
+export { default as TerminalListItem } from './TerminalListItem';
