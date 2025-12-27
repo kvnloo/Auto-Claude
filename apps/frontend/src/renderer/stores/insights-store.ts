@@ -75,6 +75,15 @@ interface InsightsState {
   getActiveSessionState: () => SessionState | null;
   updateSessionState: (projectId: string, sessionId: string, updates: Partial<SessionState>) => void;
   clearSessionState: (projectId: string, sessionId: string) => void;
+
+  // Session-specific methods for IPC listeners (cross-session isolation)
+  isActiveSession: (projectId: string, sessionId: string) => boolean;
+  appendToSessionStreamingContent: (projectId: string, sessionId: string, content: string) => void;
+  setSessionCurrentTool: (projectId: string, sessionId: string, tool: ToolUsage | null) => void;
+  setSessionStatus: (projectId: string, sessionId: string, status: InsightsChatStatus) => void;
+  addSessionToolUsage: (projectId: string, sessionId: string, tool: ToolUsage) => void;
+  clearSessionToolsUsed: (projectId: string, sessionId: string) => void;
+  finalizeSessionStreamingMessage: (projectId: string, sessionId: string, suggestedTask?: InsightsChatMessage['suggestedTask']) => void;
 }
 
 const initialStatus: InsightsChatStatus = {
@@ -279,6 +288,151 @@ export const useInsightsStore = create<InsightsState>((set, get) => ({
       const { [key]: _, ...remainingStates } = state.sessionStates;
       return {
         sessionStates: remainingStates
+      };
+    }),
+
+  // Session-specific methods for IPC listeners (cross-session isolation)
+  isActiveSession: (projectId, sessionId) => {
+    const { activeProjectId, activeSessionId } = get();
+    return projectId === activeProjectId && sessionId === activeSessionId;
+  },
+
+  appendToSessionStreamingContent: (projectId, sessionId, content) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const currentSessionState = state.sessionStates[key] || createDefaultSessionState();
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [key]: {
+            ...currentSessionState,
+            streamingContent: currentSessionState.streamingContent + content
+          }
+        }
+      };
+    }),
+
+  setSessionCurrentTool: (projectId, sessionId, tool) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const currentSessionState = state.sessionStates[key] || createDefaultSessionState();
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [key]: {
+            ...currentSessionState,
+            currentTool: tool
+          }
+        }
+      };
+    }),
+
+  setSessionStatus: (projectId, sessionId, status) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const currentSessionState = state.sessionStates[key] || createDefaultSessionState();
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [key]: {
+            ...currentSessionState,
+            status
+          }
+        }
+      };
+    }),
+
+  addSessionToolUsage: (projectId, sessionId, tool) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const currentSessionState = state.sessionStates[key] || createDefaultSessionState();
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [key]: {
+            ...currentSessionState,
+            toolsUsed: [
+              ...currentSessionState.toolsUsed,
+              {
+                name: tool.name,
+                input: tool.input,
+                timestamp: new Date()
+              }
+            ]
+          }
+        }
+      };
+    }),
+
+  clearSessionToolsUsed: (projectId, sessionId) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const currentSessionState = state.sessionStates[key] || createDefaultSessionState();
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [key]: {
+            ...currentSessionState,
+            toolsUsed: []
+          }
+        }
+      };
+    }),
+
+  finalizeSessionStreamingMessage: (projectId, sessionId, suggestedTask) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const sessionState = state.sessionStates[key] || createDefaultSessionState();
+      const content = sessionState.streamingContent;
+      const toolsUsed = sessionState.toolsUsed.length > 0 ? [...sessionState.toolsUsed] : undefined;
+
+      if (!content && !suggestedTask && !toolsUsed) {
+        // Just clear the streaming state
+        return {
+          sessionStates: {
+            ...state.sessionStates,
+            [key]: {
+              ...sessionState,
+              streamingContent: '',
+              toolsUsed: []
+            }
+          }
+        };
+      }
+
+      const newMessage: InsightsChatMessage = {
+        id: `msg-${Date.now()}`,
+        role: 'assistant',
+        content,
+        timestamp: new Date(),
+        suggestedTask,
+        toolsUsed
+      };
+
+      // Update session state and add message to current session
+      const updatedSessionStates = {
+        ...state.sessionStates,
+        [key]: {
+          ...sessionState,
+          streamingContent: '',
+          toolsUsed: []
+        }
+      };
+
+      // If this is the active session, also update the global session with the message
+      if (projectId === state.activeProjectId && sessionId === state.activeSessionId && state.session) {
+        return {
+          sessionStates: updatedSessionStates,
+          session: {
+            ...state.session,
+            messages: [...state.session.messages, newMessage],
+            updatedAt: new Date()
+          }
+        };
+      }
+
+      return {
+        sessionStates: updatedSessionStates
       };
     })
 }));
