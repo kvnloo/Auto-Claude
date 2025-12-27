@@ -11,7 +11,7 @@ import { getUsageMonitor } from './claude-profile/usage-monitor';
 import { initializeUsageMonitorForwarding } from './ipc-handlers/terminal-handlers';
 import { initializeAppUpdater } from './app-updater';
 import { initializeApiServer, shutdownApiServer, isApiServerEnabled } from './api/startup';
-import { discoverExistingBackend } from './api/backend-discovery';
+import { discoverExistingBackend, cleanupPortFile } from './api/backend-discovery';
 import { initializeClientMode, shutdownClientMode, isClientModeActive } from './api/client-mode';
 import { DEFAULT_APP_SETTINGS } from '../shared/constants';
 import { readSettingsFile } from './settings-utils';
@@ -57,6 +57,11 @@ function getIconPath(): string {
 let mainWindow: BrowserWindow | null = null;
 let agentManager: AgentManager | null = null;
 let terminalManager: TerminalManager | null = null;
+
+/**
+ * Track whether shutdown cleanup has already run to prevent duplicate cleanup
+ */
+let shutdownCleanupComplete = false;
 
 function createWindow(): void {
   // Create the browser window
@@ -389,12 +394,24 @@ app.on('before-quit', async () => {
   } else {
     console.warn('[main] Shutting down primary instance');
 
+    // Clean up port file early (before other shutdown operations that might fail)
+    // This is idempotent and works with the signal handlers
+    if (!shutdownCleanupComplete && isApiServerEnabled()) {
+      try {
+        cleanupPortFile();
+        console.warn('[main] Port file cleaned up');
+        shutdownCleanupComplete = true;
+      } catch (error) {
+        console.warn('[main] Port file cleanup failed:', error);
+      }
+    }
+
     // Stop usage monitor (primary instance only)
     const usageMonitor = getUsageMonitor();
     usageMonitor.stop();
     console.warn('[main] Usage monitor stopped');
 
-    // Shutdown API server (if running)
+    // Shutdown API server (if running) - port file cleanup is already done above
     try {
       const result = await shutdownApiServer();
       if (result.success) {
@@ -425,4 +442,51 @@ process.on('uncaughtException', (error) => {
 
 process.on('unhandledRejection', (reason) => {
   console.error('Unhandled rejection:', reason);
+});
+
+// ============================================
+// Graceful Shutdown Hooks
+// ============================================
+
+/**
+ * Perform emergency cleanup of the port file
+ *
+ * This is called from signal handlers to ensure the port file is cleaned up
+ * even during forceful process termination. Only runs once to prevent race conditions.
+ */
+function performPortFileCleanup(): void {
+  if (shutdownCleanupComplete) {
+    return;
+  }
+
+  // Only clean up port file if we are the primary instance (we wrote it)
+  if (!isSecondaryInstance && isApiServerEnabled()) {
+    try {
+      cleanupPortFile();
+      console.warn('[main] Port file cleaned up during shutdown');
+    } catch (error) {
+      // Log but don't throw - we're in shutdown
+      console.error('[main] Failed to clean up port file:', error);
+    }
+  }
+
+  shutdownCleanupComplete = true;
+}
+
+/**
+ * Handle SIGINT (Ctrl+C) - perform cleanup and exit gracefully
+ */
+process.on('SIGINT', () => {
+  console.warn('[main] Received SIGINT signal');
+  performPortFileCleanup();
+  app.quit();
+});
+
+/**
+ * Handle SIGTERM (process termination) - perform cleanup and exit gracefully
+ */
+process.on('SIGTERM', () => {
+  console.warn('[main] Received SIGTERM signal');
+  performPortFileCleanup();
+  app.quit();
 });
