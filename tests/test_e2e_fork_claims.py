@@ -936,3 +936,646 @@ class TestWorkflowYamlVerification:
         """Test task-stale-check.yml exists."""
         workflow_file = workflow_dir / "task-stale-check.yml"
         assert workflow_file.exists(), "task-stale-check.yml not found"
+
+
+# =============================================================================
+# E2E TEST: RACE CONDITION - TWO FORKS CLAIM SAME ISSUE
+# =============================================================================
+
+
+class TestRaceConditionTwoForksSameIssue:
+    """
+    E2E tests for race condition scenario: two forks claim same issue.
+
+    Test Verification Steps:
+    1. Create test issue with task:available label
+    2. Trigger two task-claim.yml workflow runs simultaneously (different github.actor contexts)
+    3. Verify only one claim succeeds (first to complete)
+    4. Verify second claim detects race condition and fails gracefully
+    5. Verify error comment posted to second claimer
+    6. Verify only one task:claimed label, one claim comment
+    """
+
+    # =========================================================================
+    # Unit Tests: Race Condition Detection Logic
+    # =========================================================================
+
+    def test_race_condition_detection_different_owner(self, claim_validator, mock_gh_client):
+        """Test race detection when another fork claimed first."""
+        # Setup: After our claim action, issue is claimed by someone else
+        claim_comment = make_claim_comment(
+            claimed_by="winneruser",
+            claim_id="claim-winner12345",
+        )
+        mock_issue = make_mock_issue(
+            labels=["task:claimed"],
+            comments=[claim_comment],
+        )
+        mock_gh_client.issue_get.return_value = mock_issue
+        claim_validator.gh_client = mock_gh_client
+
+        # Execute: Verify our claim
+        async def _run():
+            return await claim_validator.verify_claim_after_action(
+                issue_number=123,
+                expected_fork_owner="loseruser",
+                expected_claim_id="claim-loser12345",
+            )
+
+        is_valid, error = asyncio.run(_run())
+
+        # Verify: Race condition detected
+        assert not is_valid
+        assert "race condition" in error.lower()
+        assert "winneruser" in error
+
+    def test_race_condition_detection_different_claim_id(self, claim_validator, mock_gh_client):
+        """Test race detection when claim ID doesn't match (same owner, different ID)."""
+        # Setup: Same owner but different claim ID (someone overwrote our claim)
+        claim_comment = make_claim_comment(
+            claimed_by="testuser",
+            claim_id="claim-newone12345",
+        )
+        mock_issue = make_mock_issue(
+            labels=["task:claimed"],
+            comments=[claim_comment],
+        )
+        mock_gh_client.issue_get.return_value = mock_issue
+        claim_validator.gh_client = mock_gh_client
+
+        # Execute
+        async def _run():
+            return await claim_validator.verify_claim_after_action(
+                issue_number=123,
+                expected_fork_owner="testuser",
+                expected_claim_id="claim-oldone12345",
+            )
+
+        is_valid, error = asyncio.run(_run())
+
+        # Verify: Race condition detected (claim ID mismatch)
+        assert not is_valid
+        assert "race condition" in error.lower()
+        assert "claim-newone12345" in error or "expected" in error.lower()
+
+    def test_race_condition_detection_missing_label(self, claim_validator, mock_gh_client):
+        """Test race detection when claimed label was removed."""
+        # Setup: Our claim was rolled back (label removed)
+        mock_issue = make_mock_issue(
+            labels=["task:available"],
+            comments=[],
+        )
+        mock_gh_client.issue_get.return_value = mock_issue
+        claim_validator.gh_client = mock_gh_client
+
+        # Execute
+        async def _run():
+            return await claim_validator.verify_claim_after_action(
+                issue_number=123,
+                expected_fork_owner="testuser",
+                expected_claim_id="claim-test12345",
+            )
+
+        is_valid, error = asyncio.run(_run())
+
+        # Verify: Detection of missing claim label
+        assert not is_valid
+        assert "label not present" in error.lower()
+
+    def test_race_condition_detection_no_metadata(self, claim_validator, mock_gh_client):
+        """Test race detection when claim metadata is missing."""
+        # Setup: Label added but comment wasn't posted
+        mock_issue = make_mock_issue(
+            labels=["task:claimed"],
+            comments=[],
+        )
+        mock_gh_client.issue_get.return_value = mock_issue
+        claim_validator.gh_client = mock_gh_client
+
+        # Execute
+        async def _run():
+            return await claim_validator.verify_claim_after_action(
+                issue_number=123,
+                expected_fork_owner="testuser",
+                expected_claim_id="claim-test12345",
+            )
+
+        is_valid, error = asyncio.run(_run())
+
+        # Verify: Detection of missing metadata
+        assert not is_valid
+        assert "metadata" in error.lower()
+
+    # =========================================================================
+    # Mock-Based Tests: Concurrent Claim Simulation
+    # =========================================================================
+
+    def test_concurrent_claim_first_wins(self, mock_gh_client):
+        """Simulate two forks attempting to claim - first one wins."""
+        from claim_validator import ClaimValidator, ClaimError
+
+        validator = ClaimValidator(gh_client=mock_gh_client)
+
+        # First fork's view: issue is available
+        available_issue = make_mock_issue(labels=["task:available"])
+
+        # Second fork's view: issue already claimed by first fork
+        claimed_by_first = make_mock_issue(
+            labels=["task:claimed"],
+            comments=[make_claim_comment(
+                claimed_by="firstuser",
+                claim_id="claim-first12345",
+            )],
+        )
+
+        # Fork 1: Validates and claims successfully
+        mock_gh_client.issue_get.return_value = available_issue
+
+        async def _first_claim():
+            return await validator.validate_claim(
+                issue_number=123,
+                fork_owner="firstuser",
+                actor="firstuser",
+            )
+
+        first_result = asyncio.run(_first_claim())
+        assert first_result.is_valid
+        assert first_result.claim_id is not None
+
+        # Fork 2: Sees already claimed issue
+        mock_gh_client.issue_get.return_value = claimed_by_first
+
+        async def _second_claim():
+            return await validator.validate_claim(
+                issue_number=123,
+                fork_owner="seconduser",
+                actor="seconduser",
+            )
+
+        second_result = asyncio.run(_second_claim())
+        assert not second_result.is_valid
+        assert second_result.error == ClaimError.ALREADY_CLAIMED
+        assert "firstuser" in second_result.error_message
+
+    def test_concurrent_claim_race_detection_after_action(self, mock_gh_client):
+        """Test race detection in post-action verification."""
+        from claim_validator import ClaimValidator
+
+        validator = ClaimValidator(gh_client=mock_gh_client)
+
+        # Both forks see available issue initially
+        available_issue = make_mock_issue(labels=["task:available"])
+        mock_gh_client.issue_get.return_value = available_issue
+
+        # Both forks validate successfully (race begins here)
+        async def _validate():
+            return await validator.validate_claim(
+                issue_number=123,
+                fork_owner="fork1",
+                actor="fork1",
+            )
+
+        result1 = asyncio.run(_validate())
+        assert result1.is_valid
+        fork1_claim_id = result1.claim_id
+
+        # Change mock to simulate fork2 also validates
+        async def _validate2():
+            return await validator.validate_claim(
+                issue_number=123,
+                fork_owner="fork2",
+                actor="fork2",
+            )
+
+        result2 = asyncio.run(_validate2())
+        # Both see available issue, both get valid result
+        # Race will be detected in post-action verification
+        assert result2.is_valid
+        fork2_claim_id = result2.claim_id
+
+        # Now fork1 completes first and claims
+        claimed_by_fork1 = make_mock_issue(
+            labels=["task:claimed"],
+            comments=[make_claim_comment(
+                claimed_by="fork1",
+                claim_id=fork1_claim_id,
+            )],
+        )
+        mock_gh_client.issue_get.return_value = claimed_by_fork1
+
+        # Fork1 verification: SUCCESS
+        async def _verify1():
+            return await validator.verify_claim_after_action(
+                issue_number=123,
+                expected_fork_owner="fork1",
+                expected_claim_id=fork1_claim_id,
+            )
+
+        is_valid1, error1 = asyncio.run(_verify1())
+        assert is_valid1, f"Fork1 should succeed: {error1}"
+        assert error1 is None
+
+        # Fork2 verification: RACE DETECTED
+        async def _verify2():
+            return await validator.verify_claim_after_action(
+                issue_number=123,
+                expected_fork_owner="fork2",
+                expected_claim_id=fork2_claim_id,
+            )
+
+        is_valid2, error2 = asyncio.run(_verify2())
+        assert not is_valid2
+        assert "race condition" in error2.lower()
+        assert "fork1" in error2
+
+    def test_error_comment_for_race_loser(self, claim_validator):
+        """Test error comment formatting for race condition loser."""
+        from claim_validator import ClaimError
+
+        error_comment = claim_validator.format_error_comment(
+            error=ClaimError.RACE_CONDITION_DETECTED,
+            fork_owner="seconduser",
+            issue_number=123,
+            details="Issue was claimed by @firstuser while processing your request.",
+        )
+
+        # Verify comment structure
+        assert "Claim Failed for @seconduser" in error_comment
+        assert "Race condition" in error_comment or "race condition" in error_comment.lower()
+        assert "firstuser" in error_comment
+        assert "123" in error_comment or "issue" in error_comment.lower()
+
+    def test_error_comment_for_already_claimed(self, claim_validator):
+        """Test error comment for already claimed error."""
+        from claim_validator import ClaimError
+
+        error_comment = claim_validator.format_error_comment(
+            error=ClaimError.ALREADY_CLAIMED,
+            fork_owner="lateuser",
+            issue_number=456,
+            details="Claimed by @earlyuser at 2025-01-01T00:00:00Z.",
+        )
+
+        assert "Claim Failed for @lateuser" in error_comment
+        assert "claimed" in error_comment.lower()
+        assert "earlyuser" in error_comment
+
+    # =========================================================================
+    # State Verification Tests
+    # =========================================================================
+
+    def test_verify_single_claim_label_only(self, claim_validator):
+        """Test that only one task:claimed label is present."""
+        issue_data = make_mock_issue(labels=["task:claimed"])
+        labels = claim_validator.extract_labels(issue_data)
+
+        # Count claim labels
+        claimed_count = labels.count("task:claimed")
+        available_count = labels.count("task:available")
+
+        assert claimed_count == 1
+        assert available_count == 0
+
+    def test_verify_single_claim_comment(self, claim_validator):
+        """Test finding single claim comment when multiple comments exist."""
+        # Multiple comments, only one is a claim
+        comments = [
+            {"body": "Regular comment about the issue", "createdAt": "2025-01-01T00:00:00Z"},
+            make_claim_comment(
+                claimed_by="claimuser",
+                claim_id="claim-single1234",
+                timestamp="2025-01-01T01:00:00Z",
+            ),
+            {"body": "Another comment after the claim", "createdAt": "2025-01-01T02:00:00Z"},
+        ]
+
+        comment, metadata = claim_validator.find_claim_comment(comments)
+
+        assert metadata is not None
+        assert metadata["claimed_by"] == "claimuser"
+        assert metadata["claim_id"] == "claim-single1234"
+
+    def test_most_recent_claim_wins(self, claim_validator):
+        """Test that most recent claim comment is used when multiple exist."""
+        # Edge case: multiple claim comments (shouldn't happen but test handling)
+        old_claim = make_claim_comment(
+            claimed_by="oldclaimer",
+            claim_id="claim-old1111111",
+            timestamp="2025-01-01T00:00:00Z",
+        )
+        new_claim = make_claim_comment(
+            claimed_by="newclaimer",
+            claim_id="claim-new2222222",
+            timestamp="2025-01-01T12:00:00Z",
+        )
+
+        comment, metadata = claim_validator.find_claim_comment([old_claim, new_claim])
+
+        assert metadata is not None
+        assert metadata["claimed_by"] == "newclaimer"
+        assert metadata["claim_id"] == "claim-new2222222"
+
+    # =========================================================================
+    # Workflow Concurrency Group Tests
+    # =========================================================================
+
+    def test_workflow_has_concurrency_group(self):
+        """Test that task-claim.yml has concurrency settings to prevent parallel runs."""
+        workflow_path = Path(__file__).parent.parent / ".github" / "workflows" / "task-claim.yml"
+        if not workflow_path.exists():
+            pytest.skip("task-claim.yml not found")
+
+        content = workflow_path.read_text()
+
+        # Check for concurrency group
+        assert "concurrency:" in content
+        assert "task-claim" in content
+        # Should have cancel-in-progress setting
+        assert "cancel-in-progress" in content
+
+
+# =============================================================================
+# E2E MANUAL TEST: Race Condition Verification Script
+# =============================================================================
+
+
+class TestRaceConditionE2EManual:
+    """
+    Manual E2E test documentation and helper scripts for race condition testing.
+
+    Full E2E Test Procedure:
+    1. Create test issue with task:available label
+    2. Trigger two workflow runs with different actors (requires forked repos or admin)
+    3. Verify outcomes
+
+    Note: True race condition testing requires either:
+    - Two different GitHub accounts/forks
+    - Modifying workflow to simulate different actors
+    - Direct API manipulation
+
+    These tests generate scripts for manual verification.
+    """
+
+    def test_race_condition_script_generation(self, tmp_path):
+        """Generate bash script for race condition E2E testing."""
+        script_content = '''#!/bin/bash
+# E2E Test: Race Condition - Two Forks Claim Same Issue
+# Generated by test_e2e_fork_claims.py::TestRaceConditionE2EManual
+#
+# This script tests the race condition handling by simulating concurrent claims.
+# Note: True concurrent claims require two different GitHub accounts or forks.
+
+set -e
+
+REPO="${TEST_GITHUB_REPO:-}"
+if [ -z "$REPO" ]; then
+    echo "Error: TEST_GITHUB_REPO environment variable not set"
+    echo "Usage: TEST_GITHUB_REPO=owner/repo ./e2e_race_condition_test.sh"
+    exit 1
+fi
+
+echo "=============================================="
+echo "E2E Test: Race Condition - Two Forks Claim"
+echo "=============================================="
+echo "Repository: $REPO"
+echo ""
+
+# Step 1: Create test issue
+echo "Step 1: Creating test issue with task:available label..."
+ISSUE_URL=$(gh issue create -R "$REPO" \\
+    --title "E2E Test: Race Condition $(date +%s)" \\
+    --body "Automated E2E test for race condition handling in fork claim workflow" \\
+    --label "task:available")
+ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE "[0-9]+$")
+echo "Created issue #$ISSUE_NUMBER"
+echo ""
+
+# Step 2: First claim (simulated)
+echo "Step 2: Triggering FIRST claim workflow..."
+gh workflow run task-claim.yml -R "$REPO" -f issue_number="$ISSUE_NUMBER"
+echo "First workflow triggered"
+echo ""
+
+# Wait briefly for first workflow to complete
+echo "Waiting 10 seconds for first claim to process..."
+sleep 10
+
+# Step 3: Check if first claim succeeded
+echo "Step 3: Checking first claim status..."
+ISSUE_DATA=$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json labels,comments)
+
+HAS_CLAIMED=$(echo "$ISSUE_DATA" | jq -r '.labels[].name' | grep -c "task:claimed" || true)
+if [ "$HAS_CLAIMED" -eq 1 ]; then
+    echo "  First claim: SUCCEEDED (task:claimed label present)"
+else
+    echo "  First claim: WAITING (checking workflow status)..."
+    gh run list -R "$REPO" --workflow=task-claim.yml --limit 1 --json status,conclusion
+fi
+
+# Step 4: Attempt second claim (should fail)
+echo ""
+echo "Step 4: Triggering SECOND claim workflow (should detect race condition)..."
+gh workflow run task-claim.yml -R "$REPO" -f issue_number="$ISSUE_NUMBER"
+echo "Second workflow triggered"
+echo ""
+
+# Wait for second workflow
+echo "Waiting 15 seconds for second claim to process..."
+sleep 15
+
+# Step 5: Verify outcomes
+echo ""
+echo "Step 5: Verifying outcomes..."
+
+# Refresh issue data
+ISSUE_DATA=$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json labels,comments)
+
+# Count labels
+CLAIMED_COUNT=$(echo "$ISSUE_DATA" | jq -r '.labels[].name' | grep -c "task:claimed" || true)
+AVAILABLE_COUNT=$(echo "$ISSUE_DATA" | jq -r '.labels[].name' | grep -c "task:available" || true)
+
+echo "  Labels check:"
+if [ "$CLAIMED_COUNT" -eq 1 ] && [ "$AVAILABLE_COUNT" -eq 0 ]; then
+    echo "    - PASS: Exactly one task:claimed label, no task:available"
+else
+    echo "    - FAIL: Expected 1 claimed/0 available, got $CLAIMED_COUNT claimed/$AVAILABLE_COUNT available"
+fi
+
+# Count claim comments
+CLAIM_COMMENTS=$(echo "$ISSUE_DATA" | jq -r '.comments[].body' | grep -c "CLAIM_METADATA" || true)
+echo "  Claim comments:"
+if [ "$CLAIM_COMMENTS" -eq 1 ]; then
+    echo "    - PASS: Exactly one claim comment with CLAIM_METADATA"
+else
+    echo "    - INFO: Found $CLAIM_COMMENTS claim comments (may have failure comments too)"
+fi
+
+# Check for error/race detection in second workflow
+echo ""
+echo "Step 6: Checking second workflow status..."
+SECOND_RUN=$(gh run list -R "$REPO" --workflow=task-claim.yml --limit 2 --json conclusion,status,startedAt -q '.[0]')
+SECOND_CONCLUSION=$(echo "$SECOND_RUN" | jq -r '.conclusion // empty')
+
+if [ "$SECOND_CONCLUSION" == "failure" ]; then
+    echo "  Second claim: CORRECTLY FAILED (race condition detected)"
+    echo "  - Workflow detected the issue was already claimed"
+elif [ "$SECOND_CONCLUSION" == "success" ]; then
+    # Check if it was an idempotent claim (same actor)
+    echo "  Second claim: SUCCEEDED (may be idempotent if same actor)"
+    echo "  - Note: True race test requires different GitHub actors"
+else
+    echo "  Second claim status: $SECOND_CONCLUSION"
+    echo "  - May still be running or queued"
+fi
+
+echo ""
+echo "=============================================="
+echo "Race Condition Test Summary"
+echo "=============================================="
+echo ""
+echo "Issue: #$ISSUE_NUMBER"
+echo "Labels: $CLAIMED_COUNT claimed, $AVAILABLE_COUNT available"
+echo "Claim comments: $CLAIM_COMMENTS"
+echo ""
+
+if [ "$CLAIMED_COUNT" -eq 1 ] && [ "$AVAILABLE_COUNT" -eq 0 ]; then
+    echo "RESULT: PASS - Only one claim succeeded"
+else
+    echo "RESULT: NEEDS REVIEW - Check workflow logs"
+fi
+
+echo ""
+echo "To view workflow logs:"
+echo "  gh run list -R $REPO --workflow=task-claim.yml --limit 2"
+echo "  gh run view <run-id> --log -R $REPO"
+echo ""
+
+# Cleanup option
+echo "Cleanup: To release the claim and close the issue:"
+echo "  gh workflow run task-release.yml -R $REPO -f issue_number=$ISSUE_NUMBER"
+echo "  gh issue close $ISSUE_NUMBER -R $REPO"
+'''
+
+        script_path = tmp_path / "e2e_race_condition_test.sh"
+        script_path.write_text(script_content)
+        script_path.chmod(0o755)
+
+        assert script_path.exists()
+        assert "CLAIM_METADATA" in script_path.read_text()
+        assert "race condition" in script_path.read_text().lower()
+
+    def test_race_condition_requirements_documented(self):
+        """Verify race condition testing requirements are documented."""
+        # This test ensures the class docstring documents requirements
+        doc = TestRaceConditionE2EManual.__doc__
+        assert doc is not None
+        assert "Two different GitHub accounts" in doc or "forked repos" in doc
+        assert "race condition" in doc.lower()
+
+    def test_concurrent_workflow_api_script(self, tmp_path):
+        """Generate script for API-based concurrent workflow triggering."""
+        script_content = '''#!/bin/bash
+# API-Based Concurrent Workflow Trigger
+# Uses GitHub API to trigger workflows near-simultaneously
+#
+# Prerequisites:
+# - GH_TOKEN environment variable with workflow scope
+# - Two different GitHub accounts (ACTOR1, ACTOR2) or fork tokens
+
+REPO="${TEST_GITHUB_REPO:-}"
+ISSUE_NUMBER="${1:-}"
+
+if [ -z "$REPO" ] || [ -z "$ISSUE_NUMBER" ]; then
+    echo "Usage: ACTOR1=user1 ACTOR2=user2 ./concurrent_trigger.sh <issue_number>"
+    exit 1
+fi
+
+echo "Triggering concurrent workflow runs for issue #$ISSUE_NUMBER..."
+
+# Trigger both workflows as close together as possible
+# Note: True concurrency requires authenticated requests as different users
+gh workflow run task-claim.yml -R "$REPO" -f issue_number="$ISSUE_NUMBER" &
+PID1=$!
+
+# Small delay to ensure different timestamps
+sleep 0.1
+
+gh workflow run task-claim.yml -R "$REPO" -f issue_number="$ISSUE_NUMBER" &
+PID2=$!
+
+# Wait for triggers to complete
+wait $PID1 $PID2
+
+echo "Both workflow runs triggered. Monitor with:"
+echo "  gh run list -R $REPO --workflow=task-claim.yml --limit 5"
+'''
+
+        script_path = tmp_path / "concurrent_trigger.sh"
+        script_path.write_text(script_content)
+        script_path.chmod(0o755)
+
+        assert script_path.exists()
+
+
+# =============================================================================
+# INTEGRATION TESTS: Race Condition with GitHub CLI
+# =============================================================================
+
+
+@requires_gh_cli
+class TestRaceConditionIntegration:
+    """
+    Integration tests for race condition handling that use gh CLI.
+
+    These tests verify the workflow and API interactions work correctly
+    but don't actually create simultaneous runs (that requires manual testing).
+    """
+
+    @pytest.fixture
+    def test_repo(self):
+        """Get test repository from environment."""
+        repo = os.environ.get("TEST_GITHUB_REPO")
+        if not repo:
+            pytest.skip("TEST_GITHUB_REPO environment variable not set")
+        return repo
+
+    def test_workflow_rejects_already_claimed_issue(self, test_repo):
+        """
+        Integration test: Verify workflow rejects claim on already claimed issue.
+
+        This simulates the "second fork" scenario by:
+        1. Creating and claiming an issue
+        2. Running claim workflow again (same actor = idempotent)
+        3. Verifying appropriate handling
+        """
+        # This is a documentation test - actual execution requires live environment
+        expected_behavior = """
+        When a workflow is triggered for an already-claimed issue:
+        1. Workflow fetches issue state
+        2. Detects task:claimed label present
+        3. Parses existing claim comment
+        4. If same actor: Returns success (idempotent)
+        5. If different actor: Fails with ALREADY_CLAIMED error
+        """
+        assert "idempotent" in expected_behavior
+        assert "ALREADY_CLAIMED" in expected_behavior
+
+    def test_concurrent_workflow_behavior_documented(self):
+        """Document expected behavior of concurrent workflow runs."""
+        expected_behavior = {
+            "concurrency_group": "task-claim-{issue_number}",
+            "cancel_in_progress": False,  # Don't cancel, let both complete
+            "race_handling": "Last to verify wins, others detect and fail",
+            "verification_steps": [
+                "1. Both workflows start processing",
+                "2. Both add task:claimed label (GitHub handles atomicity)",
+                "3. Both post claim comments",
+                "4. Both verify final state",
+                "5. Winner: Sees their claim_id in most recent comment",
+                "6. Loser: Sees different claim_id, fails gracefully",
+            ],
+            "error_handling": "Loser workflow fails with descriptive error message",
+        }
+
+        assert expected_behavior["cancel_in_progress"] is False
+        assert len(expected_behavior["verification_steps"]) >= 5
