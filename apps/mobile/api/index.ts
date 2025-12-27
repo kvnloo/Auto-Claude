@@ -30,7 +30,39 @@ export {
   createConnectionMonitor,
   // Error utilities
   createConnectionError,
-  isTimeoutError,
-  isServerError,
-  isAuthError,
+  isTimeoutError as isTailscaleTimeoutError,
+  isServerError as isTailscaleServerError,
+  isAuthError as isTailscaleAuthError,
 } from './tailscale';
+
+// API client for authenticated requests
+export {
+  // Constants
+  DEFAULT_REQUEST_TIMEOUT,
+  SHORT_REQUEST_TIMEOUT,
+  LONG_REQUEST_TIMEOUT,
+  // Types
+  type HttpMethod,
+  type ApiRequestOptions,
+  type ApiResponse,
+  type ApiError,
+  type ApiResult,
+  type HealthCheckResponse,
+  // Core API functions
+  apiRequest,
+  get,
+  post,
+  put,
+  patch,
+  del,
+  checkHealth,
+  // Utilities
+  createAbortController,
+  createTimeoutController,
+  isApiError,
+  isApiSuccess,
+  isAuthenticationError,
+  isTimeoutError,
+  isNetworkError,
+  isServerError,
+} from './client';
