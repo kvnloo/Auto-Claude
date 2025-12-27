@@ -5,3 +5,4 @@
  */
 
 export { AutonomousDashboard } from './AutonomousDashboard';
+export { AutonomousModeSettings } from '../settings/AutonomousModeSettings';

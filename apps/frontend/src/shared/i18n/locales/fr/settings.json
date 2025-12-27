@@ -146,6 +146,10 @@
     "memory": {
       "title": "Mémoire",
       "description": "Backend mémoire Graphiti"
+    },
+    "autonomous": {
+      "title": "Mode Autonome",
+      "description": "Traitement autonome des tâches"
     }
   },
   "agentProfile": {

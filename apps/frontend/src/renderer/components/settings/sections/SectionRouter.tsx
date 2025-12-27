@@ -6,6 +6,7 @@ import { SecuritySettings } from '../../project-settings/SecuritySettings';
 import { LinearIntegration } from '../integrations/LinearIntegration';
 import { GitHubIntegration } from '../integrations/GitHubIntegration';
 import { InitializationGuard } from '../common/InitializationGuard';
+import { AutonomousModeSettings } from '../AutonomousModeSettings';
 import type { ProjectSettingsSection } from '../ProjectSettingsContent';
 
 interface SectionRouterProps {
@@ -192,6 +193,22 @@ export function SectionRouter({
               expanded={true}
               onToggle={() => {}}
             />
+          </InitializationGuard>
+        </SettingsSection>
+      );
+
+    case 'autonomous':
+      return (
+        <SettingsSection
+          title="Autonomous Mode"
+          description="Configure autonomous task processing with GitHub roadmap integration"
+        >
+          <InitializationGuard
+            initialized={!!project.autoBuildPath}
+            title="Autonomous Mode"
+            description="Configure autonomous processing"
+          >
+            <AutonomousModeSettings projectId={project.id} />
           </InitializationGuard>
         </SettingsSection>
       );
