@@ -42,8 +42,7 @@ import {
   useProjectStore,
   removeProject,
   initializeProject,
-  checkProjectVersion,
-  updateProjectAutoBuild
+  checkProjectVersion
 } from '../stores/project-store';
 import { useSettingsStore } from '../stores/settings-store';
 import { AddProjectModal } from './AddProjectModal';
@@ -218,26 +217,6 @@ export function Sidebar({
   const handleSkipInit = () => {
     setShowInitDialog(false);
     setPendingProject(null);
-  };
-
-  const _handleUpdate = async () => {
-    if (!selectedProjectId) return;
-
-    setIsInitializing(true);
-    try {
-      const result = await updateProjectAutoBuild(selectedProjectId);
-      if (result?.success) {
-        setShowUpdateDialog(false);
-        setVersionInfo(null);
-      }
-    } finally {
-      setIsInitializing(false);
-    }
-  };
-
-  const _handleSkipUpdate = () => {
-    setShowUpdateDialog(false);
-    setVersionInfo(null);
   };
 
   const handleGitInitialized = async () => {
