@@ -446,4 +446,252 @@ describe('Insights Store - Cross-Session Isolation', () => {
       expect(state.currentTool).toBeNull();
     });
   });
+
+  describe('Task Suggestions Isolation', () => {
+    it('should store task suggestions in session-specific messages', () => {
+      const store = useInsightsStore.getState();
+
+      // Set up session A with a session object and finalize with task suggestion
+      store.setActiveContext('project-1', 'session-A');
+      store.setSession({
+        id: 'session-A',
+        projectId: 'project-1',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      store.appendToSessionStreamingContent('project-1', 'session-A', 'Analysis complete');
+      store.finalizeSessionStreamingMessage('project-1', 'session-A', {
+        title: 'Task from Session A',
+        description: 'Description for task A',
+        metadata: { category: 'feature' }
+      });
+
+      // The session should contain the message with task suggestion
+      const state = useInsightsStore.getState();
+      expect(state.session?.messages).toHaveLength(1);
+      expect(state.session?.messages[0].suggestedTask?.title).toBe('Task from Session A');
+    });
+
+    it('should not carry task suggestions when switching sessions', () => {
+      const store = useInsightsStore.getState();
+
+      // Set up session A with a task suggestion
+      store.setActiveContext('project-1', 'session-A');
+      store.setSession({
+        id: 'session-A',
+        projectId: 'project-1',
+        messages: [
+          {
+            id: 'msg-1',
+            role: 'assistant',
+            content: 'Here is a task suggestion',
+            timestamp: new Date(),
+            suggestedTask: {
+              title: 'Task from Session A',
+              description: 'Only for session A'
+            }
+          }
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Switch to session B with its own session object
+      store.setActiveContext('project-1', 'session-B');
+      store.setSession({
+        id: 'session-B',
+        projectId: 'project-1',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Session B should have no messages (and thus no task suggestions)
+      const state = useInsightsStore.getState();
+      expect(state.session?.id).toBe('session-B');
+      expect(state.session?.messages).toHaveLength(0);
+    });
+
+    it('should preserve task suggestions when switching back to previous session', () => {
+      const store = useInsightsStore.getState();
+
+      // Create session A with task suggestion message
+      const sessionA = {
+        id: 'session-A',
+        projectId: 'project-1',
+        messages: [
+          {
+            id: 'msg-1',
+            role: 'assistant' as const,
+            content: 'Analysis complete',
+            timestamp: new Date(),
+            suggestedTask: {
+              title: 'Refactor authentication module',
+              description: 'Extract auth logic into separate service'
+            }
+          }
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      // Create session B without task suggestions
+      const sessionB = {
+        id: 'session-B',
+        projectId: 'project-1',
+        messages: [
+          {
+            id: 'msg-2',
+            role: 'assistant' as const,
+            content: 'Regular response without task',
+            timestamp: new Date()
+          }
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      // Set session A
+      store.setActiveContext('project-1', 'session-A');
+      store.setSession(sessionA);
+
+      // Switch to session B
+      store.setActiveContext('project-1', 'session-B');
+      store.setSession(sessionB);
+
+      // Session B should show its own messages without A's task suggestions
+      let state = useInsightsStore.getState();
+      expect(state.session?.id).toBe('session-B');
+      expect(state.session?.messages[0].suggestedTask).toBeUndefined();
+
+      // Switch back to session A
+      store.setActiveContext('project-1', 'session-A');
+      store.setSession(sessionA);
+
+      // Session A should still have its task suggestion
+      state = useInsightsStore.getState();
+      expect(state.session?.id).toBe('session-A');
+      expect(state.session?.messages[0].suggestedTask?.title).toBe('Refactor authentication module');
+    });
+
+    it('should not leak task suggestions between different projects', () => {
+      const store = useInsightsStore.getState();
+
+      // Project X has a session with task suggestion
+      const sessionProjectX = {
+        id: 'session-1',
+        projectId: 'project-X',
+        messages: [
+          {
+            id: 'msg-1',
+            role: 'assistant' as const,
+            content: 'Project X analysis',
+            timestamp: new Date(),
+            suggestedTask: {
+              title: 'Project X Task',
+              description: 'Only for project X'
+            }
+          }
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      // Project Y has a session without task suggestion
+      const sessionProjectY = {
+        id: 'session-1',
+        projectId: 'project-Y',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      };
+
+      // Set up Project X
+      store.setActiveContext('project-X', 'session-1');
+      store.setSession(sessionProjectX);
+
+      // Verify Project X has task suggestion
+      let state = useInsightsStore.getState();
+      expect(state.session?.messages[0].suggestedTask?.title).toBe('Project X Task');
+
+      // Switch to Project Y
+      store.setActiveContext('project-Y', 'session-1');
+      store.setSession(sessionProjectY);
+
+      // Project Y should have no messages or task suggestions
+      state = useInsightsStore.getState();
+      expect(state.session?.projectId).toBe('project-Y');
+      expect(state.session?.messages).toHaveLength(0);
+    });
+
+    it('should only finalize task suggestion for active session', () => {
+      const store = useInsightsStore.getState();
+
+      // Set up session A as active with a session object
+      store.setActiveContext('project-1', 'session-A');
+      store.setSession({
+        id: 'session-A',
+        projectId: 'project-1',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Add streaming content for session A
+      store.appendToSessionStreamingContent('project-1', 'session-A', 'Content for A');
+
+      // Initialize session B (background session, not active)
+      store.initializeSessionState('project-1', 'session-B');
+      store.appendToSessionStreamingContent('project-1', 'session-B', 'Content for B');
+
+      // Finalize session A with task suggestion
+      store.finalizeSessionStreamingMessage('project-1', 'session-A', {
+        title: 'Task for A',
+        description: 'Only for session A'
+      });
+
+      // Session A should have the message with task suggestion
+      const state = useInsightsStore.getState();
+      expect(state.session?.messages).toHaveLength(1);
+      expect(state.session?.messages[0].suggestedTask?.title).toBe('Task for A');
+      expect(state.session?.messages[0].content).toBe('Content for A');
+
+      // Session B's streaming content should be preserved (not finalized)
+      const stateB = store.getSessionState('project-1', 'session-B');
+      expect(stateB.streamingContent).toBe('Content for B');
+    });
+
+    it('should clear streaming content after task suggestion finalization', () => {
+      const store = useInsightsStore.getState();
+
+      // Set up session A
+      store.setActiveContext('project-1', 'session-A');
+      store.setSession({
+        id: 'session-A',
+        projectId: 'project-1',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Add streaming content
+      store.appendToSessionStreamingContent('project-1', 'session-A', 'Analyzing codebase...');
+
+      // Finalize with task suggestion
+      store.finalizeSessionStreamingMessage('project-1', 'session-A', {
+        title: 'Add unit tests',
+        description: 'Improve test coverage'
+      });
+
+      // Streaming content should be cleared in session state
+      const sessionState = store.getSessionState('project-1', 'session-A');
+      expect(sessionState.streamingContent).toBe('');
+
+      // But the message should be added to the session
+      const state = useInsightsStore.getState();
+      expect(state.session?.messages[0].content).toBe('Analyzing codebase...');
+      expect(state.session?.messages[0].suggestedTask?.title).toBe('Add unit tests');
+    });
+  });
 });
