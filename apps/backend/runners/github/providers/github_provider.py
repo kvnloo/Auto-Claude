@@ -19,15 +19,68 @@ try:
 except (ImportError, ValueError, SystemError):
     from gh_client import GHClient
 
-from .protocol import (
-    IssueData,
-    IssueFilters,
-    LabelData,
-    PRData,
-    PRFilters,
-    ProviderType,
-    ReviewData,
-)
+try:
+    from .protocol import (
+        IssueData,
+        IssueFilters,
+        LabelData,
+        PRData,
+        PRFilters,
+        ProviderType,
+        ReviewData,
+    )
+except (ImportError, ValueError, SystemError):
+    from protocol import (
+        IssueData,
+        IssueFilters,
+        LabelData,
+        PRData,
+        PRFilters,
+        ProviderType,
+        ReviewData,
+    )
+
+import re
+
+
+@dataclass
+class PRClaimMetadata:
+    """
+    Claim metadata associated with a pull request.
+
+    Contains information about the fork that claimed the related issue
+    and submitted this PR.
+    """
+
+    claimed_by: str | None = None  # Fork owner who claimed the issue
+    claim_id: str | None = None  # Unique claim identifier
+    fork_reputation: dict[str, Any] | None = None  # Reputation at claim time
+    claim_timestamp: str | None = None  # When the claim was made
+    linked_issue: int | None = None  # Issue number this PR addresses
+    source: str = "unknown"  # Where metadata was found: "pr_body", "issue_comment"
+
+    def to_dict(self) -> dict[str, Any]:
+        """Convert to dictionary for serialization."""
+        return {
+            "claimed_by": self.claimed_by,
+            "claim_id": self.claim_id,
+            "fork_reputation": self.fork_reputation,
+            "claim_timestamp": self.claim_timestamp,
+            "linked_issue": self.linked_issue,
+            "source": self.source,
+        }
+
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> "PRClaimMetadata":
+        """Create from dictionary."""
+        return cls(
+            claimed_by=data.get("claimed_by"),
+            claim_id=data.get("claim_id"),
+            fork_reputation=data.get("fork_reputation"),
+            claim_timestamp=data.get("claim_timestamp") or data.get("timestamp"),
+            linked_issue=data.get("linked_issue") or data.get("issue_number"),
+            source=data.get("source", "unknown"),
+        )
 
 
 @dataclass
@@ -418,6 +471,256 @@ class GitHubProvider:
     ) -> Any:
         """Make a POST request to the GitHub API."""
         return await self._gh_client.api_post(endpoint, data)
+
+    # -------------------------------------------------------------------------
+    # PR Claim Metadata Operations
+    # -------------------------------------------------------------------------
+
+    # Pattern for extracting issue references from PR body
+    # Matches: Fixes #123, Closes #456, Resolves #789, etc.
+    _ISSUE_REFERENCE_PATTERN = re.compile(
+        r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*[:#]?\s*#?(\d+)",
+        re.IGNORECASE,
+    )
+
+    # Pattern for Claimed-By field in PR body
+    # Handles: Claimed-By: @user, **Claimed-By:** @user, - **Claimed-By:** @user
+    _CLAIMED_BY_PATTERN = re.compile(
+        r"\*{0,2}Claimed-By:?\*{0,2}\s*@?(\S+)",
+        re.IGNORECASE,
+    )
+
+    # Pattern for Claim-ID field in PR body
+    # Handles: Claim-ID: id, **Claim-ID:** `id`, - **Claim-ID:** `claim-abc`
+    _CLAIM_ID_PATTERN = re.compile(
+        r"\*{0,2}Claim-ID:?\*{0,2}\s*`?([a-zA-Z0-9-]+)`?",
+        re.IGNORECASE,
+    )
+
+    def extract_linked_issues(self, pr_body: str) -> list[int]:
+        """
+        Extract linked issue numbers from a PR body.
+
+        Looks for patterns like:
+        - Fixes #123
+        - Closes #456
+        - Resolves #789
+        - fixes: #123
+        - close: 456
+
+        Args:
+            pr_body: The PR body/description text
+
+        Returns:
+            List of unique issue numbers found
+        """
+        if not pr_body:
+            return []
+
+        matches = self._ISSUE_REFERENCE_PATTERN.findall(pr_body)
+        # Return unique issue numbers
+        return list(set(int(m) for m in matches))
+
+    def parse_pr_body_claim_fields(self, pr_body: str) -> dict[str, Any]:
+        """
+        Parse claim-related fields from a PR body.
+
+        Looks for:
+        - Claimed-By: @username
+        - Claim-ID: claim-abc123
+
+        Args:
+            pr_body: The PR body/description text
+
+        Returns:
+            Dict with parsed fields (may be empty or partial)
+        """
+        result: dict[str, Any] = {}
+
+        if not pr_body:
+            return result
+
+        # Look for Claimed-By field
+        claimed_by_match = self._CLAIMED_BY_PATTERN.search(pr_body)
+        if claimed_by_match:
+            result["claimed_by"] = claimed_by_match.group(1)
+
+        # Look for Claim-ID field
+        claim_id_match = self._CLAIM_ID_PATTERN.search(pr_body)
+        if claim_id_match:
+            result["claim_id"] = claim_id_match.group(1)
+
+        # Also try to parse embedded CLAIM_METADATA JSON (same format as issue comments)
+        metadata = self._gh_client.parse_claim_metadata(pr_body)
+        if metadata:
+            # Merge with any fields found above (explicit fields take precedence)
+            for key, value in metadata.items():
+                if key not in result:
+                    result[key] = value
+
+        return result
+
+    async def get_pr_claim_metadata(self, pr_number: int) -> PRClaimMetadata:
+        """
+        Get claim metadata for a pull request.
+
+        Attempts to find claim information from:
+        1. PR body (Claimed-By, Claim-ID fields or embedded CLAIM_METADATA)
+        2. Linked issue comments (if issue is referenced in PR)
+
+        Args:
+            pr_number: PR number to get claim metadata for
+
+        Returns:
+            PRClaimMetadata with available claim information
+            (fields may be None if not found)
+        """
+        # Fetch PR data including body
+        pr_data = await self._gh_client.pr_get(
+            pr_number,
+            json_fields=["number", "title", "body", "author"],
+        )
+
+        pr_body = pr_data.get("body", "") or ""
+        pr_author = pr_data.get("author", {})
+        if isinstance(pr_author, dict):
+            pr_author_login = pr_author.get("login", "")
+        else:
+            pr_author_login = str(pr_author) if pr_author else ""
+
+        # First, try to parse claim fields from PR body
+        body_fields = self.parse_pr_body_claim_fields(pr_body)
+
+        if body_fields.get("claim_id"):
+            # Found claim metadata in PR body
+            return PRClaimMetadata(
+                claimed_by=body_fields.get("claimed_by", pr_author_login),
+                claim_id=body_fields.get("claim_id"),
+                fork_reputation=body_fields.get("fork_reputation"),
+                claim_timestamp=body_fields.get("timestamp"),
+                linked_issue=body_fields.get("issue_number"),
+                source="pr_body",
+            )
+
+        # Extract linked issues from PR body
+        linked_issues = self.extract_linked_issues(pr_body)
+
+        # Try to find claim metadata from linked issue comments
+        for issue_number in linked_issues:
+            try:
+                claim_status = await self._gh_client.get_claim_status(issue_number)
+                claim_metadata = claim_status.get("claim_metadata")
+
+                if claim_metadata and claim_metadata.get("claim_id"):
+                    return PRClaimMetadata(
+                        claimed_by=claim_metadata.get("claimed_by"),
+                        claim_id=claim_metadata.get("claim_id"),
+                        fork_reputation=claim_metadata.get("fork_reputation"),
+                        claim_timestamp=claim_metadata.get("timestamp"),
+                        linked_issue=issue_number,
+                        source="issue_comment",
+                    )
+            except Exception:
+                # If we can't fetch the issue, continue to next
+                continue
+
+        # No claim metadata found - return with PR author as claimed_by
+        # (assuming PR author is the one who worked on it)
+        return PRClaimMetadata(
+            claimed_by=body_fields.get("claimed_by", pr_author_login or None),
+            claim_id=body_fields.get("claim_id"),
+            fork_reputation=None,
+            claim_timestamp=None,
+            linked_issue=linked_issues[0] if linked_issues else None,
+            source="unknown",
+        )
+
+    async def get_pr_with_claim_metadata(self, pr_number: int) -> tuple[PRData, PRClaimMetadata]:
+        """
+        Fetch a PR with its associated claim metadata.
+
+        Convenience method that fetches both the full PR data and claim metadata
+        in one logical operation.
+
+        Args:
+            pr_number: PR number to fetch
+
+        Returns:
+            Tuple of (PRData, PRClaimMetadata)
+        """
+        # Fetch PR and claim metadata in parallel would be ideal,
+        # but claim metadata depends on PR body, so we do it sequentially
+        pr = await self.fetch_pr(pr_number)
+        claim_metadata = await self.get_pr_claim_metadata(pr_number)
+
+        return pr, claim_metadata
+
+    def format_pr_claim_body_section(
+        self,
+        claimed_by: str,
+        claim_id: str,
+        linked_issue: int | None = None,
+        reputation_data: dict[str, Any] | None = None,
+    ) -> str:
+        """
+        Format a claim metadata section for including in a PR body.
+
+        Creates a standardized section with claim information that can be
+        parsed by parse_pr_body_claim_fields().
+
+        Args:
+            claimed_by: GitHub username of the fork owner
+            claim_id: Unique claim identifier
+            linked_issue: Optional issue number this PR addresses
+            reputation_data: Optional reputation info dict
+
+        Returns:
+            Formatted markdown section with claim metadata
+
+        Example output:
+            ---
+            ## Task Claim Information
+            - **Claimed-By:** @username
+            - **Claim-ID:** `claim-abc123`
+            - **Linked Issue:** #42
+            <!-- CLAIM_METADATA: {...} -->
+        """
+        lines = [
+            "",
+            "---",
+            "## Task Claim Information",
+            f"- **Claimed-By:** @{claimed_by}",
+            f"- **Claim-ID:** `{claim_id}`",
+        ]
+
+        if linked_issue is not None:
+            lines.append(f"- **Linked Issue:** #{linked_issue}")
+
+        if reputation_data:
+            score = reputation_data.get("score", 0)
+            tier = reputation_data.get("tier", "new")
+            reliability = reputation_data.get("reliability_score", 0.0)
+            lines.extend([
+                "",
+                "### Fork Reputation",
+                f"- **Score:** {score} ({tier})",
+                f"- **Reliability:** {reliability:.0%}",
+            ])
+
+        # Add machine-readable metadata
+        metadata = {
+            "claimed_by": claimed_by,
+            "claim_id": claim_id,
+        }
+        if linked_issue is not None:
+            metadata["issue_number"] = linked_issue
+        if reputation_data:
+            metadata["fork_reputation"] = reputation_data
+
+        lines.append("")
+        lines.append(f"<!-- CLAIM_METADATA: {json.dumps(metadata)} -->")
+
+        return "\n".join(lines)
 
     # -------------------------------------------------------------------------
     # Helper Methods
