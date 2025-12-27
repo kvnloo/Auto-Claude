@@ -108,6 +108,31 @@ if (process.platform === 'darwin') {
   app.name = 'Auto Claude';
 }
 
+// Request single instance lock for multi-instance coordination
+// The first instance will get the lock and act as the "primary" instance
+// Subsequent instances will connect to the primary's backend instead of starting their own
+const gotTheLock = app.requestSingleInstanceLock();
+
+if (!gotTheLock) {
+  // Another instance is already running with the lock
+  // For now, we'll proceed normally but later subtasks will implement
+  // client mode that connects to the existing backend
+  // This log helps with debugging multi-instance behavior
+  console.warn('[main] Another instance is already running - will connect to existing backend');
+} else {
+  // We are the primary instance - handle second-instance events
+  app.on('second-instance', (_event, _commandLine, _workingDirectory) => {
+    // Focus our window when another instance tries to start
+    // This provides a better UX when the user tries to open a second window
+    if (mainWindow) {
+      if (mainWindow.isMinimized()) {
+        mainWindow.restore();
+      }
+      mainWindow.focus();
+    }
+  });
+}
+
 // Initialize the application
 app.whenReady().then(() => {
   // Set app user model id for Windows
