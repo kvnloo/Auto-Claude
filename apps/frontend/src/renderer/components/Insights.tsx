@@ -52,10 +52,14 @@ interface InsightsProps {
 export function Insights({ projectId }: InsightsProps) {
   const session = useInsightsStore((state) => state.session);
   const sessions = useInsightsStore((state) => state.sessions);
-  const status = useInsightsStore((state) => state.status);
-  const streamingContent = useInsightsStore((state) => state.streamingContent);
-  const currentTool = useInsightsStore((state) => state.currentTool);
   const isLoadingSessions = useInsightsStore((state) => state.isLoadingSessions);
+
+  // Derive session-specific state from activeSessionState for cross-session isolation
+  // This ensures isLoading, streamingContent, and currentTool are scoped to the current session
+  const activeSessionState = useInsightsStore((state) => state.getActiveSessionState());
+  const status = activeSessionState?.status ?? { phase: 'idle' as const, message: '' };
+  const streamingContent = activeSessionState?.streamingContent ?? '';
+  const currentTool = activeSessionState?.currentTool ?? null;
 
   const [inputValue, setInputValue] = useState('');
   const [creatingTask, setCreatingTask] = useState<string | null>(null);
