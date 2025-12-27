@@ -142,6 +142,19 @@ export interface GitHubImportResult {
   tasks?: import('./task').Task[];
 }
 
+/**
+ * Result of fork status detection
+ */
+export interface ForkStatusResult {
+  isFork: boolean;
+  parentRepository?: {
+    owner: string;
+    name: string;
+    fullName: string;
+    url: string;
+  };
+}
+
 export interface GitHubInvestigationResult {
   success: boolean;
   issueNumber: number;

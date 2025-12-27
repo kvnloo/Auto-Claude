@@ -234,6 +234,7 @@ export function ProjectSettings({ project, open, onOpenChange }: ProjectSettings
                   gitHubConnectionStatus={gitHubConnectionStatus}
                   isCheckingGitHub={isCheckingGitHub}
                   projectName={project.name}
+                  projectId={project.id}
                 />
 
                 <Separator />

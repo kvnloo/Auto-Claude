@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Github, RefreshCw, KeyRound, Info, CheckCircle2, GitFork } from 'lucide-react';
+import { Github, RefreshCw, KeyRound, Info, CheckCircle2, GitFork, Loader2, Search } from 'lucide-react';
 import { CollapsibleSection } from './CollapsibleSection';
 import { StatusBadge } from './StatusBadge';
 import { PasswordInput } from './PasswordInput';
@@ -20,6 +20,7 @@ interface GitHubIntegrationSectionProps {
   gitHubConnectionStatus: GitHubSyncStatus | null;
   isCheckingGitHub: boolean;
   projectName?: string;
+  projectId?: string;
 }
 
 export function GitHubIntegrationSection({
@@ -30,11 +31,40 @@ export function GitHubIntegrationSection({
   gitHubConnectionStatus,
   isCheckingGitHub,
   projectName,
+  projectId,
 }: GitHubIntegrationSectionProps) {
   // Show OAuth flow if user previously used OAuth, or if there's no token yet
   const [showOAuthFlow, setShowOAuthFlow] = useState(
     envConfig.githubAuthMethod === 'oauth' || (!envConfig.githubToken && !envConfig.githubAuthMethod)
   );
+
+  // Fork detection state
+  const [isDetectingFork, setIsDetectingFork] = useState(false);
+  const [forkDetectionError, setForkDetectionError] = useState<string | null>(null);
+
+  // Handle fork detection
+  const handleDetectFork = async () => {
+    if (!projectId) return;
+
+    setIsDetectingFork(true);
+    setForkDetectionError(null);
+
+    try {
+      const result = await window.electronAPI.detectFork(projectId);
+      if (result.success && result.data) {
+        if (result.data.isFork && result.data.parentRepository) {
+          // Auto-populate the parent repo field with detected value
+          onUpdateConfig({ githubParentRepo: result.data.parentRepository.fullName });
+        }
+      } else {
+        setForkDetectionError(result.error || 'Failed to detect fork status');
+      }
+    } catch (err) {
+      setForkDetectionError(err instanceof Error ? err.message : 'Unknown error');
+    } finally {
+      setIsDetectingFork(false);
+    }
+  };
 
   // Build badges: "Enabled" when GitHub is enabled, "Fork" when connected to a fork
   const badges = envConfig.githubEnabled ? (
@@ -208,6 +238,47 @@ export function GitHubIntegrationSection({
                   </p>
                 </div>
               </div>
+            </div>
+          )}
+
+          {/* Fork Detection Button */}
+          {envConfig.githubToken && envConfig.githubRepo && gitHubConnectionStatus?.connected && (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-foreground">Fork Detection</p>
+                  <p className="text-xs text-muted-foreground">
+                    Check if this repository is a fork and detect its parent repository
+                  </p>
+                </div>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={handleDetectFork}
+                  disabled={isDetectingFork || !projectId}
+                  className="gap-2"
+                >
+                  {isDetectingFork ? (
+                    <>
+                      <Loader2 className="h-3 w-3 animate-spin" />
+                      Detecting...
+                    </>
+                  ) : (
+                    <>
+                      <Search className="h-3 w-3" />
+                      Detect Fork
+                    </>
+                  )}
+                </Button>
+              </div>
+              {forkDetectionError && (
+                <p className="text-xs text-destructive">{forkDetectionError}</p>
+              )}
+              {!gitHubConnectionStatus?.isFork && !isDetectingFork && !forkDetectionError && (
+                <p className="text-xs text-muted-foreground">
+                  Click &quot;Detect Fork&quot; to check if this is a forked repository.
+                </p>
+              )}
             </div>
           )}
 

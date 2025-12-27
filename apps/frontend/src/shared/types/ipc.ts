@@ -105,7 +105,8 @@ import type {
   GitHubSyncStatus,
   GitHubImportResult,
   GitHubInvestigationResult,
-  GitHubInvestigationStatus
+  GitHubInvestigationStatus,
+  ForkStatusResult
 } from './integrations';
 
 // Electron API exposed via contextBridge
@@ -341,6 +342,7 @@ export interface ElectronAPI {
   getGitHubUser: () => Promise<IPCResult<{ username: string; name?: string }>>;
   listGitHubUserRepos: () => Promise<IPCResult<{ repos: Array<{ fullName: string; description: string | null; isPrivate: boolean }> }>>;
   detectGitHubRepo: (projectPath: string) => Promise<IPCResult<string>>;
+  detectFork: (projectId: string) => Promise<IPCResult<ForkStatusResult>>;
   getGitHubBranches: (repo: string, token: string) => Promise<IPCResult<string[]>>;
   createGitHubRepo: (
     repoName: string,
