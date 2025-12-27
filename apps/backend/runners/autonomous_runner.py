@@ -89,9 +89,21 @@ from runners.roadmap.feature_fetcher import (
     FeatureFetchError,
     FeatureStatus,
 )
+from runners.github.gh_client import GHClient, GHCommandError, GHTimeoutError
 
 # Configure logger
 logger = logging.getLogger(__name__)
+
+
+# ============================================
+# PR Creation Error
+# ============================================
+
+
+class PRCreationError(Exception):
+    """Raised when PR creation fails."""
+
+    pass
 
 
 # ============================================
@@ -289,6 +301,9 @@ class AutonomousRunner:
         self.issue_fetcher = IssueFetcher(project_dir=self.project_dir)
         self.feature_fetcher = FeatureFetcher(project_dir=self.project_dir)
 
+        # GitHub client for PR creation
+        self.gh_client = GHClient(project_dir=self.project_dir)
+
         # Shutdown control
         self._shutdown_event = asyncio.Event()
         self._current_subprocess: subprocess.Popen | None = None
@@ -296,6 +311,9 @@ class AutonomousRunner:
         # Auto-detect repository if not provided
         if not self.repository:
             self.repository = self._detect_repository()
+
+        # Track base branch for PR creation
+        self._base_branch: str | None = None
 
     def _detect_repository(self) -> str | None:
         """
@@ -434,8 +452,11 @@ class AutonomousRunner:
             spec_id = await self._run_spec_pipeline(task)
 
             if spec_id:
-                # Task completed successfully
-                task.mark_completed(spec_id=spec_id)
+                # Pipeline completed successfully, now create PR
+                pr_url = await self._create_pr_for_task(task, spec_id)
+
+                # Task completed successfully (PR creation is optional)
+                task.mark_completed(spec_id=spec_id, pull_request_url=pr_url)
                 self.completed_task_ids.add(task.id)
                 self.stats.record_success()
 
@@ -446,6 +467,7 @@ class AutonomousRunner:
                     "task_completed",
                     task=task.to_dict(),
                     spec_id=spec_id,
+                    pr_url=pr_url,
                 )
                 return True
             else:
@@ -664,6 +686,550 @@ class AutonomousRunner:
 
         except Exception as e:
             logger.warning(f"Failed to update task status to failed: {e}")
+
+    # =========================================================================
+    # PR Creation
+    # =========================================================================
+
+    async def _has_uncommitted_changes(self) -> bool:
+        """
+        Check if there are uncommitted changes in the repository.
+
+        Returns:
+            True if there are uncommitted changes, False otherwise
+        """
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "status",
+                "--porcelain",
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await result.communicate()
+            output = stdout.decode("utf-8").strip()
+            return len(output) > 0
+        except Exception as e:
+            logger.error(f"Failed to check git status: {e}")
+            return False
+
+    async def _get_current_branch(self) -> str | None:
+        """
+        Get the current git branch name.
+
+        Returns:
+            Current branch name, or None if detection fails
+        """
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "rev-parse",
+                "--abbrev-ref",
+                "HEAD",
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await result.communicate()
+            if result.returncode == 0:
+                return stdout.decode("utf-8").strip()
+        except Exception as e:
+            logger.warning(f"Failed to get current branch: {e}")
+        return None
+
+    async def _get_base_branch(self) -> str:
+        """
+        Get the base branch for PR creation (main or master).
+
+        Returns:
+            Base branch name (defaults to "main")
+        """
+        if self._base_branch:
+            return self._base_branch
+
+        try:
+            # Try to get the default branch from remote
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "remote",
+                "show",
+                "origin",
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await result.communicate()
+            output = stdout.decode("utf-8")
+
+            # Parse "HEAD branch: main" from output
+            for line in output.splitlines():
+                if "HEAD branch:" in line:
+                    self._base_branch = line.split(":")[-1].strip()
+                    return self._base_branch
+
+        except Exception as e:
+            logger.warning(f"Failed to detect base branch: {e}")
+
+        # Fallback to main
+        self._base_branch = "main"
+        return self._base_branch
+
+    def _generate_branch_name(self, task: AutonomousTask) -> str:
+        """
+        Generate a branch name for the task.
+
+        Naming convention:
+        - GitHub issues: auto-claude/issue-{number}
+        - Roadmap features: auto-claude/feature-{id}
+
+        Args:
+            task: The task to create a branch for
+
+        Returns:
+            Branch name string
+        """
+        if task.source == TaskSource.GITHUB_ISSUE:
+            return f"auto-claude/issue-{task.external_id}"
+        else:
+            # Roadmap feature - sanitize the ID for branch name
+            feature_id = task.external_id or task.id.replace("feature-", "")
+            # Sanitize: replace spaces/special chars with hyphens
+            sanitized = feature_id.lower()
+            sanitized = "".join(c if c.isalnum() or c == "-" else "-" for c in sanitized)
+            sanitized = sanitized.strip("-")
+            # Limit length
+            if len(sanitized) > 50:
+                sanitized = sanitized[:50].rstrip("-")
+            return f"auto-claude/feature-{sanitized}"
+
+    def _generate_commit_message(self, task: AutonomousTask, spec_id: str | None) -> str:
+        """
+        Generate a commit message for the task.
+
+        Args:
+            task: The task being committed
+            spec_id: The spec ID (if available)
+
+        Returns:
+            Formatted commit message
+        """
+        # Primary line - task title truncated to 72 chars
+        title = task.title[:70] + "..." if len(task.title) > 72 else task.title
+
+        # Reference line
+        if task.source == TaskSource.GITHUB_ISSUE:
+            ref = f"Closes #{task.external_id}"
+        else:
+            ref = f"Implements feature: {task.external_id}"
+
+        # Build message
+        lines = [
+            f"auto-claude: {title}",
+            "",
+            ref,
+            "",
+        ]
+
+        if spec_id:
+            lines.append(f"Spec: {spec_id}")
+            lines.append("")
+
+        lines.extend([
+            "🤖 Generated with Auto Claude",
+            "",
+            "Co-Authored-By: Auto Claude <noreply@anthropic.com>",
+        ])
+
+        return "\n".join(lines)
+
+    async def _create_branch(self, branch_name: str) -> bool:
+        """
+        Create a new git branch and switch to it.
+
+        Args:
+            branch_name: Name of the branch to create
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Create and checkout new branch
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "checkout",
+                "-b",
+                branch_name,
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await result.communicate()
+
+            if result.returncode != 0:
+                # Branch might already exist, try to checkout
+                result = await asyncio.create_subprocess_exec(
+                    "git",
+                    "checkout",
+                    branch_name,
+                    cwd=self.project_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                _, stderr = await result.communicate()
+
+                if result.returncode != 0:
+                    logger.error(f"Failed to create/checkout branch: {stderr.decode()}")
+                    return False
+
+            logger.info(f"Created/checked out branch: {branch_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to create branch: {e}")
+            return False
+
+    async def _stage_and_commit(self, message: str) -> bool:
+        """
+        Stage all changes and create a commit.
+
+        Args:
+            message: Commit message
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            # Stage all changes
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "add",
+                "-A",
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await result.communicate()
+
+            if result.returncode != 0:
+                logger.error("Failed to stage changes")
+                return False
+
+            # Create commit
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "commit",
+                "-m",
+                message,
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await result.communicate()
+
+            if result.returncode != 0:
+                error_msg = stderr.decode("utf-8")
+                # Check if there's nothing to commit
+                if "nothing to commit" in error_msg or "nothing to commit" in stdout.decode("utf-8"):
+                    logger.warning("No changes to commit")
+                    return False
+                logger.error(f"Failed to commit: {error_msg}")
+                return False
+
+            logger.info("Successfully committed changes")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to stage and commit: {e}")
+            return False
+
+    async def _push_branch(self, branch_name: str) -> bool:
+        """
+        Push the branch to remote.
+
+        Args:
+            branch_name: Name of the branch to push
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "push",
+                "-u",
+                "origin",
+                branch_name,
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, stderr = await result.communicate()
+
+            if result.returncode != 0:
+                logger.error(f"Failed to push branch: {stderr.decode()}")
+                return False
+
+            logger.info(f"Successfully pushed branch: {branch_name}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Failed to push branch: {e}")
+            return False
+
+    def _generate_pr_body(
+        self,
+        task: AutonomousTask,
+        spec_id: str | None,
+    ) -> str:
+        """
+        Generate PR body with task description, spec summary, and QA results.
+
+        Args:
+            task: The task being submitted
+            spec_id: The spec ID (if available)
+
+        Returns:
+            Formatted PR body markdown
+        """
+        lines = [
+            "## Summary",
+            "",
+            task.description[:500] + "..." if len(task.description) > 500 else task.description,
+            "",
+        ]
+
+        # Task source reference
+        if task.source == TaskSource.GITHUB_ISSUE:
+            lines.extend([
+                "## Related Issue",
+                f"Closes #{task.external_id}",
+                "",
+            ])
+        else:
+            lines.extend([
+                "## Roadmap Feature",
+                f"Implements: {task.external_id}",
+                "",
+            ])
+
+        # Spec reference
+        if spec_id:
+            lines.extend([
+                "## Specification",
+                f"- Spec ID: `{spec_id}`",
+                f"- Spec Path: `.auto-claude/specs/{spec_id}/`",
+                "",
+            ])
+
+        # QA section
+        lines.extend([
+            "## QA Verification",
+            "",
+            "- [x] Automated spec generation",
+            "- [x] Implementation completed",
+            "- [x] QA verification passed",
+            "",
+        ])
+
+        # Footer
+        lines.extend([
+            "---",
+            "",
+            "🤖 This PR was automatically generated by **Auto Claude**.",
+            "",
+            "_Please review the changes carefully before merging._",
+        ])
+
+        return "\n".join(lines)
+
+    async def _create_pull_request(
+        self,
+        task: AutonomousTask,
+        branch_name: str,
+        spec_id: str | None,
+    ) -> str | None:
+        """
+        Create a pull request using gh CLI.
+
+        Args:
+            task: The task being submitted
+            branch_name: The branch to create PR from
+            spec_id: The spec ID (if available)
+
+        Returns:
+            PR URL if successful, None otherwise
+        """
+        try:
+            base_branch = await self._get_base_branch()
+
+            # Generate PR title and body
+            title = f"[Auto Claude] {task.title}"
+            if len(title) > 100:
+                title = title[:97] + "..."
+
+            body = self._generate_pr_body(task, spec_id)
+
+            # Create PR using gh CLI
+            args = [
+                "pr",
+                "create",
+                "--title",
+                title,
+                "--body",
+                body,
+                "--base",
+                base_branch,
+                "--head",
+                branch_name,
+            ]
+
+            result = await self.gh_client.run(args, timeout=60.0)
+
+            # Extract PR URL from output
+            output = result.stdout.strip()
+            if output.startswith("https://"):
+                logger.info(f"Successfully created PR: {output}")
+                return output
+
+            # Try to parse URL from output
+            for line in output.splitlines():
+                if "github.com" in line and "/pull/" in line:
+                    url = line.strip()
+                    if url.startswith("https://"):
+                        logger.info(f"Successfully created PR: {url}")
+                        return url
+
+            logger.warning(f"PR created but URL not found in output: {output}")
+            return output if output else None
+
+        except GHCommandError as e:
+            logger.error(f"Failed to create PR: {e}")
+            return None
+        except GHTimeoutError as e:
+            logger.error(f"PR creation timed out: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error creating PR: {e}")
+            return None
+
+    async def _checkout_base_branch(self) -> bool:
+        """
+        Switch back to the base branch.
+
+        Returns:
+            True if successful, False otherwise
+        """
+        try:
+            base_branch = await self._get_base_branch()
+            result = await asyncio.create_subprocess_exec(
+                "git",
+                "checkout",
+                base_branch,
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            await result.communicate()
+            return result.returncode == 0
+        except Exception as e:
+            logger.warning(f"Failed to checkout base branch: {e}")
+            return False
+
+    async def _create_pr_for_task(
+        self,
+        task: AutonomousTask,
+        spec_id: str | None,
+    ) -> str | None:
+        """
+        Create a PR for a completed task.
+
+        This method orchestrates the full PR creation workflow:
+        1. Check for uncommitted changes
+        2. Create a feature branch
+        3. Commit changes
+        4. Push branch
+        5. Create PR
+
+        Args:
+            task: The completed task
+            spec_id: The spec ID (if available)
+
+        Returns:
+            PR URL if successful, None otherwise
+        """
+        original_branch = await self._get_current_branch()
+
+        try:
+            # Check for changes
+            has_changes = await self._has_uncommitted_changes()
+            if not has_changes:
+                logger.info("No changes to commit, skipping PR creation")
+                emit_event(
+                    "pr_skipped",
+                    task_id=task.id,
+                    reason="no_changes",
+                )
+                return None
+
+            # Generate branch name
+            branch_name = self._generate_branch_name(task)
+            task.branch_name = branch_name
+
+            # Create branch
+            if not await self._create_branch(branch_name):
+                raise PRCreationError(f"Failed to create branch: {branch_name}")
+
+            # Generate commit message
+            commit_message = self._generate_commit_message(task, spec_id)
+
+            # Stage and commit
+            if not await self._stage_and_commit(commit_message):
+                raise PRCreationError("Failed to commit changes")
+
+            # Push branch
+            if not await self._push_branch(branch_name):
+                raise PRCreationError(f"Failed to push branch: {branch_name}")
+
+            # Create PR
+            pr_url = await self._create_pull_request(task, branch_name, spec_id)
+            if not pr_url:
+                raise PRCreationError("Failed to create pull request")
+
+            # Update task with PR URL
+            task.pull_request_url = pr_url
+
+            emit_event(
+                "pr_created",
+                task_id=task.id,
+                branch_name=branch_name,
+                pr_url=pr_url,
+            )
+
+            return pr_url
+
+        except PRCreationError as e:
+            logger.error(f"PR creation failed: {e}")
+            emit_event(
+                "pr_creation_failed",
+                task_id=task.id,
+                error=str(e),
+            )
+            return None
+
+        except Exception as e:
+            logger.error(f"Unexpected error in PR creation: {e}")
+            emit_event(
+                "pr_creation_failed",
+                task_id=task.id,
+                error=str(e),
+            )
+            return None
+
+        finally:
+            # Always try to return to original branch for next task
+            if original_branch:
+                await self._checkout_base_branch()
 
     # =========================================================================
     # Guardrail Checks
