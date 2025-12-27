@@ -162,3 +162,52 @@ export interface AutoBuildSourceUpdateProgress {
   /** New version after successful update - used to refresh UI */
   newVersion?: string;
 }
+
+// ============================================
+// Autonomous Mode Settings
+// ============================================
+
+/**
+ * Configuration settings for Autonomous Mode.
+ * These settings define guardrails and safety limits for autonomous task execution.
+ */
+export interface AutonomousModeSettings {
+  /**
+   * Whether autonomous mode is enabled.
+   * When enabled, the system will automatically fetch and execute tasks.
+   */
+  enabled: boolean;
+
+  /**
+   * Maximum number of concurrent tasks that can run simultaneously.
+   * Constraint: 1-3 (higher values may cause resource contention)
+   */
+  maxConcurrentTasks: number;
+
+  /**
+   * Maximum number of consecutive task failures before auto-pause.
+   * The system will pause and require human intervention after this many failures.
+   * Constraint: 1-5
+   */
+  maxConsecutiveFailures: number;
+
+  /**
+   * Session time limit in minutes.
+   * Autonomous mode will pause after this duration (allows current task to complete).
+   * Constraint: 60-480 (1-8 hours)
+   */
+  sessionTimeLimitMinutes: number;
+
+  /**
+   * Optional token budget for the autonomous session.
+   * When set, the system will pause when the budget is exhausted.
+   * Undefined means no budget limit.
+   */
+  tokenBudget?: number;
+
+  /**
+   * Interval in seconds between polling for new tasks.
+   * Constraint: 30+ (to avoid excessive API calls)
+   */
+  pollIntervalSeconds: number;
+}
