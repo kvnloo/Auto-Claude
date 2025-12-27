@@ -587,15 +587,31 @@ export async function createTaskFromSuggestion(
 export function setupInsightsListeners(): () => void {
   const store = useInsightsStore.getState;
 
-  // Listen for streaming chunks
+  // Listen for streaming chunks - filter by active project context
   const unsubStreamChunk = window.electronAPI.onInsightsStreamChunk(
-    (_projectId, chunk: InsightsStreamChunk) => {
+    (projectId, chunk: InsightsStreamChunk) => {
+      const state = store();
+      const { activeProjectId, activeSessionId } = state;
+
+      // Only process events for the currently active project/session
+      if (projectId !== activeProjectId || !activeSessionId) {
+        return;
+      }
+
       switch (chunk.type) {
         case 'text':
           if (chunk.content) {
-            store().appendStreamingContent(chunk.content);
-            store().setCurrentTool(null); // Clear tool when receiving text
-            store().setStatus({
+            // Update session-scoped state
+            state.appendToSessionStreamingContent(projectId, activeSessionId, chunk.content);
+            state.setSessionCurrentTool(projectId, activeSessionId, null);
+            state.setSessionStatus(projectId, activeSessionId, {
+              phase: 'streaming',
+              message: 'Receiving response...'
+            });
+            // Also update global state for UI (only for active session)
+            state.appendStreamingContent(chunk.content);
+            state.setCurrentTool(null);
+            state.setStatus({
               phase: 'streaming',
               message: 'Receiving response...'
             });
@@ -603,41 +619,65 @@ export function setupInsightsListeners(): () => void {
           break;
         case 'tool_start':
           if (chunk.tool) {
-            store().setCurrentTool({
+            const tool = {
               name: chunk.tool.name,
               input: chunk.tool.input
+            };
+            // Update session-scoped state
+            state.setSessionCurrentTool(projectId, activeSessionId, tool);
+            state.addSessionToolUsage(projectId, activeSessionId, tool);
+            state.setSessionStatus(projectId, activeSessionId, {
+              phase: 'streaming',
+              message: `Using ${chunk.tool.name}...`
             });
-            // Record this tool usage for history
-            store().addToolUsage({
-              name: chunk.tool.name,
-              input: chunk.tool.input
-            });
-            store().setStatus({
+            // Also update global state for UI (only for active session)
+            state.setCurrentTool(tool);
+            state.addToolUsage(tool);
+            state.setStatus({
               phase: 'streaming',
               message: `Using ${chunk.tool.name}...`
             });
           }
           break;
         case 'tool_end':
-          store().setCurrentTool(null);
+          // Update session-scoped state
+          state.setSessionCurrentTool(projectId, activeSessionId, null);
+          // Also update global state for UI (only for active session)
+          state.setCurrentTool(null);
           break;
         case 'task_suggestion':
           // Finalize the message with task suggestion
-          store().setCurrentTool(null);
-          store().finalizeStreamingMessage(chunk.suggestedTask);
+          state.setSessionCurrentTool(projectId, activeSessionId, null);
+          state.finalizeSessionStreamingMessage(projectId, activeSessionId, chunk.suggestedTask);
+          // Also update global state for UI (only for active session)
+          state.setCurrentTool(null);
+          state.finalizeStreamingMessage(chunk.suggestedTask);
           break;
         case 'done':
           // Finalize any remaining content
-          store().setCurrentTool(null);
-          store().finalizeStreamingMessage();
-          store().setStatus({
+          state.setSessionCurrentTool(projectId, activeSessionId, null);
+          state.setSessionStatus(projectId, activeSessionId, {
+            phase: 'complete',
+            message: ''
+          });
+          state.finalizeSessionStreamingMessage(projectId, activeSessionId);
+          // Also update global state for UI (only for active session)
+          state.setCurrentTool(null);
+          state.finalizeStreamingMessage();
+          state.setStatus({
             phase: 'complete',
             message: ''
           });
           break;
         case 'error':
-          store().setCurrentTool(null);
-          store().setStatus({
+          state.setSessionCurrentTool(projectId, activeSessionId, null);
+          state.setSessionStatus(projectId, activeSessionId, {
+            phase: 'error',
+            error: chunk.error
+          });
+          // Also update global state for UI (only for active session)
+          state.setCurrentTool(null);
+          state.setStatus({
             phase: 'error',
             error: chunk.error
           });
@@ -646,17 +686,40 @@ export function setupInsightsListeners(): () => void {
     }
   );
 
-  // Listen for status updates
-  const unsubStatus = window.electronAPI.onInsightsStatus((_projectId, status) => {
-    store().setStatus(status);
+  // Listen for status updates - filter by active project context
+  const unsubStatus = window.electronAPI.onInsightsStatus((projectId, status) => {
+    const state = store();
+    const { activeProjectId, activeSessionId } = state;
+
+    // Only process events for the currently active project/session
+    if (projectId !== activeProjectId || !activeSessionId) {
+      return;
+    }
+
+    // Update session-scoped state
+    state.setSessionStatus(projectId, activeSessionId, status);
+    // Also update global state for UI (only for active session)
+    state.setStatus(status);
   });
 
-  // Listen for errors
-  const unsubError = window.electronAPI.onInsightsError((_projectId, error) => {
-    store().setStatus({
+  // Listen for errors - filter by active project context
+  const unsubError = window.electronAPI.onInsightsError((projectId, error) => {
+    const state = store();
+    const { activeProjectId, activeSessionId } = state;
+
+    // Only process events for the currently active project/session
+    if (projectId !== activeProjectId || !activeSessionId) {
+      return;
+    }
+
+    const errorStatus: InsightsChatStatus = {
       phase: 'error',
       error
-    });
+    };
+    // Update session-scoped state
+    state.setSessionStatus(projectId, activeSessionId, errorStatus);
+    // Also update global state for UI (only for active session)
+    state.setStatus(errorStatus);
   });
 
   // Return cleanup function
