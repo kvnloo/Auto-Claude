@@ -1,0 +1,492 @@
+name: Task Stale Claim Check
+
+on:
+  # Daily check at midnight UTC
+  schedule:
+    - cron: '0 0 * * *'
+  # Manual trigger for testing
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: 'Dry run mode (no actions taken, just logging)'
+        required: false
+        type: boolean
+        default: false
+      warning_days:
+        description: 'Days before sending stale warning (default: 5)'
+        required: false
+        type: number
+        default: 5
+      expiry_days:
+        description: 'Days before auto-releasing claim (default: 7)'
+        required: false
+        type: number
+        default: 7
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  check-stale-claims:
+    name: Check Stale Claims
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check for Stale Claims
+        uses: actions/github-script@v7
+        with:
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            const { owner, repo } = context.repo;
+
+            // ═══════════════════════════════════════════════════════════════
+            // CONFIGURATION
+            // ═══════════════════════════════════════════════════════════════
+            const LABEL_AVAILABLE = 'task:available';
+            const LABEL_CLAIMED = 'task:claimed';
+
+            // Default values, can be overridden via workflow_dispatch inputs
+            const WARNING_DAYS = context.eventName === 'workflow_dispatch'
+              ? parseInt(context.payload.inputs?.warning_days || '5', 10)
+              : 5;
+            const EXPIRY_DAYS = context.eventName === 'workflow_dispatch'
+              ? parseInt(context.payload.inputs?.expiry_days || '7', 10)
+              : 7;
+            const DRY_RUN = context.eventName === 'workflow_dispatch'
+              ? context.payload.inputs?.dry_run === true || context.payload.inputs?.dry_run === 'true'
+              : false;
+
+            // Reputation penalty for stale claim timeout (matches spec: -3 points)
+            const STALE_TIMEOUT_PENALTY = -3;
+
+            console.log(`::group::Configuration`);
+            console.log(`Running stale claim check at ${new Date().toISOString()}`);
+            console.log(`Repository: ${owner}/${repo}`);
+            console.log(`Warning threshold: ${WARNING_DAYS} days`);
+            console.log(`Expiry threshold: ${EXPIRY_DAYS} days`);
+            console.log(`Dry run mode: ${DRY_RUN}`);
+            console.log(`Reputation penalty: ${STALE_TIMEOUT_PENALTY} points`);
+            console.log(`::endgroup::`);
+
+            // ═══════════════════════════════════════════════════════════════
+            // FETCH ALL CLAIMED ISSUES
+            // ═══════════════════════════════════════════════════════════════
+            console.log(`::group::Fetching claimed issues`);
+
+            let claimedIssues = [];
+            try {
+              // Use search API to find all issues with task:claimed label
+              const { data: searchResults } = await github.rest.search.issuesAndPullRequests({
+                q: `repo:${owner}/${repo} is:issue is:open label:"${LABEL_CLAIMED}"`,
+                per_page: 100,
+                sort: 'updated',
+                order: 'asc'
+              });
+
+              claimedIssues = searchResults.items;
+              console.log(`Found ${claimedIssues.length} claimed issue(s)`);
+            } catch (error) {
+              console.log(`Failed to search for claimed issues: ${error.message}`);
+              core.setFailed(`Failed to search for claimed issues: ${error.message}`);
+              return;
+            }
+
+            if (claimedIssues.length === 0) {
+              console.log('No claimed issues found. Nothing to do.');
+              console.log(`::endgroup::`);
+              core.notice('No claimed issues found. Stale check complete.');
+              return;
+            }
+
+            console.log(`::endgroup::`);
+
+            // ═══════════════════════════════════════════════════════════════
+            // HELPER FUNCTIONS
+            // ═══════════════════════════════════════════════════════════════
+
+            /**
+             * Parse claim metadata from issue comments
+             * Returns null if no valid claim metadata found
+             */
+            async function getClaimMetadata(issueNumber) {
+              try {
+                const { data: comments } = await github.rest.issues.listComments({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  per_page: 100
+                });
+
+                // Find most recent claim comment (search from newest to oldest)
+                const claimPattern = /<!--\s*CLAIM_METADATA:\s*(\{.*?\})\s*-->/s;
+
+                for (const comment of [...comments].reverse()) {
+                  const match = comment.body?.match(claimPattern);
+                  if (match) {
+                    try {
+                      const metadata = JSON.parse(match[1]);
+                      metadata._comment_id = comment.id;
+                      metadata._comment_created_at = comment.created_at;
+                      return metadata;
+                    } catch (e) {
+                      console.log(`  Failed to parse claim metadata: ${e.message}`);
+                    }
+                  }
+                }
+                return null;
+              } catch (error) {
+                console.log(`  Failed to fetch comments: ${error.message}`);
+                return null;
+              }
+            }
+
+            /**
+             * Check if a stale warning has already been posted
+             */
+            async function hasStaleWarning(issueNumber) {
+              try {
+                const { data: comments } = await github.rest.issues.listComments({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  per_page: 100
+                });
+
+                // Check for existing stale warning comment (posted by this workflow)
+                const warningPattern = /<!--\s*STALE_WARNING:\s*\{.*?\}\s*-->/s;
+
+                for (const comment of comments) {
+                  if (comment.body?.match(warningPattern)) {
+                    return true;
+                  }
+                }
+                return false;
+              } catch (error) {
+                console.log(`  Failed to check for stale warning: ${error.message}`);
+                return false;
+              }
+            }
+
+            /**
+             * Calculate days since claim
+             */
+            function daysSinceClaim(claimTimestamp) {
+              const claimDate = new Date(claimTimestamp);
+              const now = new Date();
+              const diffMs = now - claimDate;
+              return Math.floor(diffMs / (1000 * 60 * 60 * 24));
+            }
+
+            /**
+             * Release a stale claim
+             */
+            async function releaseStaleClaim(issue, claimMetadata) {
+              const issueNumber = issue.number;
+              const releaseTimestamp = new Date().toISOString();
+
+              console.log(`  Releasing stale claim on issue #${issueNumber}...`);
+
+              if (DRY_RUN) {
+                console.log(`  [DRY RUN] Would release claim by @${claimMetadata.claimed_by}`);
+                return true;
+              }
+
+              // Step 1: Add task:available label
+              try {
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  labels: [LABEL_AVAILABLE]
+                });
+                console.log(`  Added label: ${LABEL_AVAILABLE}`);
+              } catch (error) {
+                console.log(`  Failed to add available label: ${error.message}`);
+                return false;
+              }
+
+              // Step 2: Remove task:claimed label
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  name: LABEL_CLAIMED
+                });
+                console.log(`  Removed label: ${LABEL_CLAIMED}`);
+              } catch (error) {
+                if (error.status !== 404) {
+                  console.log(`  Warning: Could not remove claimed label: ${error.message}`);
+                }
+              }
+
+              // Step 3: Post stale release comment
+              const staleReleaseMetadata = {
+                release_type: 'stale_timeout',
+                released_at: releaseTimestamp,
+                issue_number: issueNumber,
+                original_claimant: claimMetadata.claimed_by,
+                original_claim_id: claimMetadata.claim_id,
+                original_claim_timestamp: claimMetadata.timestamp,
+                days_stale: daysSinceClaim(claimMetadata.timestamp),
+                reputation_penalty: STALE_TIMEOUT_PENALTY
+              };
+
+              const commentBody = `## ⏰ Stale Claim Auto-Released
+
+            **Original Claimant:** @${claimMetadata.claimed_by}
+            **Claim ID:** \`${claimMetadata.claim_id}\`
+            **Claimed On:** ${claimMetadata.timestamp}
+            **Days Elapsed:** ${staleReleaseMetadata.days_stale} days (threshold: ${EXPIRY_DAYS} days)
+
+            ---
+
+            This claim has been automatically released due to inactivity. The task is now available for other contributors.
+
+            **@${claimMetadata.claimed_by}:** Your reputation has been decreased by ${Math.abs(STALE_TIMEOUT_PENALTY)} points due to this timeout.
+
+            To maintain a healthy reputation:
+            - Only claim issues you can complete within ${EXPIRY_DAYS} days
+            - If you need more time, post an update comment to show activity
+            - If you can't complete a task, release it early with the task-release workflow
+
+            <!-- STALE_RELEASE_METADATA: ${JSON.stringify(staleReleaseMetadata)} -->`;
+
+              try {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body: commentBody
+                });
+                console.log(`  Posted stale release comment`);
+              } catch (error) {
+                console.log(`  Warning: Failed to post release comment: ${error.message}`);
+                // Continue - labels are updated even if comment fails
+              }
+
+              return true;
+            }
+
+            /**
+             * Post a stale warning comment
+             */
+            async function postStaleWarning(issue, claimMetadata, daysRemaining) {
+              const issueNumber = issue.number;
+              const warningTimestamp = new Date().toISOString();
+
+              console.log(`  Posting stale warning for issue #${issueNumber}...`);
+
+              if (DRY_RUN) {
+                console.log(`  [DRY RUN] Would post warning to @${claimMetadata.claimed_by}`);
+                return true;
+              }
+
+              const warningMetadata = {
+                warning_type: 'stale_claim',
+                warning_at: warningTimestamp,
+                issue_number: issueNumber,
+                claimant: claimMetadata.claimed_by,
+                claim_id: claimMetadata.claim_id,
+                days_remaining: daysRemaining
+              };
+
+              const commentBody = `## ⚠️ Stale Claim Warning
+
+            **@${claimMetadata.claimed_by}:** Your claim on this issue will expire in **${daysRemaining} day${daysRemaining !== 1 ? 's' : ''}**.
+
+            **Claim ID:** \`${claimMetadata.claim_id}\`
+            **Claimed On:** ${claimMetadata.timestamp}
+
+            ---
+
+            **To keep this claim active:**
+            - Post a progress update comment on this issue
+            - Or submit a PR that references this issue
+
+            **If you can't complete this task:**
+            - Release the claim using the task-release workflow
+            - This avoids the reputation penalty for stale timeout
+
+            *Claims are automatically released after ${EXPIRY_DAYS} days of inactivity, with a ${Math.abs(STALE_TIMEOUT_PENALTY)}-point reputation penalty.*
+
+            <!-- STALE_WARNING: ${JSON.stringify(warningMetadata)} -->`;
+
+              try {
+                await github.rest.issues.createComment({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  body: commentBody
+                });
+                console.log(`  Posted stale warning comment`);
+                return true;
+              } catch (error) {
+                console.log(`  Failed to post warning comment: ${error.message}`);
+                return false;
+              }
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // PROCESS EACH CLAIMED ISSUE
+            // ═══════════════════════════════════════════════════════════════
+            const stats = {
+              processed: 0,
+              staleReleased: 0,
+              staleWarned: 0,
+              active: 0,
+              noMetadata: 0,
+              errors: 0
+            };
+
+            const staleReleases = [];
+            const staleWarnings = [];
+
+            for (const issue of claimedIssues) {
+              const issueNumber = issue.number;
+              console.log(`::group::Processing issue #${issueNumber}: ${issue.title}`);
+              stats.processed++;
+
+              // Get claim metadata
+              const claimMetadata = await getClaimMetadata(issueNumber);
+
+              if (!claimMetadata) {
+                console.log(`  No claim metadata found - skipping`);
+                console.log(`  Issue has task:claimed label but no valid CLAIM_METADATA comment`);
+                console.log(`  This may indicate an orphaned claim that needs manual cleanup`);
+                stats.noMetadata++;
+                console.log(`::endgroup::`);
+                continue;
+              }
+
+              console.log(`  Claimed by: @${claimMetadata.claimed_by}`);
+              console.log(`  Claim ID: ${claimMetadata.claim_id}`);
+              console.log(`  Claim timestamp: ${claimMetadata.timestamp}`);
+
+              // Calculate staleness
+              const daysSince = daysSinceClaim(claimMetadata.timestamp);
+              console.log(`  Days since claim: ${daysSince}`);
+
+              // Check if claim has expired (> EXPIRY_DAYS)
+              if (daysSince >= EXPIRY_DAYS) {
+                console.log(`  STALE: Claim has expired (${daysSince} >= ${EXPIRY_DAYS} days)`);
+
+                const released = await releaseStaleClaim(issue, claimMetadata);
+                if (released) {
+                  stats.staleReleased++;
+                  staleReleases.push({
+                    issue: issueNumber,
+                    title: issue.title,
+                    claimant: claimMetadata.claimed_by,
+                    daysSince: daysSince
+                  });
+                } else {
+                  stats.errors++;
+                }
+              }
+              // Check if claim is approaching expiry (>= WARNING_DAYS but < EXPIRY_DAYS)
+              else if (daysSince >= WARNING_DAYS) {
+                const daysRemaining = EXPIRY_DAYS - daysSince;
+                console.log(`  WARNING: Claim approaching expiry (${daysRemaining} days remaining)`);
+
+                // Check if we already posted a warning
+                const alreadyWarned = await hasStaleWarning(issueNumber);
+
+                if (alreadyWarned) {
+                  console.log(`  Stale warning already posted - skipping`);
+                } else {
+                  const warned = await postStaleWarning(issue, claimMetadata, daysRemaining);
+                  if (warned) {
+                    stats.staleWarned++;
+                    staleWarnings.push({
+                      issue: issueNumber,
+                      title: issue.title,
+                      claimant: claimMetadata.claimed_by,
+                      daysRemaining: daysRemaining
+                    });
+                  } else {
+                    stats.errors++;
+                  }
+                }
+              }
+              // Claim is still active
+              else {
+                console.log(`  ACTIVE: Claim is still within threshold`);
+                stats.active++;
+              }
+
+              console.log(`::endgroup::`);
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // SUMMARY
+            // ═══════════════════════════════════════════════════════════════
+            console.log(`::group::Summary`);
+            console.log(`Total claimed issues processed: ${stats.processed}`);
+            console.log(`Active claims (< ${WARNING_DAYS} days): ${stats.active}`);
+            console.log(`Stale warnings sent: ${stats.staleWarned}`);
+            console.log(`Stale claims released: ${stats.staleReleased}`);
+            console.log(`Claims without metadata: ${stats.noMetadata}`);
+            console.log(`Errors: ${stats.errors}`);
+            console.log(`::endgroup::`);
+
+            // ═══════════════════════════════════════════════════════════════
+            // JOB SUMMARY
+            // ═══════════════════════════════════════════════════════════════
+            const summaryTable = [
+              [{data: 'Metric', header: true}, {data: 'Count', header: true}],
+              ['Issues Processed', stats.processed.toString()],
+              ['Active Claims', stats.active.toString()],
+              ['Warnings Sent', stats.staleWarned.toString()],
+              ['Claims Released', stats.staleReleased.toString()],
+              ['Missing Metadata', stats.noMetadata.toString()],
+              ['Errors', stats.errors.toString()]
+            ];
+
+            core.summary
+              .addHeading(`Stale Claim Check ${DRY_RUN ? '(DRY RUN)' : ''}`, 2)
+              .addRaw(`**Run Time:** ${new Date().toISOString()}\n\n`)
+              .addTable(summaryTable);
+
+            if (staleReleases.length > 0) {
+              core.summary.addHeading('Claims Released', 3);
+              const releaseTable = [
+                [{data: 'Issue', header: true}, {data: 'Claimant', header: true}, {data: 'Days', header: true}],
+                ...staleReleases.map(r => [`#${r.issue}`, `@${r.claimant}`, r.daysSince.toString()])
+              ];
+              core.summary.addTable(releaseTable);
+            }
+
+            if (staleWarnings.length > 0) {
+              core.summary.addHeading('Warnings Sent', 3);
+              const warningTable = [
+                [{data: 'Issue', header: true}, {data: 'Claimant', header: true}, {data: 'Days Left', header: true}],
+                ...staleWarnings.map(w => [`#${w.issue}`, `@${w.claimant}`, w.daysRemaining.toString()])
+              ];
+              core.summary.addTable(warningTable);
+            }
+
+            if (stats.noMetadata > 0) {
+              core.summary.addRaw(`\n⚠️ **${stats.noMetadata} issue(s)** have the \`task:claimed\` label but no valid claim metadata. These may need manual cleanup.\n`);
+            }
+
+            await core.summary.write();
+
+            // Set outputs for potential downstream use
+            core.setOutput('processed', stats.processed);
+            core.setOutput('released', stats.staleReleased);
+            core.setOutput('warned', stats.staleWarned);
+            core.setOutput('active', stats.active);
+            core.setOutput('errors', stats.errors);
+
+            if (stats.errors > 0) {
+              core.warning(`${stats.errors} error(s) occurred during stale claim check`);
+            }
+
+            if (DRY_RUN) {
+              core.notice('This was a dry run - no actual changes were made');
+            }
+
+            console.log('Stale claim check complete');
