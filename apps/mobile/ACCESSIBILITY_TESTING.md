@@ -160,3 +160,25 @@ If you find accessibility issues:
 3. **Test with real users**: Automated testing can't catch all issues
 4. **Consider focus order**: Elements should be focused in logical order
 5. **Test with reduced motion**: Some users disable animations
+6. **Hide decorative elements**: Use `accessibilityElementsHidden` for visual-only content
+7. **Announce dynamic content**: Use `accessibilityLiveRegion` for updates
+
+## Review History
+
+### Phase 7.3 Review (Latest)
+All 15 components in `apps/mobile/components/` were audited for accessibility:
+- **TaskCard**: Comprehensive (label, hint, role, state, value)
+- **KanbanColumn**: Good (label, role on container and list)
+- **KanbanBoard**: Good (summary, role, live region for drag hints)
+- **ChatMessage**: Good (label, role, streaming state announcement)
+- **TerminalOutput**: Good (label, role, scroll controls)
+- **ProjectListItem**: Comprehensive (label, hint, role, state)
+- **EmptyState**: Good (label, role, action button hints)
+- **LoadingIndicator**: Good (label, role as progressbar)
+- **ErrorMessage**: Good (label, role as alert, severity prefix)
+- **Badge**: Good (label, role, hidden icons)
+- **Header**: Enhanced (modal header now has role and label)
+- **TerminalListItem**: Comprehensive (label, hint, role, state)
+- **ConnectionStatus**: Enhanced (pulse indicator now hidden)
+- **PRListItem**: Comprehensive (label, hint, role, state, action buttons)
+- **IssueListItem**: Comprehensive (label, hint, role, state, action buttons)

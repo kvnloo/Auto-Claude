@@ -306,7 +306,12 @@ export const ModalHeader: React.FC<{
   }, [onClose, router]);
 
   return (
-    <View style={styles.modalContainer} testID={testID}>
+    <View
+      style={styles.modalContainer}
+      testID={testID}
+      accessibilityRole="header"
+      accessibilityLabel={`${title} modal`}
+    >
       <View style={styles.modalContent}>
         <IconButton
           icon="close"
@@ -330,6 +335,8 @@ export const ModalHeader: React.FC<{
             style={styles.modalSaveButton}
             accessibilityLabel={saveLabel}
             accessibilityRole="button"
+            accessibilityState={{ disabled: saveDisabled }}
+            accessibilityHint="Tap to save changes"
           >
             <Text
               style={[

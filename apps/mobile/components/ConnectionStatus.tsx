@@ -141,6 +141,7 @@ const PulseIndicator: React.FC<{ color: string; size: number }> = ({ color, size
           opacity: pulseAnim,
         },
       ]}
+      accessibilityElementsHidden
     />
   );
 };
