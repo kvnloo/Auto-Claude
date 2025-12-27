@@ -33,3 +33,14 @@ export {
   moscowToScore,
   priorityFromLabels
 } from './task-prioritizer';
+
+// Autonomous queue manager
+export {
+  // Types
+  type AutonomousQueueEvents,
+  // Class
+  AutonomousQueueManager,
+  // Singleton accessors
+  getAutonomousQueueManager,
+  resetAutonomousQueueManager
+} from './autonomous-queue-manager';
