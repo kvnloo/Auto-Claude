@@ -51,7 +51,18 @@ export function getGitHubConfig(project: Project): GitHubConfig | null {
     }
 
     if (!token || !repo) return null;
-    return { token, repo };
+
+    // Read optional fork-related configuration
+    const isForkValue = vars['IS_FORK'];
+    const isFork = isForkValue?.toLowerCase() === 'true';
+    const parentRepo = vars['GITHUB_PARENT_REPO'];
+
+    return {
+      token,
+      repo,
+      ...(isFork && { isFork }),
+      ...(parentRepo && { parentRepo })
+    };
   } catch {
     return null;
   }
