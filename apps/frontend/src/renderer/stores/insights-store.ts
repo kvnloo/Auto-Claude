@@ -16,6 +16,27 @@ interface ToolUsage {
   input?: string;
 }
 
+// Session-scoped state for cross-session isolation
+// Each session gets its own state keyed by composite key: `${projectId}:${sessionId}`
+export interface SessionState {
+  streamingContent: string;
+  currentTool: ToolUsage | null;
+  status: InsightsChatStatus;
+  toolsUsed: InsightsToolUsage[];
+}
+
+// Helper to create composite key for session-scoped state
+export const createSessionKey = (projectId: string, sessionId: string): string =>
+  `${projectId}:${sessionId}`;
+
+// Default session state for new sessions
+const createDefaultSessionState = (): SessionState => ({
+  streamingContent: '',
+  currentTool: null,
+  status: { phase: 'idle', message: '' },
+  toolsUsed: []
+});
+
 interface InsightsState {
   // Data
   session: InsightsSession | null;
@@ -26,6 +47,11 @@ interface InsightsState {
   currentTool: ToolUsage | null; // Currently executing tool
   toolsUsed: InsightsToolUsage[]; // Tools used during current response
   isLoadingSessions: boolean;
+
+  // Session-scoped state (keyed by composite `projectId:sessionId`)
+  sessionStates: Record<string, SessionState>;
+  activeProjectId: string | null;
+  activeSessionId: string | null;
 
   // Actions
   setSession: (session: InsightsSession | null) => void;
@@ -42,6 +68,13 @@ interface InsightsState {
   finalizeStreamingMessage: (suggestedTask?: InsightsChatMessage['suggestedTask']) => void;
   clearSession: () => void;
   setLoadingSessions: (loading: boolean) => void;
+
+  // Session-scoped state actions
+  setActiveContext: (projectId: string | null, sessionId: string | null) => void;
+  getSessionState: (projectId: string, sessionId: string) => SessionState;
+  getActiveSessionState: () => SessionState | null;
+  updateSessionState: (projectId: string, sessionId: string, updates: Partial<SessionState>) => void;
+  clearSessionState: (projectId: string, sessionId: string) => void;
 }
 
 const initialStatus: InsightsChatStatus = {
@@ -49,7 +82,7 @@ const initialStatus: InsightsChatStatus = {
   message: ''
 };
 
-export const useInsightsStore = create<InsightsState>((set, _get) => ({
+export const useInsightsStore = create<InsightsState>((set, get) => ({
   // Initial state
   session: null,
   sessions: [],
@@ -59,6 +92,11 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
   currentTool: null,
   toolsUsed: [],
   isLoadingSessions: false,
+
+  // Session-scoped state initial values
+  sessionStates: {},
+  activeProjectId: null,
+  activeSessionId: null,
 
   // Actions
   setSession: (session) => set({ session }),
@@ -190,6 +228,58 @@ export const useInsightsStore = create<InsightsState>((set, _get) => ({
       streamingContent: '',
       currentTool: null,
       toolsUsed: []
+    }),
+
+  // Session-scoped state actions
+  setActiveContext: (projectId, sessionId) =>
+    set({
+      activeProjectId: projectId,
+      activeSessionId: sessionId
+    }),
+
+  getSessionState: (projectId, sessionId) => {
+    const key = createSessionKey(projectId, sessionId);
+    const state = get().sessionStates[key];
+    if (state) {
+      return state;
+    }
+    // Initialize and return default state for new sessions
+    const defaultState = createDefaultSessionState();
+    // Note: We don't persist this until there's actual state to store
+    return defaultState;
+  },
+
+  getActiveSessionState: () => {
+    const { activeProjectId, activeSessionId, sessionStates } = get();
+    if (!activeProjectId || !activeSessionId) {
+      return null;
+    }
+    const key = createSessionKey(activeProjectId, activeSessionId);
+    return sessionStates[key] || createDefaultSessionState();
+  },
+
+  updateSessionState: (projectId, sessionId, updates) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const currentSessionState = state.sessionStates[key] || createDefaultSessionState();
+      return {
+        sessionStates: {
+          ...state.sessionStates,
+          [key]: {
+            ...currentSessionState,
+            ...updates
+          }
+        }
+      };
+    }),
+
+  clearSessionState: (projectId, sessionId) =>
+    set((state) => {
+      const key = createSessionKey(projectId, sessionId);
+      const { [key]: _, ...remainingStates } = state.sessionStates;
+      return {
+        sessionStates: remainingStates
+      };
     })
 }));
 
