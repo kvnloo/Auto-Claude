@@ -123,6 +123,15 @@ export interface GitHubSyncStatus {
   issueCount?: number;
   lastSyncedAt?: string;
   error?: string;
+  /** Whether the repository is a fork */
+  isFork?: boolean;
+  /** Parent repository information if this is a fork */
+  parentRepository?: {
+    owner: string;
+    name: string;
+    fullName: string;
+    url: string;
+  };
 }
 
 export interface GitHubImportResult {

@@ -100,11 +100,11 @@ export function registerCheckConnection(): void {
           };
         }
 
-        // Fetch repo info
+        // Fetch repo info (using full type to get fork status)
         const repoData = await githubFetch(
           config.token,
           `/repos/${normalizedRepo}`
-        ) as { full_name: string; description?: string };
+        ) as GitHubAPIRepository;
 
         // Count open issues
         const issuesData = await githubFetch(
@@ -114,15 +114,29 @@ export function registerCheckConnection(): void {
 
         const openCount = Array.isArray(issuesData) ? issuesData.length : 0;
 
+        // Build response with fork status if applicable
+        const syncStatus: GitHubSyncStatus = {
+          connected: true,
+          repoFullName: repoData.full_name,
+          repoDescription: repoData.description,
+          issueCount: openCount,
+          lastSyncedAt: new Date().toISOString(),
+          isFork: repoData.fork ?? false
+        };
+
+        // Add parent repository info if this is a fork
+        if (repoData.fork && repoData.parent) {
+          syncStatus.parentRepository = {
+            owner: repoData.parent.owner.login,
+            name: repoData.parent.name,
+            fullName: repoData.parent.full_name,
+            url: repoData.parent.html_url
+          };
+        }
+
         return {
           success: true,
-          data: {
-            connected: true,
-            repoFullName: repoData.full_name,
-            repoDescription: repoData.description,
-            issueCount: openCount,
-            lastSyncedAt: new Date().toISOString()
-          }
+          data: syncStatus
         };
       } catch (error) {
         return {
