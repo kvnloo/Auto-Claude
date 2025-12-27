@@ -5,6 +5,10 @@
 export interface GitHubConfig {
   token: string;
   repo: string;
+  /** Whether this repository is a fork */
+  isFork?: boolean;
+  /** Parent repository in owner/repo format (e.g., 'original-owner/repo-name') */
+  parentRepo?: string;
 }
 
 export interface GitHubAPIIssue {
