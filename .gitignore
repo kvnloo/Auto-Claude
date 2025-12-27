@@ -162,4 +162,5 @@ _bmad/
 _bmad-output/
 .claude/
 /docs
+!/docs/fork-reputation.md
 OPUS_ANALYSIS_AND_IDEAS.md
