@@ -72,9 +72,11 @@ interface InsightsState {
   // Session-scoped state actions
   setActiveContext: (projectId: string | null, sessionId: string | null) => void;
   getSessionState: (projectId: string, sessionId: string) => SessionState;
+  getOrCreateSessionState: (projectId: string, sessionId: string) => SessionState;
   getActiveSessionState: () => SessionState | null;
   updateSessionState: (projectId: string, sessionId: string, updates: Partial<SessionState>) => void;
   clearSessionState: (projectId: string, sessionId: string) => void;
+  initializeSessionState: (projectId: string, sessionId: string) => void;
 
   // Session-specific methods for IPC listeners (cross-session isolation)
   isActiveSession: (projectId: string, sessionId: string) => boolean;
@@ -240,11 +242,16 @@ export const useInsightsStore = create<InsightsState>((set, get) => ({
     }),
 
   // Session-scoped state actions
-  setActiveContext: (projectId, sessionId) =>
+  setActiveContext: (projectId, sessionId) => {
     set({
       activeProjectId: projectId,
       activeSessionId: sessionId
-    }),
+    });
+    // Initialize session state for new sessions when context is set
+    if (projectId && sessionId) {
+      get().initializeSessionState(projectId, sessionId);
+    }
+  },
 
   getSessionState: (projectId, sessionId) => {
     const key = createSessionKey(projectId, sessionId);
@@ -252,9 +259,25 @@ export const useInsightsStore = create<InsightsState>((set, get) => ({
     if (state) {
       return state;
     }
-    // Initialize and return default state for new sessions
+    // Return default state for sessions not yet in the map
+    // Use getOrCreateSessionState if you need to persist the state
+    return createDefaultSessionState();
+  },
+
+  getOrCreateSessionState: (projectId, sessionId) => {
+    const key = createSessionKey(projectId, sessionId);
+    const currentState = get().sessionStates[key];
+    if (currentState) {
+      return currentState;
+    }
+    // Initialize and persist default state for new sessions
     const defaultState = createDefaultSessionState();
-    // Note: We don't persist this until there's actual state to store
+    set((state) => ({
+      sessionStates: {
+        ...state.sessionStates,
+        [key]: defaultState
+      }
+    }));
     return defaultState;
   },
 
@@ -290,6 +313,20 @@ export const useInsightsStore = create<InsightsState>((set, get) => ({
         sessionStates: remainingStates
       };
     }),
+
+  initializeSessionState: (projectId, sessionId) => {
+    const key = createSessionKey(projectId, sessionId);
+    const currentState = get().sessionStates[key];
+    // Only initialize if state doesn't already exist
+    if (!currentState) {
+      set((state) => ({
+        sessionStates: {
+          ...state.sessionStates,
+          [key]: createDefaultSessionState()
+        }
+      }));
+    }
+  },
 
   // Session-specific methods for IPC listeners (cross-session isolation)
   isActiveSession: (projectId, sessionId) => {
