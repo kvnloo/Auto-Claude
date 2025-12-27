@@ -24,7 +24,12 @@ import {
   ActivityIndicator,
 } from 'react-native-paper';
 import { useLocalSearchParams, Stack, router } from 'expo-router';
-import { TabView, TabBar } from 'react-native-tab-view';
+import {
+  TabView,
+  TabBar,
+  type SceneRendererProps,
+  type NavigationState,
+} from 'react-native-tab-view';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
 import { colors, spacing, borderRadius } from '../../theme';
 import { useTaskStore } from '../../stores/taskStore';
@@ -760,37 +765,65 @@ export default function TaskDetailScreen() {
     [task]
   );
 
-  // Custom tab bar - using SceneRendererProps type from react-native-tab-view
+  // Tab options for custom rendering with icons and labels
+  const tabOptions = useMemo(
+    () =>
+      routes.reduce(
+        (acc, route) => ({
+          ...acc,
+          [route.key]: {
+            label: ({
+              focused,
+            }: {
+              route: TabRoute;
+              focused: boolean;
+              color: string;
+            }) => (
+              <View style={styles.tabLabelContainer}>
+                <MaterialCommunityIcons
+                  name={route.icon}
+                  size={18}
+                  color={focused ? colors.accent.primary : colors.text.muted}
+                />
+                <Text
+                  style={[styles.tabLabel, focused && styles.tabLabelFocused]}
+                >
+                  {route.title}
+                </Text>
+              </View>
+            ),
+          },
+        }),
+        {} as Record<
+          string,
+          {
+            label: (props: {
+              route: TabRoute;
+              focused: boolean;
+              color: string;
+            }) => React.ReactNode;
+          }
+        >
+      ),
+    [routes]
+  );
+
+  // Custom tab bar
   const renderTabBar = useCallback(
-    (props: any) => (
+    (props: SceneRendererProps & { navigationState: NavigationState<TabRoute> }) => (
       <TabBar
         {...props}
         style={styles.tabBar}
         indicatorStyle={styles.tabIndicator}
-        renderLabel={({ route, focused }: { route: TabRoute; focused: boolean }) => (
-          <View style={styles.tabLabelContainer}>
-            <MaterialCommunityIcons
-              name={route.icon}
-              size={18}
-              color={focused ? colors.accent.primary : colors.text.muted}
-            />
-            <Text
-              style={[
-                styles.tabLabel,
-                focused && styles.tabLabelFocused,
-              ]}
-            >
-              {route.title}
-            </Text>
-          </View>
-        )}
+        options={tabOptions}
         tabStyle={styles.tabItem}
         scrollEnabled={false}
         pressColor={colors.accent.primary + '20'}
-        accessibilityRole="tablist"
+        activeColor={colors.accent.primary}
+        inactiveColor={colors.text.muted}
       />
     ),
-    []
+    [tabOptions]
   );
 
   // Handle missing task
