@@ -152,6 +152,7 @@ export default function PRDetailScreen() {
   const getPRById = useGitHubStore((state) => state.getPRById);
   const investigatePR = useGitHubStore((state) => state.investigatePR);
   const stopPRInvestigation = useGitHubStore((state) => state.stopPRInvestigation);
+  const updatePR = useGitHubStore((state) => state.updatePR);
 
   const pr = useMemo(() => (id ? getPRById(id) : undefined), [id, getPRById]);
 
@@ -204,6 +205,12 @@ export default function PRDetailScreen() {
       investigatePR(pr.id);
     }
   }, [pr, investigatePR, stopPRInvestigation]);
+
+  const handleAutoFix = useCallback(() => {
+    if (!pr) return;
+    // Toggle auto-fix state
+    updatePR(pr.id, { isAutoFixing: !pr.isAutoFixing });
+  }, [pr, updatePR]);
 
   const handleOpenInGitHub = useCallback(() => {
     if (pr?.htmlUrl) {
@@ -606,18 +613,40 @@ export default function PRDetailScreen() {
             >
               {pr.isInvestigating ? 'Stop Investigating' : 'Investigate'}
             </Button>
+
+            <Button
+              mode={pr.isAutoFixing ? 'contained' : 'outlined'}
+              onPress={handleAutoFix}
+              icon={pr.isAutoFixing ? 'stop' : 'wrench'}
+              style={styles.actionButton}
+              buttonColor={pr.isAutoFixing ? colors.accent.primary : undefined}
+              textColor={pr.isAutoFixing ? colors.text.inverse : colors.accent.primary}
+              accessibilityLabel={pr.isAutoFixing ? 'Stop auto-fix' : 'Auto-fix PR'}
+            >
+              {pr.isAutoFixing ? 'Stop Auto-fix' : 'Auto-fix'}
+            </Button>
           </View>
         )}
 
         {/* Status Indicators */}
-        {pr.isInvestigating && (
+        {(pr.isInvestigating || pr.isAutoFixing) && (
           <Surface style={styles.statusCard} elevation={1}>
-            <View style={styles.statusRow}>
-              <ActivityIndicator size={16} color={colors.status.info} />
-              <Text style={styles.statusText}>
-                Claude is investigating this pull request...
-              </Text>
-            </View>
+            {pr.isInvestigating && (
+              <View style={styles.statusRow}>
+                <ActivityIndicator size={16} color={colors.status.info} />
+                <Text style={styles.statusText}>
+                  Claude is investigating this pull request...
+                </Text>
+              </View>
+            )}
+            {pr.isAutoFixing && (
+              <View style={styles.statusRow}>
+                <ActivityIndicator size={16} color={colors.accent.primary} />
+                <Text style={styles.statusText}>
+                  Claude is working on improvements...
+                </Text>
+              </View>
+            )}
           </Surface>
         )}
 
