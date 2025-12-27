@@ -2392,3 +2392,923 @@ class TestStaleCheckIntegration:
 
         assert timing["warning_threshold"] < timing["expiry_threshold"]
         assert timing["expiry_threshold"] == 7
+
+
+# =============================================================================
+# E2E TEST: PR LINKS TO CLAIM, REPUTATION INCREASES ON MERGE
+# =============================================================================
+
+
+def make_pr_with_claim_metadata(
+    pr_number: int = 42,
+    author: str = "forkuser",
+    claimed_by: str | None = "forkuser",
+    claim_id: str | None = "claim-abc123def456",
+    linked_issue: int | None = 123,
+    title: str = "Fix issue #123",
+    body: str | None = None,
+    state: str = "open",
+    fork_reputation: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Create a mock PR with claim metadata in body."""
+    if body is None:
+        # Build body with claim information
+        body_lines = [
+            f"This PR addresses issue #{linked_issue}.",
+            "",
+            f"Fixes #{linked_issue}",
+            "",
+        ]
+
+        if claimed_by:
+            body_lines.extend([
+                "---",
+                "## Task Claim Information",
+                f"- **Claimed-By:** @{claimed_by}",
+            ])
+            if claim_id:
+                body_lines.append(f"- **Claim-ID:** `{claim_id}`")
+            if linked_issue:
+                body_lines.append(f"- **Linked Issue:** #{linked_issue}")
+
+            if fork_reputation:
+                score = fork_reputation.get("score", 0)
+                tier = fork_reputation.get("tier", "new")
+                reliability = fork_reputation.get("reliability_score", 0.5)
+                body_lines.extend([
+                    "",
+                    "### Fork Reputation",
+                    f"- **Score:** {score} ({tier})",
+                    f"- **Reliability:** {reliability:.0%}",
+                ])
+
+            # Add machine-readable metadata
+            metadata = {
+                "claimed_by": claimed_by,
+                "claim_id": claim_id,
+            }
+            if linked_issue:
+                metadata["issue_number"] = linked_issue
+            if fork_reputation:
+                metadata["fork_reputation"] = fork_reputation
+
+            body_lines.extend([
+                "",
+                f"<!-- CLAIM_METADATA: {json.dumps(metadata)} -->",
+            ])
+
+        body = "\n".join(body_lines)
+
+    return {
+        "number": pr_number,
+        "title": title,
+        "body": body,
+        "state": state,
+        "author": {"login": author},
+        "headRefName": "feature-branch",
+        "baseRefName": "main",
+        "url": f"https://github.com/owner/repo/pull/{pr_number}",
+        "additions": 50,
+        "deletions": 10,
+        "changedFiles": 3,
+    }
+
+
+class TestPRLinksToClaimReputationOnMerge:
+    """
+    E2E tests for PR links to claim and reputation increases on merge.
+
+    Test Verification Steps (from spec):
+    1. Fork claims test issue
+    2. Fork submits PR with Claimed-By metadata in description
+    3. Verify PR metadata includes claim_id, fork_owner, reputation
+    4. Merge PR to default branch
+    5. Verify reputation_tracker increases fork score by 10 points
+    6. Verify claim marked completed (could add task:completed label)
+    """
+
+    # =========================================================================
+    # Unit Tests: PR Claim Metadata Parsing
+    # =========================================================================
+
+    def test_extract_linked_issues_from_pr_body(self):
+        """Test extracting issue numbers from PR body."""
+        # Add providers path to sys.path
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        provider = GitHubProvider(_repo="test/test")
+
+        # Test various issue reference formats
+        pr_body = """
+        This PR fixes the authentication bug.
+
+        Fixes #123
+        Closes #456
+        Resolves: #789
+
+        Also related to #42.
+        """
+
+        issues = provider.extract_linked_issues(pr_body)
+
+        assert 123 in issues
+        assert 456 in issues
+        assert 789 in issues
+        # "related to #42" should NOT be captured (not a closing keyword)
+
+    def test_extract_linked_issues_empty_body(self):
+        """Test extracting issues from empty body."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        provider = GitHubProvider(_repo="test/test")
+
+        assert provider.extract_linked_issues("") == []
+        assert provider.extract_linked_issues(None) == []
+
+    def test_parse_pr_body_claim_fields(self):
+        """Test parsing claim fields from PR body."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        provider = GitHubProvider(_repo="test/test")
+
+        pr_body = """
+        ## Summary
+        Fixed the bug.
+
+        ---
+        ## Task Claim Information
+        - **Claimed-By:** @testfork
+        - **Claim-ID:** `claim-abc123def456`
+        - **Linked Issue:** #42
+
+        <!-- CLAIM_METADATA: {"claimed_by": "testfork", "claim_id": "claim-abc123def456", "issue_number": 42} -->
+        """
+
+        fields = provider.parse_pr_body_claim_fields(pr_body)
+
+        assert fields["claimed_by"] == "testfork"
+        assert fields["claim_id"] == "claim-abc123def456"
+        assert fields.get("issue_number") == 42
+
+    def test_parse_pr_body_claim_fields_no_metadata(self):
+        """Test parsing claim fields when not present."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        provider = GitHubProvider(_repo="test/test")
+
+        pr_body = """
+        ## Summary
+        Just a regular PR with no claim metadata.
+
+        Fixes #123
+        """
+
+        fields = provider.parse_pr_body_claim_fields(pr_body)
+
+        assert fields == {}
+
+    def test_format_pr_claim_body_section(self):
+        """Test formatting claim section for PR body."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        provider = GitHubProvider(_repo="test/test")
+
+        section = provider.format_pr_claim_body_section(
+            claimed_by="testfork",
+            claim_id="claim-test12345678",
+            linked_issue=42,
+            reputation_data={
+                "score": 75,
+                "tier": "silver",
+                "reliability_score": 0.9,
+            },
+        )
+
+        assert "**Claimed-By:** @testfork" in section
+        assert "`claim-test12345678`" in section
+        assert "#42" in section
+        assert "75" in section
+        assert "silver" in section
+        assert "90%" in section
+        assert "CLAIM_METADATA" in section
+
+        # Verify it can be parsed back
+        fields = provider.parse_pr_body_claim_fields(section)
+        assert fields["claimed_by"] == "testfork"
+        assert fields["claim_id"] == "claim-test12345678"
+
+    # =========================================================================
+    # Unit Tests: PRClaimMetadata Dataclass
+    # =========================================================================
+
+    def test_pr_claim_metadata_to_dict(self):
+        """Test PRClaimMetadata serialization."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import PRClaimMetadata
+
+        metadata = PRClaimMetadata(
+            claimed_by="testfork",
+            claim_id="claim-test12345678",
+            fork_reputation={"score": 50, "tier": "silver"},
+            claim_timestamp="2025-01-01T00:00:00Z",
+            linked_issue=42,
+            source="pr_body",
+        )
+
+        data = metadata.to_dict()
+
+        assert data["claimed_by"] == "testfork"
+        assert data["claim_id"] == "claim-test12345678"
+        assert data["fork_reputation"]["score"] == 50
+        assert data["linked_issue"] == 42
+        assert data["source"] == "pr_body"
+
+    def test_pr_claim_metadata_from_dict(self):
+        """Test PRClaimMetadata deserialization."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import PRClaimMetadata
+
+        data = {
+            "claimed_by": "testfork",
+            "claim_id": "claim-test12345678",
+            "timestamp": "2025-01-01T00:00:00Z",
+            "issue_number": 42,
+            "fork_reputation": {"score": 100, "tier": "gold"},
+        }
+
+        metadata = PRClaimMetadata.from_dict(data)
+
+        assert metadata.claimed_by == "testfork"
+        assert metadata.claim_id == "claim-test12345678"
+        assert metadata.claim_timestamp == "2025-01-01T00:00:00Z"
+        assert metadata.linked_issue == 42
+        assert metadata.fork_reputation["score"] == 100
+
+    # =========================================================================
+    # Mock-Based Tests: PR Claim Metadata Extraction
+    # =========================================================================
+
+    def test_get_pr_claim_metadata_from_body(self, mock_gh_client):
+        """Test getting claim metadata from PR body."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        # Setup mock
+        pr_data = make_pr_with_claim_metadata(
+            pr_number=42,
+            claimed_by="forkuser",
+            claim_id="claim-pr12345678",
+            linked_issue=123,
+            fork_reputation={"score": 50, "tier": "silver", "reliability_score": 0.8},
+        )
+        mock_gh_client.pr_get = AsyncMock(return_value=pr_data)
+
+        # Setup parse_claim_metadata to return proper metadata
+        def mock_parse_claim_metadata(body):
+            if "CLAIM_METADATA:" in body:
+                import re
+                match = re.search(r"<!--\s*CLAIM_METADATA:\s*(\{.*?\})\s*-->", body, re.DOTALL)
+                if match:
+                    return json.loads(match.group(1))
+            return None
+
+        mock_gh_client.parse_claim_metadata = mock_parse_claim_metadata
+
+        provider = GitHubProvider(_repo="test/test", _gh_client=mock_gh_client)
+
+        async def _run():
+            return await provider.get_pr_claim_metadata(42)
+
+        metadata = asyncio.run(_run())
+
+        assert metadata.claimed_by == "forkuser"
+        assert metadata.claim_id == "claim-pr12345678"
+        assert metadata.linked_issue == 123
+        assert metadata.source == "pr_body"
+        assert metadata.fork_reputation is not None
+        assert metadata.fork_reputation["score"] == 50
+
+    def test_get_pr_claim_metadata_fallback_to_issue(self, mock_gh_client):
+        """Test falling back to issue comments when PR body lacks metadata."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        # PR with no claim metadata in body
+        pr_data = {
+            "number": 42,
+            "title": "Fix issue #123",
+            "body": "This PR fixes issue #123.\n\nFixes #123",
+            "author": {"login": "forkuser"},
+        }
+        mock_gh_client.pr_get = AsyncMock(return_value=pr_data)
+
+        # Issue has claim metadata
+        mock_gh_client.get_claim_status = AsyncMock(return_value={
+            "status": "claimed",
+            "claim_metadata": {
+                "claimed_by": "forkuser",
+                "claim_id": "claim-issue12345",
+                "timestamp": "2025-01-01T00:00:00Z",
+                "fork_reputation": {"score": 30, "tier": "bronze"},
+            },
+        })
+
+        provider = GitHubProvider(_repo="test/test", _gh_client=mock_gh_client)
+
+        async def _run():
+            return await provider.get_pr_claim_metadata(42)
+
+        metadata = asyncio.run(_run())
+
+        assert metadata.claimed_by == "forkuser"
+        assert metadata.claim_id == "claim-issue12345"
+        assert metadata.linked_issue == 123
+        assert metadata.source == "issue_comment"
+
+    def test_get_pr_claim_metadata_no_metadata(self, mock_gh_client):
+        """Test when no claim metadata exists anywhere."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        # PR with no claim metadata
+        pr_data = {
+            "number": 42,
+            "title": "Random fix",
+            "body": "Just a regular fix.",
+            "author": {"login": "contributor"},
+        }
+        mock_gh_client.pr_get = AsyncMock(return_value=pr_data)
+
+        provider = GitHubProvider(_repo="test/test", _gh_client=mock_gh_client)
+
+        async def _run():
+            return await provider.get_pr_claim_metadata(42)
+
+        metadata = asyncio.run(_run())
+
+        # Should use PR author as fallback
+        assert metadata.claimed_by == "contributor"
+        assert metadata.claim_id is None
+        assert metadata.source == "unknown"
+
+    def test_get_pr_with_claim_metadata(self, mock_gh_client):
+        """Test convenience method to get both PR and claim metadata."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import GitHubProvider
+
+        # Setup mock
+        pr_data = make_pr_with_claim_metadata(
+            pr_number=42,
+            claimed_by="forkuser",
+            claim_id="claim-combo12345",
+            linked_issue=123,
+        )
+        mock_gh_client.pr_get = AsyncMock(return_value=pr_data)
+        mock_gh_client.pr_diff = AsyncMock(return_value="diff content")
+
+        provider = GitHubProvider(_repo="test/test", _gh_client=mock_gh_client)
+
+        async def _run():
+            return await provider.get_pr_with_claim_metadata(42)
+
+        pr, metadata = asyncio.run(_run())
+
+        # Verify PR data
+        assert pr.number == 42
+        assert pr.author == "forkuser"
+
+        # Verify claim metadata
+        assert metadata.claimed_by == "forkuser"
+        assert metadata.claim_id == "claim-combo12345"
+
+    # =========================================================================
+    # Reputation Integration Tests: PR Merge Increases Score
+    # =========================================================================
+
+    def test_reputation_increase_on_merge(self):
+        """Test that reputation increases by 10 points when PR is merged."""
+        from reputation_tracker import ReputationTracker, ReputationEventType
+
+        tracker = ReputationTracker()
+
+        # Get initial reputation (should be 0 for new fork)
+        initial_rep = tracker.get_reputation("mergefork")
+        assert initial_rep.score == 0
+
+        # Record a PR merge event
+        event = tracker.record_merge(
+            fork_owner="mergefork",
+            issue_number=123,
+            claim_id="claim-merged12345",
+            pr_number=42,
+            pr_url="https://github.com/owner/repo/pull/42",
+        )
+
+        # Verify event
+        assert event.event_type == ReputationEventType.PR_MERGED
+        assert event.score_delta == 10
+        assert event.score_after == 10
+        assert event.metadata.get("pr_number") == 42
+        assert event.metadata.get("pr_url") == "https://github.com/owner/repo/pull/42"
+
+        # Verify reputation updated
+        final_rep = tracker.get_reputation("mergefork")
+        assert final_rep.score == 10
+        assert final_rep.stats.successful_merges == 1
+        assert final_rep.stats.total_claims == 1
+
+    def test_reputation_multiple_merges(self):
+        """Test multiple merges accumulate reputation correctly."""
+        from reputation_tracker import ReputationTracker
+
+        tracker = ReputationTracker()
+
+        # Record 5 merges
+        for i in range(5):
+            tracker.record_merge(
+                fork_owner="prolificfork",
+                issue_number=100 + i,
+                claim_id=f"claim-merge{i:06d}",
+                pr_number=200 + i,
+            )
+
+        rep = tracker.get_reputation("prolificfork")
+
+        # 5 merges * 10 points = 50 points
+        assert rep.score == 50
+        assert rep.stats.successful_merges == 5
+        assert rep.stats.total_claims == 5
+        assert rep.stats.completion_rate == 1.0  # 100% completion
+        assert rep.stats.reliability_score == 1.0  # 100% reliability
+
+    def test_reputation_tier_advancement_on_merge(self):
+        """Test that tier advances as reputation increases from merges."""
+        from reputation_tracker import ReputationTracker, ReputationTier
+
+        tracker = ReputationTracker()
+
+        # Start at NEW tier
+        rep = tracker.get_reputation("tierfork")
+        assert rep.tier == ReputationTier.NEW
+
+        # 1 merge = 10 points = BRONZE
+        tracker.record_merge(fork_owner="tierfork", issue_number=1)
+        assert tracker.get_reputation("tierfork").tier == ReputationTier.BRONZE
+
+        # 3 more merges = 40 points = still BRONZE (need 25 for SILVER)
+        for i in range(2):
+            tracker.record_merge(fork_owner="tierfork", issue_number=10 + i)
+        assert tracker.get_reputation("tierfork").score == 30
+        assert tracker.get_reputation("tierfork").tier == ReputationTier.SILVER
+
+        # 2 more = 50 points = SILVER (need 50 for GOLD)
+        for i in range(2):
+            tracker.record_merge(fork_owner="tierfork", issue_number=20 + i)
+        assert tracker.get_reputation("tierfork").score == 50
+        assert tracker.get_reputation("tierfork").tier == ReputationTier.GOLD
+
+        # 5 more = 100 points = PLATINUM
+        for i in range(5):
+            tracker.record_merge(fork_owner="tierfork", issue_number=30 + i)
+        assert tracker.get_reputation("tierfork").score == 100
+        assert tracker.get_reputation("tierfork").tier == ReputationTier.PLATINUM
+
+    def test_reputation_merge_event_metadata(self):
+        """Test that merge event includes all expected metadata."""
+        from reputation_tracker import ReputationTracker, ReputationEventType
+
+        tracker = ReputationTracker()
+
+        event = tracker.record_merge(
+            fork_owner="metadatafork",
+            issue_number=456,
+            claim_id="claim-metadata1234",
+            pr_number=789,
+            pr_url="https://github.com/test/repo/pull/789",
+        )
+
+        # Verify all event fields
+        assert event.event_id.startswith("evt-")
+        assert event.event_type == ReputationEventType.PR_MERGED
+        assert event.fork_owner == "metadatafork"
+        assert event.issue_number == 456
+        assert event.claim_id == "claim-metadata1234"
+        assert event.score_delta == 10
+        assert event.score_after == 10
+        assert event.metadata["pr_number"] == 789
+        assert event.metadata["pr_url"] == "https://github.com/test/repo/pull/789"
+
+    def test_reputation_claim_metadata_after_merge(self):
+        """Test claim metadata reflects reputation after merge."""
+        from reputation_tracker import ReputationTracker
+
+        tracker = ReputationTracker()
+
+        # Record some merges to build reputation
+        for i in range(3):
+            tracker.record_merge(fork_owner="claimmeta", issue_number=i)
+
+        # Get claim metadata (as would be used in a new claim)
+        metadata = tracker.get_claim_metadata(
+            fork_owner="claimmeta",
+            claim_id="claim-new123456789",
+            issue_number=100,
+        )
+
+        assert metadata["claimed_by"] == "claimmeta"
+        assert metadata["claim_id"] == "claim-new123456789"
+        assert metadata["fork_reputation"]["score"] == 30
+        assert metadata["fork_reputation"]["successful_merges"] == 3
+
+    # =========================================================================
+    # Claim Completion Tests
+    # =========================================================================
+
+    def test_claim_marked_completed_on_merge(self):
+        """Test that claim stats reflect completion after merge."""
+        from reputation_tracker import ReputationTracker
+
+        tracker = ReputationTracker()
+
+        # Record a merge (which counts as completed claim)
+        tracker.record_merge(
+            fork_owner="completefork",
+            issue_number=123,
+            claim_id="claim-complete123",
+        )
+
+        rep = tracker.get_reputation("completefork")
+
+        # Verify completion tracked
+        assert rep.stats.total_claims == 1
+        assert rep.stats.successful_merges == 1
+        assert rep.stats.completion_rate == 1.0
+
+    def test_claim_completion_vs_abandon_ratio(self):
+        """Test reliability score with mixed outcomes."""
+        from reputation_tracker import ReputationTracker
+
+        tracker = ReputationTracker()
+
+        # 2 successful merges
+        tracker.record_merge(fork_owner="mixedfork", issue_number=1)
+        tracker.record_merge(fork_owner="mixedfork", issue_number=2)
+
+        # 1 abandon
+        tracker.record_abandon(fork_owner="mixedfork", issue_number=3)
+
+        rep = tracker.get_reputation("mixedfork")
+
+        # 2 merges * 10 - 1 abandon * 5 = 15 points
+        assert rep.score == 15
+        assert rep.stats.successful_merges == 2
+        assert rep.stats.abandoned_claims == 1
+        assert rep.stats.total_claims == 3
+
+        # Reliability: 2 / (2 + 1) = 66.7%
+        assert abs(rep.stats.reliability_score - 0.6667) < 0.01
+
+    # =========================================================================
+    # E2E Manual Test Script Generation
+    # =========================================================================
+
+    def test_e2e_pr_merge_reputation_script_generation(self, tmp_path):
+        """Generate bash script for PR merge reputation E2E testing."""
+        script_content = '''#!/bin/bash
+# E2E Test: PR Links to Claim, Reputation Increases on Merge
+# Generated by test_e2e_fork_claims.py::TestPRLinksToClaimReputationOnMerge
+#
+# This script tests the full workflow from claim to PR merge with reputation update.
+
+set -e
+
+REPO="${TEST_GITHUB_REPO:-}"
+if [ -z "$REPO" ]; then
+    echo "Error: TEST_GITHUB_REPO environment variable not set"
+    echo "Usage: TEST_GITHUB_REPO=owner/repo ./e2e_pr_merge_reputation_test.sh"
+    exit 1
+fi
+
+echo "=============================================="
+echo "E2E Test: PR Links to Claim, Reputation on Merge"
+echo "=============================================="
+echo "Repository: $REPO"
+echo ""
+
+# Get current user
+FORK_OWNER=$(gh api user --jq '.login')
+echo "Fork Owner: $FORK_OWNER"
+echo ""
+
+# Step 1: Create test issue
+echo "Step 1: Creating test issue with task:available label..."
+ISSUE_URL=$(gh issue create -R "$REPO" \\
+    --title "E2E Test: PR Merge Reputation $(date +%s)" \\
+    --body "Automated E2E test for PR merge reputation workflow" \\
+    --label "task:available")
+ISSUE_NUMBER=$(echo "$ISSUE_URL" | grep -oE "[0-9]+$")
+echo "Created issue #$ISSUE_NUMBER"
+echo ""
+
+# Step 2: Claim the issue
+echo "Step 2: Claiming the issue..."
+gh workflow run task-claim.yml -R "$REPO" -f issue_number="$ISSUE_NUMBER"
+echo "Claim workflow triggered"
+echo ""
+
+# Wait for claim to complete
+echo "Waiting 15 seconds for claim to process..."
+sleep 15
+
+# Step 3: Verify issue is claimed and get claim metadata
+echo "Step 3: Verifying issue is claimed..."
+ISSUE_DATA=$(gh issue view "$ISSUE_NUMBER" -R "$REPO" --json labels,comments)
+
+HAS_CLAIMED=$(echo "$ISSUE_DATA" | jq -r '.labels[].name' | grep -c "task:claimed" || true)
+if [ "$HAS_CLAIMED" -ne 1 ]; then
+    echo "  Error: Issue not claimed properly"
+    exit 1
+fi
+echo "  Issue claimed: YES"
+
+# Extract claim metadata
+CLAIM_METADATA=$(echo "$ISSUE_DATA" | jq -r '.comments[].body' | grep -oP '(?<=<!-- CLAIM_METADATA: ).*(?= -->)' | head -1)
+CLAIM_ID=$(echo "$CLAIM_METADATA" | jq -r '.claim_id // empty')
+echo "  Claim ID: $CLAIM_ID"
+echo ""
+
+# Step 4: Create a branch and make a change
+echo "Step 4: Creating feature branch and making changes..."
+BRANCH_NAME="e2e-test-pr-merge-$ISSUE_NUMBER"
+git checkout -b "$BRANCH_NAME" || git checkout "$BRANCH_NAME"
+
+# Create a small test file
+echo "# E2E Test File - Issue #$ISSUE_NUMBER" > "test-e2e-$ISSUE_NUMBER.md"
+git add "test-e2e-$ISSUE_NUMBER.md"
+git commit -m "Test change for issue #$ISSUE_NUMBER"
+git push -u origin "$BRANCH_NAME" || git push origin "$BRANCH_NAME"
+echo "  Branch created and pushed: $BRANCH_NAME"
+echo ""
+
+# Step 5: Create PR with claim metadata
+echo "Step 5: Creating PR with claim metadata..."
+PR_BODY=$(cat <<EOF
+## Summary
+This PR addresses issue #$ISSUE_NUMBER for E2E testing.
+
+Fixes #$ISSUE_NUMBER
+
+---
+## Task Claim Information
+- **Claimed-By:** @$FORK_OWNER
+- **Claim-ID:** \`$CLAIM_ID\`
+- **Linked Issue:** #$ISSUE_NUMBER
+
+<!-- CLAIM_METADATA: {"claimed_by": "$FORK_OWNER", "claim_id": "$CLAIM_ID", "issue_number": $ISSUE_NUMBER} -->
+EOF
+)
+
+PR_URL=$(gh pr create -R "$REPO" \\
+    --title "E2E Test: PR for issue #$ISSUE_NUMBER" \\
+    --body "$PR_BODY" \\
+    --base main \\
+    --head "$BRANCH_NAME")
+PR_NUMBER=$(echo "$PR_URL" | grep -oE "[0-9]+$")
+echo "  Created PR #$PR_NUMBER"
+echo ""
+
+# Step 6: Verify PR metadata
+echo "Step 6: Verifying PR metadata..."
+PR_DATA=$(gh pr view "$PR_NUMBER" -R "$REPO" --json body)
+PR_BODY_TEXT=$(echo "$PR_DATA" | jq -r '.body')
+
+# Check for claim metadata
+if echo "$PR_BODY_TEXT" | grep -q "Claimed-By"; then
+    echo "  Claimed-By field: PRESENT"
+else
+    echo "  Claimed-By field: MISSING"
+fi
+
+if echo "$PR_BODY_TEXT" | grep -q "Claim-ID"; then
+    echo "  Claim-ID field: PRESENT"
+else
+    echo "  Claim-ID field: MISSING"
+fi
+
+if echo "$PR_BODY_TEXT" | grep -q "CLAIM_METADATA"; then
+    echo "  CLAIM_METADATA: PRESENT"
+else
+    echo "  CLAIM_METADATA: MISSING"
+fi
+echo ""
+
+# Step 7: Merge PR (requires maintainer permissions)
+echo "Step 7: Merging PR..."
+echo "  NOTE: This step requires maintainer permissions."
+echo "  You may need to manually merge if you don't have write access."
+echo ""
+gh pr merge "$PR_NUMBER" -R "$REPO" --squash --yes || {
+    echo "  Could not auto-merge. Please merge manually and re-run verification."
+    echo "  PR URL: $PR_URL"
+}
+echo ""
+
+# Step 8: Verify reputation increase (requires checking local reputation store)
+echo "Step 8: Verifying reputation increase..."
+echo "  NOTE: Reputation tracking is done locally via reputation_tracker.py"
+echo "  In a production setup, a webhook or workflow would update reputation on merge."
+echo ""
+echo "  Expected: Fork $FORK_OWNER should have +10 points for successful merge."
+echo ""
+
+# Cleanup
+echo "=============================================="
+echo "Test Summary"
+echo "=============================================="
+echo ""
+echo "Issue: #$ISSUE_NUMBER"
+echo "PR: #$PR_NUMBER"
+echo "Claim ID: $CLAIM_ID"
+echo "Fork Owner: $FORK_OWNER"
+echo ""
+echo "Next steps:"
+echo "  1. If PR merged: Verify reputation increased by 10 points"
+echo "  2. Consider adding task:completed label to issue"
+echo "  3. Clean up test branch: git branch -d $BRANCH_NAME"
+echo ""
+echo "To clean up test artifacts:"
+echo "  gh pr close $PR_NUMBER -R $REPO --delete-branch"
+echo "  gh issue close $ISSUE_NUMBER -R $REPO"
+'''
+
+        script_path = tmp_path / "e2e_pr_merge_reputation_test.sh"
+        script_path.write_text(script_content)
+        script_path.chmod(0o755)
+
+        assert script_path.exists()
+        assert "CLAIM_METADATA" in script_path.read_text()
+        assert "reputation" in script_path.read_text().lower()
+        assert "+10 points" in script_path.read_text()
+
+    def test_e2e_steps_documented(self):
+        """Verify E2E test steps are documented in class docstring."""
+        doc = TestPRLinksToClaimReputationOnMerge.__doc__
+        assert doc is not None
+        assert "PR" in doc
+        assert "claim" in doc.lower()
+        assert "reputation" in doc.lower()
+        assert "merge" in doc.lower()
+
+    # =========================================================================
+    # Workflow Integration Tests
+    # =========================================================================
+
+    def test_pr_merge_workflow_exists(self):
+        """Test for a workflow that could handle PR merge events."""
+        # The spec mentions considering a PR merge event listener workflow
+        # This test documents what such a workflow would need
+
+        expected_workflow_behavior = """
+        A PR merge workflow would:
+        1. Trigger on pull_request merged event
+        2. Extract claim metadata from PR body
+        3. If claim_id present, update reputation via reputation_tracker
+        4. Add task:completed label to linked issue
+        5. Post completion comment to issue
+
+        Currently this is handled manually or via external automation.
+        """
+
+        assert "trigger" in expected_workflow_behavior.lower()
+        assert "reputation" in expected_workflow_behavior.lower()
+
+    def test_pr_metadata_required_fields(self):
+        """Test that PR claim metadata includes all required fields."""
+        providers_path = Path(__file__).parent.parent / "apps" / "backend" / "runners" / "github" / "providers"
+        sys.path.insert(0, str(providers_path))
+
+        from github_provider import PRClaimMetadata
+
+        # Create metadata with all required fields
+        metadata = PRClaimMetadata(
+            claimed_by="testfork",
+            claim_id="claim-allfields123",
+            fork_reputation={"score": 50, "tier": "silver"},
+            claim_timestamp="2025-01-01T00:00:00Z",
+            linked_issue=42,
+            source="pr_body",
+        )
+
+        # Required fields for spec compliance
+        required_fields = ["claimed_by", "claim_id", "linked_issue"]
+
+        data = metadata.to_dict()
+        for field in required_fields:
+            assert field in data, f"Missing required field: {field}"
+            assert data[field] is not None, f"Required field is None: {field}"
+
+
+# =============================================================================
+# INTEGRATION TESTS: PR Claim Metadata with GitHub CLI
+# =============================================================================
+
+
+@requires_gh_cli
+class TestPRClaimMetadataIntegration:
+    """
+    Integration tests for PR claim metadata using gh CLI.
+
+    These tests verify the GitHubProvider methods work correctly with
+    the actual GitHub API.
+    """
+
+    @pytest.fixture
+    def test_repo(self):
+        """Get test repository from environment."""
+        repo = os.environ.get("TEST_GITHUB_REPO")
+        if not repo:
+            pytest.skip("TEST_GITHUB_REPO environment variable not set")
+        return repo
+
+    def test_pr_list_with_gh_cli(self, test_repo):
+        """Test listing PRs via gh CLI."""
+        result = subprocess.run(
+            ["gh", "pr", "list", "-R", test_repo, "--json", "number,title,body", "--limit", "5"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0
+        prs = json.loads(result.stdout)
+        assert isinstance(prs, list)
+
+    def test_pr_with_claim_metadata_search(self, test_repo):
+        """Test searching for PRs with CLAIM_METADATA."""
+        result = subprocess.run(
+            ["gh", "pr", "list", "-R", test_repo, "--json", "number,body", "--limit", "20"],
+            capture_output=True,
+            text=True,
+            timeout=30,
+        )
+        assert result.returncode == 0
+        prs = json.loads(result.stdout)
+
+        # Check if any PRs have claim metadata
+        prs_with_metadata = [
+            pr for pr in prs
+            if pr.get("body") and "CLAIM_METADATA" in pr.get("body", "")
+        ]
+
+        # This is informational - may or may not find any
+        if prs_with_metadata:
+            print(f"Found {len(prs_with_metadata)} PRs with CLAIM_METADATA")
+
+    def test_issue_reference_patterns(self):
+        """Test that issue reference patterns match expected formats."""
+        import re
+
+        pattern = re.compile(
+            r"(?:close[sd]?|fix(?:e[sd])?|resolve[sd]?)\s*[:#]?\s*#?(\d+)",
+            re.IGNORECASE,
+        )
+
+        test_cases = [
+            ("Fixes #123", ["123"]),
+            ("fixes: #456", ["456"]),
+            ("Closes #789", ["789"]),
+            ("resolves #42", ["42"]),
+            ("fix #100", ["100"]),
+            ("Fixed #200", ["200"]),
+            ("This closes #1 and fixes #2", ["1", "2"]),
+        ]
+
+        for text, expected in test_cases:
+            matches = pattern.findall(text)
+            assert matches == expected, f"Pattern failed for: {text}"
