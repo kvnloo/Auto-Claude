@@ -147,3 +147,82 @@ export async function githubFetch(
 
   return response.json();
 }
+
+/**
+ * Result from githubFetchWithFallback
+ */
+export interface FallbackFetchResult<T = unknown> {
+  /** The data from the API call */
+  data: T;
+  /** The repository that was actually used for the API call */
+  usedRepo: string;
+  /** Whether a fallback occurred (parent repo was inaccessible) */
+  usedFallback: boolean;
+}
+
+/**
+ * Check if an error indicates the repository is inaccessible (403 Forbidden or 404 Not Found)
+ */
+function isRepoInaccessibleError(error: unknown): boolean {
+  if (!(error instanceof Error)) return false;
+  const message = error.message;
+  // Check for 403 (Forbidden - no permission) or 404 (Not Found - deleted or private)
+  return message.includes('403') || message.includes('404');
+}
+
+/**
+ * Make a GitHub API request with automatic fallback to fork repo when parent is inaccessible
+ *
+ * When configured to use a parent repository (for issues/PRs in a fork), this function:
+ * 1. First attempts to fetch from the parent repository
+ * 2. If the parent is inaccessible (403 Forbidden or 404 Not Found), falls back to the fork
+ * 3. Returns the result along with information about which repo was used
+ *
+ * This handles edge cases like:
+ * - Deleted parent repository
+ * - Private parent repository (user lacks access)
+ * - Renamed parent repository
+ *
+ * @param config - The GitHub configuration containing token, repo, and optional fork info
+ * @param endpointTemplate - The endpoint template with {repo} placeholder (e.g., '/repos/{repo}/issues')
+ * @param useParentForIssues - Whether to try the parent repo first (true for issues/PRs)
+ * @param options - Optional fetch options (method, body, headers)
+ * @returns Promise with the data, used repo, and fallback indicator
+ */
+export async function githubFetchWithFallback<T = unknown>(
+  config: GitHubConfig,
+  endpointTemplate: string,
+  useParentForIssues: boolean,
+  options: RequestInit = {}
+): Promise<FallbackFetchResult<T>> {
+  const forkRepo = normalizeRepoReference(config.repo);
+  const targetRepo = getTargetRepo(config, useParentForIssues);
+  const isUsingParent = targetRepo !== forkRepo;
+
+  // Replace {repo} placeholder in endpoint template
+  const endpoint = endpointTemplate.replace('{repo}', targetRepo);
+
+  try {
+    const data = await githubFetch(config.token, endpoint, options) as T;
+    return {
+      data,
+      usedRepo: targetRepo,
+      usedFallback: false
+    };
+  } catch (error) {
+    // If we were using the parent repo and it's inaccessible, fall back to fork
+    if (isUsingParent && isRepoInaccessibleError(error)) {
+      // Attempt fallback to fork repository
+      const fallbackEndpoint = endpointTemplate.replace('{repo}', forkRepo);
+      const data = await githubFetch(config.token, fallbackEndpoint, options) as T;
+      return {
+        data,
+        usedRepo: forkRepo,
+        usedFallback: true
+      };
+    }
+
+    // Re-throw if not a fallback-eligible error or already using fork
+    throw error;
+  }
+}
