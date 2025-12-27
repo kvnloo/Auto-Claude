@@ -7,6 +7,7 @@ export { DepthSlider, DepthSliderCompact } from './DepthSlider';
 export { InfoPanel, InfoPanelCompact } from './InfoPanel';
 export { GraphLegend, GraphLegendCompact, GraphLegendInline } from './GraphLegend';
 export { ExplorerEmptyState, ExplorerEmptyStateInline } from './ExplorerEmptyState';
+export { ExplorerLoadingState, ExplorerLoadingStateCompact, ExplorerLoadingStateInline } from './ExplorerLoadingState';
 
 // Hook exports
 export { useExplorer } from './hooks/useExplorer';
@@ -26,3 +27,9 @@ export type {
   ExplorerEmptyStateProps,
   ExplorerEmptyStateInlineProps,
 } from './ExplorerEmptyState';
+
+export type {
+  ExplorerLoadingStateProps,
+  ExplorerLoadingStateCompactProps,
+  ExplorerLoadingStateInlineProps,
+} from './ExplorerLoadingState';

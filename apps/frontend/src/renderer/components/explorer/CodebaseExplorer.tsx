@@ -19,8 +19,9 @@ import { DependencyGraph } from './DependencyGraph';
 import { DepthSlider, DepthSliderCompact } from './DepthSlider';
 import { InfoPanel } from './InfoPanel';
 import { GraphLegend, GraphLegendInline } from './GraphLegend';
+import { ExplorerLoadingState, ExplorerLoadingStateCompact } from './ExplorerLoadingState';
 import { useExplorer } from './hooks/useExplorer';
-import type { ExplorerLoadingStatus, DepthLevel, GraphNode } from '../../../shared/types/explorer';
+import type { DepthLevel, GraphNode } from '../../../shared/types/explorer';
 
 interface CodebaseExplorerProps {
   projectId: string;
@@ -301,102 +302,11 @@ export function CodebaseExplorer({ projectId }: CodebaseExplorerProps) {
       {/* Loading overlay */}
       {isLoading && hasGraph && (
         <div className="absolute inset-0 flex items-center justify-center bg-background/80">
-          <div className="flex items-center gap-3 rounded-lg bg-card px-4 py-3 shadow-lg">
-            <Loader2 className="h-5 w-5 animate-spin text-primary" />
-            <span className="text-sm">{loadingStatus.message || 'Updating graph...'}</span>
-          </div>
+          <ExplorerLoadingStateCompact status={loadingStatus} />
         </div>
       )}
     </div>
   );
-}
-
-/**
- * Loading state component shown while parsing codebase
- */
-interface ExplorerLoadingStateProps {
-  status: ExplorerLoadingStatus;
-}
-
-function ExplorerLoadingState({ status }: ExplorerLoadingStateProps) {
-  return (
-    <div className="flex h-full flex-col">
-      {/* Header */}
-      <div className="flex items-center justify-between border-b border-border px-6 py-4">
-        <div className="flex items-center gap-3">
-          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
-            <Network className="h-5 w-5 text-primary" />
-          </div>
-          <div>
-            <h2 className="font-semibold text-foreground">Codebase Explorer</h2>
-            <p className="text-sm text-muted-foreground">
-              Visualize and understand your codebase
-            </p>
-          </div>
-        </div>
-      </div>
-
-      {/* Loading Content */}
-      <div className="flex flex-1 flex-col items-center justify-center">
-        <div className="flex flex-col items-center gap-4">
-          <div className="relative">
-            <div className="flex h-20 w-20 items-center justify-center rounded-full bg-primary/10">
-              <Loader2 className="h-10 w-10 animate-spin text-primary" />
-            </div>
-          </div>
-          <div className="text-center">
-            <h3 className="text-lg font-medium text-foreground">
-              {getPhaseTitle(status.phase)}
-            </h3>
-            <p className="mt-1 text-sm text-muted-foreground">
-              {status.message}
-            </p>
-            {status.totalFiles && status.filesParsed !== undefined && (
-              <p className="mt-2 text-xs text-muted-foreground">
-                {status.filesParsed} / {status.totalFiles} files
-              </p>
-            )}
-          </div>
-          {/* Progress bar */}
-          <div className="w-64">
-            <div className="h-2 overflow-hidden rounded-full bg-muted">
-              <div
-                className="h-full bg-primary transition-all duration-300"
-                style={{ width: `${status.progress}%` }}
-              />
-            </div>
-            <p className="mt-1 text-center text-xs text-muted-foreground">
-              {status.progress}%
-            </p>
-          </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-/**
- * Get a user-friendly title for each loading phase
- */
-function getPhaseTitle(phase: ExplorerLoadingStatus['phase']): string {
-  switch (phase) {
-    case 'idle':
-      return 'Preparing...';
-    case 'loading-cache':
-      return 'Loading cached data...';
-    case 'scanning-files':
-      return 'Scanning files...';
-    case 'parsing':
-      return 'Parsing codebase...';
-    case 'building-graph':
-      return 'Building dependency graph...';
-    case 'complete':
-      return 'Complete';
-    case 'error':
-      return 'Error';
-    default:
-      return 'Loading...';
-  }
 }
 
 /**
