@@ -11,12 +11,33 @@
 
 /**
  * Connection state for Tailscale network connectivity
+ * @see spec.md - Technical Architecture - Connection State Machine
  */
 export type ConnectionState =
   | 'disconnected'
   | 'connecting'
   | 'connected'
   | 'error';
+
+/**
+ * Error types for connection failures
+ */
+export type ConnectionErrorType =
+  | 'invalid_ip'        // IP format or CGNAT range validation failed
+  | 'timeout'           // Health check timed out
+  | 'network_error'     // General network failure
+  | 'auth_error'        // API key authentication failed (401)
+  | 'server_error'      // Server returned error (5xx)
+  | 'unknown';          // Unknown error
+
+/**
+ * Connection error details
+ */
+export interface ConnectionError {
+  type: ConnectionErrorType;
+  message: string;
+  timestamp: number;
+}
 
 /**
  * Connection settings for the Tailscale-secured API connection
@@ -73,6 +94,27 @@ export interface AppSettings {
  */
 export const DEFAULT_APP_SETTINGS: AppSettings = {
   connection: DEFAULT_CONNECTION_SETTINGS,
+};
+
+/**
+ * Full settings state for the mobile app store
+ * Includes runtime state in addition to persisted settings
+ */
+export interface SettingsState {
+  connection: ConnectionSettings;
+  connectionState: ConnectionState;
+  connectionError: ConnectionError | null;
+  lastConnectedAt: number | null;
+}
+
+/**
+ * Default settings state
+ */
+export const DEFAULT_SETTINGS_STATE: SettingsState = {
+  connection: DEFAULT_CONNECTION_SETTINGS,
+  connectionState: 'disconnected',
+  connectionError: null,
+  lastConnectedAt: null,
 };
 
 // ============================================
