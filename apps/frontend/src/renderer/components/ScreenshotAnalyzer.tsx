@@ -1,19 +1,20 @@
-import { useCallback, useRef, useState, type DragEvent, type ChangeEvent } from 'react';
-import { Upload, X, AlertCircle, Image as ImageIcon, Loader2, Sparkles, FileText, Pencil, Check, HelpCircle, Layers, Copy } from 'lucide-react';
+import { useCallback, useRef, useState, useEffect, type DragEvent, type ChangeEvent, type ClipboardEvent } from 'react';
+import { Upload, X, AlertCircle, Image as ImageIcon, Loader2, Sparkles, FileText, Pencil, Check, HelpCircle, Layers, Copy, FileArchive, File } from 'lucide-react';
 import { Button } from './ui/button';
 import { cn } from '../lib/utils';
 import type { ImageAttachment } from '../../shared/types';
 import {
-  MAX_IMAGE_SIZE,
-  MAX_IMAGES_PER_TASK,
-  ALLOWED_IMAGE_TYPES,
-  ALLOWED_IMAGE_TYPES_DISPLAY
+  MAX_ATTACHMENT_SIZE,
+  MAX_ATTACHMENTS_PER_TASK,
+  ALLOWED_ATTACHMENT_TYPES,
+  ALLOWED_ATTACHMENT_TYPES_DISPLAY
 } from '../../shared/constants';
 import {
   generateImageId,
   fileToBase64,
+  blobToBase64,
   createThumbnail,
-  isValidImageType,
+  isValidImageMimeType,
   resolveFilename,
   formatFileSize
 } from './ImageUpload';
@@ -28,6 +29,33 @@ const MIN_RECOMMENDED_HEIGHT = 300;
  * Threshold for considering designs as complex (many components)
  */
 const COMPLEX_DESIGN_THRESHOLD = 20;
+
+/**
+ * Check if a file has a valid attachment type (images, PDFs, ZIPs)
+ */
+function isValidAttachmentType(file: File): boolean {
+  return (ALLOWED_ATTACHMENT_TYPES as readonly string[]).includes(file.type);
+}
+
+/**
+ * Check if a MIME type is an image type
+ */
+function isImageMimeType(mimeType: string): boolean {
+  return mimeType.startsWith('image/');
+}
+
+/**
+ * Get icon for file type
+ */
+function getFileTypeIcon(mimeType: string) {
+  if (mimeType === 'application/pdf') {
+    return FileText;
+  }
+  if (mimeType.includes('zip') || mimeType.includes('rar') || mimeType.includes('7z')) {
+    return FileArchive;
+  }
+  return ImageIcon;
+}
 
 /**
  * Hash a string using simple djb2 algorithm for duplicate detection
@@ -270,31 +298,136 @@ export function ScreenshotAnalyzer({
   const [lowQualityWarnings, setLowQualityWarnings] = useState<string[]>([]);
   const [isComplexDesign, setIsComplexDesign] = useState(false);
   const [taskBatchIndex, setTaskBatchIndex] = useState(0);
+  const [pasteSuccess, setPasteSuccess] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const containerRef = useRef<HTMLDivElement>(null);
 
-  const canAddMore = images.length < MAX_IMAGES_PER_TASK;
+  const canAddMore = images.length < MAX_ATTACHMENTS_PER_TASK;
   const hasImages = images.length > 0;
   const canAnalyze = hasImages && !isAnalyzing && !disabled;
 
   /**
+   * Handle clipboard paste for images (Ctrl+V support)
+   */
+  const handlePaste = useCallback(async (e: ClipboardEvent<HTMLDivElement>) => {
+    const clipboardItems = e.clipboardData?.items;
+    if (!clipboardItems) return;
+
+    // Find image items in clipboard
+    const imageItems: DataTransferItem[] = [];
+    for (let i = 0; i < clipboardItems.length; i++) {
+      const item = clipboardItems[i];
+      if (item.type.startsWith('image/')) {
+        imageItems.push(item);
+      }
+    }
+
+    // If no images, allow normal paste behavior
+    if (imageItems.length === 0) return;
+
+    // Prevent default paste behavior when we have images
+    e.preventDefault();
+
+    // Check if we can add more attachments
+    const remainingSlots = MAX_ATTACHMENTS_PER_TASK - images.length;
+    if (remainingSlots <= 0) {
+      setError(`Maximum of ${MAX_ATTACHMENTS_PER_TASK} attachments allowed`);
+      return;
+    }
+
+    setError(null);
+
+    // Process image items
+    const newImages: ImageAttachment[] = [];
+    const existingFilenames = images.map(img => img.filename);
+
+    for (const item of imageItems.slice(0, remainingSlots)) {
+      const file = item.getAsFile();
+      if (!file) continue;
+
+      // Validate image type
+      if (!isValidImageMimeType(file.type)) {
+        setError(`Invalid image type. Allowed: ${ALLOWED_ATTACHMENT_TYPES_DISPLAY}`);
+        continue;
+      }
+
+      try {
+        const dataUrl = await blobToBase64(file);
+        const base64Data = dataUrl.split(',')[1];
+
+        // Generate thumbnail for images
+        let thumbnail: string | undefined;
+        if (isImageMimeType(file.type)) {
+          thumbnail = await createThumbnail(dataUrl);
+        }
+
+        // Generate filename for pasted images (screenshot-timestamp.ext)
+        const extension = file.type.split('/')[1] || 'png';
+        const baseFilename = `screenshot-${Date.now()}.${extension}`;
+        const resolvedFilename = resolveFilename(baseFilename, [
+          ...existingFilenames,
+          ...newImages.map(img => img.filename)
+        ]);
+
+        newImages.push({
+          id: generateImageId(),
+          filename: resolvedFilename,
+          mimeType: file.type,
+          size: file.size,
+          data: base64Data,
+          thumbnail
+        });
+      } catch {
+        setError('Failed to process pasted image');
+      }
+    }
+
+    if (newImages.length > 0) {
+      setImages(prev => [...prev, ...newImages]);
+      // Show success feedback
+      setPasteSuccess(true);
+      setTimeout(() => setPasteSuccess(false), 2000);
+      // Clear previous analysis results when new images are added
+      setGeneratedTasks([]);
+      setQuestions([]);
+      setIsComplexDesign(false);
+      setTaskBatchIndex(0);
+    }
+  }, [images]);
+
+  // Add global paste listener when component is focused/visible
+  useEffect(() => {
+    const container = containerRef.current;
+    if (!container || disabled) return;
+
+    // Make the container focusable
+    container.setAttribute('tabindex', '0');
+
+    return () => {
+      container.removeAttribute('tabindex');
+    };
+  }, [disabled]);
+
+  /**
    * Process files and add them to the images array
+   * Supports images, PDFs, and archive files (ZIP, RAR, 7Z)
    */
   const processFiles = useCallback(
     async (files: FileList | File[], skipDuplicateCheck = false) => {
       setError(null);
       const fileArray = Array.from(files);
 
-      // Check how many more images we can add
-      const remainingSlots = MAX_IMAGES_PER_TASK - images.length;
+      // Check how many more attachments we can add
+      const remainingSlots = MAX_ATTACHMENTS_PER_TASK - images.length;
       if (remainingSlots <= 0) {
-        setError(`Maximum of ${MAX_IMAGES_PER_TASK} screenshots allowed`);
+        setError(`Maximum of ${MAX_ATTACHMENTS_PER_TASK} attachments allowed`);
         return;
       }
 
       // Limit files to remaining slots
       const filesToProcess = fileArray.slice(0, remainingSlots);
       if (fileArray.length > remainingSlots) {
-        setError(`Only ${remainingSlots} more screenshot(s) can be added. Some files were skipped.`);
+        setError(`Only ${remainingSlots} more file(s) can be added. Some files were skipped.`);
       }
 
       const newImages: ImageAttachment[] = [];
@@ -304,22 +437,25 @@ export function ScreenshotAnalyzer({
 
       for (const file of filesToProcess) {
         // Validate file type
-        if (!isValidImageType(file)) {
-          errors.push(`"${file.name}" is not a valid image type. Allowed: ${ALLOWED_IMAGE_TYPES_DISPLAY}`);
+        if (!isValidAttachmentType(file)) {
+          errors.push(`"${file.name}" is not a valid file type. Allowed: ${ALLOWED_ATTACHMENT_TYPES_DISPLAY}`);
           continue;
         }
 
-        // Warn about large files (but still allow - per spec)
-        if (file.size > MAX_IMAGE_SIZE) {
-          errors.push(`"${file.name}" is larger than 10MB. Consider compressing it for better performance.`);
+        // Warn about large files (use different thresholds for different types)
+        const maxSize = isImageMimeType(file.type) ? MAX_ATTACHMENT_SIZE / 2 : MAX_ATTACHMENT_SIZE;
+        if (file.size > maxSize) {
+          const sizeMB = maxSize / (1024 * 1024);
+          errors.push(`"${file.name}" is larger than ${sizeMB}MB. Consider compressing it.`);
+          continue; // Skip files that are too large
         }
 
         try {
           const dataUrl = await fileToBase64(file);
           const base64Data = dataUrl.split(',')[1];
 
-          // Check for duplicate uploads (unless explicitly skipped)
-          if (!skipDuplicateCheck) {
+          // Check for duplicate uploads (unless explicitly skipped) - only for images
+          if (!skipDuplicateCheck && isImageMimeType(file.type)) {
             const existingDuplicate = detectDuplicate(base64Data, images);
             if (existingDuplicate) {
               // Ask user if this is intentional
@@ -333,19 +469,26 @@ export function ScreenshotAnalyzer({
             }
           }
 
-          // Check image dimensions for quality warning
-          try {
-            const dimensions = await getImageDimensions(dataUrl);
-            if (dimensions.width < MIN_RECOMMENDED_WIDTH || dimensions.height < MIN_RECOMMENDED_HEIGHT) {
-              qualityWarnings.push(
-                `"${file.name}" has low resolution (${dimensions.width}×${dimensions.height}). Consider uploading a higher resolution image for better analysis.`
-              );
+          // Check image dimensions for quality warning (only for images)
+          if (isImageMimeType(file.type)) {
+            try {
+              const dimensions = await getImageDimensions(dataUrl);
+              if (dimensions.width < MIN_RECOMMENDED_WIDTH || dimensions.height < MIN_RECOMMENDED_HEIGHT) {
+                qualityWarnings.push(
+                  `"${file.name}" has low resolution (${dimensions.width}×${dimensions.height}). Consider uploading a higher resolution image for better analysis.`
+                );
+              }
+            } catch {
+              // Ignore dimension check errors - not critical
             }
-          } catch {
-            // Ignore dimension check errors - not critical
           }
 
-          const thumbnail = await createThumbnail(dataUrl);
+          // Generate thumbnail for images only
+          let thumbnail: string | undefined;
+          if (isImageMimeType(file.type)) {
+            thumbnail = await createThumbnail(dataUrl);
+          }
+
           const resolvedFilename = resolveFilename(file.name, [
             ...existingFilenames,
             ...newImages.map((img) => img.filename)
@@ -617,7 +760,19 @@ export function ScreenshotAnalyzer({
   }, [generatedTasks, onTasksGenerated]);
 
   return (
-    <div className={cn('space-y-4', className)}>
+    <div
+      ref={containerRef}
+      className={cn('space-y-4', className)}
+      onPaste={handlePaste}
+    >
+      {/* Paste success indicator */}
+      {pasteSuccess && (
+        <div className="flex items-center gap-2 text-sm text-success animate-in fade-in slide-in-from-top-1 duration-200">
+          <ImageIcon className="h-4 w-4" />
+          Image pasted successfully!
+        </div>
+      )}
+
       {/* Upload zone */}
       <div
         onDragOver={handleDragOver}
@@ -638,7 +793,7 @@ export function ScreenshotAnalyzer({
         <input
           ref={fileInputRef}
           type="file"
-          accept={ALLOWED_IMAGE_TYPES.join(',')}
+          accept={[...ALLOWED_ATTACHMENT_TYPES].join(',')}
           multiple
           onChange={handleFileChange}
           disabled={disabled || !canAddMore || isAnalyzing}
@@ -662,13 +817,13 @@ export function ScreenshotAnalyzer({
         <div className="space-y-1">
           <p className="text-sm font-medium text-foreground">
             {canAddMore
-              ? 'Drop design screenshots here or click to browse'
-              : 'Maximum screenshots reached'}
+              ? 'Drop files here, click to browse, or paste (Ctrl+V)'
+              : 'Maximum attachments reached'}
           </p>
           <p className="text-xs text-muted-foreground">
             {canAddMore
-              ? `${ALLOWED_IMAGE_TYPES_DISPLAY} up to 10MB each (${images.length}/${MAX_IMAGES_PER_TASK})`
-              : `${MAX_IMAGES_PER_TASK} screenshots maximum`}
+              ? `${ALLOWED_ATTACHMENT_TYPES_DISPLAY} (${images.length}/${MAX_ATTACHMENTS_PER_TASK})`
+              : `${MAX_ATTACHMENTS_PER_TASK} attachments maximum`}
           </p>
         </div>
       </div>
@@ -743,12 +898,12 @@ export function ScreenshotAnalyzer({
         </div>
       )}
 
-      {/* Screenshot previews */}
+      {/* File previews */}
       {images.length > 0 && (
         <div className="space-y-3">
           <div className="flex items-center justify-between">
             <p className="text-sm font-medium text-foreground">
-              Uploaded Screenshots ({images.length})
+              Uploaded Files ({images.length})
             </p>
             <Button
               variant="ghost"
@@ -766,61 +921,66 @@ export function ScreenshotAnalyzer({
           </div>
 
           <div className="grid grid-cols-3 sm:grid-cols-4 gap-2">
-            {images.map((image) => (
-              <div
-                key={image.id}
-                className="relative group rounded-lg border border-border bg-card overflow-hidden"
-              >
-                {/* Thumbnail or placeholder */}
-                <div className="aspect-square flex items-center justify-center bg-muted">
-                  {image.thumbnail ? (
-                    <img
-                      src={image.thumbnail}
-                      alt={image.filename}
-                      className="w-full h-full object-cover"
-                    />
-                  ) : (
-                    <ImageIcon className="h-8 w-8 text-muted-foreground" />
+            {images.map((image) => {
+              const FileIcon = getFileTypeIcon(image.mimeType);
+              const isImage = isImageMimeType(image.mimeType);
+
+              return (
+                <div
+                  key={image.id}
+                  className="relative group rounded-lg border border-border bg-card overflow-hidden"
+                >
+                  {/* Thumbnail or file type icon */}
+                  <div className="aspect-square flex items-center justify-center bg-muted">
+                    {image.thumbnail && isImage ? (
+                      <img
+                        src={image.thumbnail}
+                        alt={image.filename}
+                        className="w-full h-full object-cover"
+                      />
+                    ) : (
+                      <FileIcon className="h-8 w-8 text-muted-foreground" />
+                    )}
+                  </div>
+
+                  {/* File info overlay */}
+                  <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5">
+                    <p className="text-[10px] text-white font-medium truncate">
+                      {image.filename}
+                    </p>
+                    <p className="text-[9px] text-white/70">{formatFileSize(image.size)}</p>
+                  </div>
+
+                  {/* Remove button */}
+                  {!disabled && !isAnalyzing && (
+                    <Button
+                      variant="destructive"
+                      size="icon"
+                      className={cn(
+                        'absolute top-1 right-1 h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity',
+                        'rounded-full'
+                      )}
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleRemove(image.id);
+                      }}
+                    >
+                      <X className="h-3 w-3" />
+                    </Button>
+                  )}
+
+                  {/* Large file warning indicator */}
+                  {image.size > MAX_ATTACHMENT_SIZE && (
+                    <div
+                      className="absolute top-1 left-1 p-0.5 rounded-full bg-warning/90"
+                      title="Large file - consider compressing"
+                    >
+                      <AlertCircle className="h-3 w-3 text-warning-foreground" />
+                    </div>
                   )}
                 </div>
-
-                {/* File info overlay */}
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/70 to-transparent p-1.5">
-                  <p className="text-[10px] text-white font-medium truncate">
-                    {image.filename}
-                  </p>
-                  <p className="text-[9px] text-white/70">{formatFileSize(image.size)}</p>
-                </div>
-
-                {/* Remove button */}
-                {!disabled && !isAnalyzing && (
-                  <Button
-                    variant="destructive"
-                    size="icon"
-                    className={cn(
-                      'absolute top-1 right-1 h-5 w-5 opacity-0 group-hover:opacity-100 transition-opacity',
-                      'rounded-full'
-                    )}
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleRemove(image.id);
-                    }}
-                  >
-                    <X className="h-3 w-3" />
-                  </Button>
-                )}
-
-                {/* Large file warning indicator */}
-                {image.size > MAX_IMAGE_SIZE && (
-                  <div
-                    className="absolute top-1 left-1 p-0.5 rounded-full bg-warning/90"
-                    title="Large file - consider compressing"
-                  >
-                    <AlertCircle className="h-3 w-3 text-warning-foreground" />
-                  </div>
-                )}
-              </div>
-            ))}
+              );
+            })}
           </div>
 
           {/* Analyze button */}

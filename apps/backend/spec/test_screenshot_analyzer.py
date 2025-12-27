@@ -241,8 +241,8 @@ class TestImageValidation:
         """Invalid MIME type fails validation."""
         image = ImageAttachment(
             id="uuid-123",
-            filename="test.pdf",
-            mime_type="application/pdf",
+            filename="test.exe",
+            mime_type="application/octet-stream",  # Not in allowed types
             size=1024,
             data=valid_image_data,
         )
@@ -1045,12 +1045,20 @@ class TestConstants:
     def test_allowed_mime_types(self):
         """All expected MIME types are allowed."""
         expected = {
+            # Images
             "image/png",
             "image/jpeg",
             "image/jpg",
             "image/gif",
             "image/webp",
             "image/svg+xml",
+            # Documents
+            "application/pdf",
+            # Archives
+            "application/zip",
+            "application/x-zip-compressed",
+            "application/x-rar-compressed",
+            "application/x-7z-compressed",
         }
         assert ALLOWED_MIME_TYPES == expected
 

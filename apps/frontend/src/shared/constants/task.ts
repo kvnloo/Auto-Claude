@@ -184,8 +184,14 @@ export const TASK_PRIORITY_COLORS: Record<string, string> = {
 // Maximum image file size (10 MB)
 export const MAX_IMAGE_SIZE = 10 * 1024 * 1024;
 
+// Maximum attachment file size (20 MB for PDFs/ZIPs)
+export const MAX_ATTACHMENT_SIZE = 20 * 1024 * 1024;
+
 // Maximum number of images per task
 export const MAX_IMAGES_PER_TASK = 10;
+
+// Maximum number of attachments per task (includes all file types)
+export const MAX_ATTACHMENTS_PER_TASK = 20;
 
 // Maximum number of referenced files per task
 export const MAX_REFERENCED_FILES = 20;
@@ -200,11 +206,39 @@ export const ALLOWED_IMAGE_TYPES = [
   'image/svg+xml'
 ] as const;
 
+// Allowed attachment MIME types (images + documents + archives)
+export const ALLOWED_ATTACHMENT_TYPES = [
+  // Images
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/gif',
+  'image/webp',
+  'image/svg+xml',
+  // Documents
+  'application/pdf',
+  // Archives (can contain multiple images)
+  'application/zip',
+  'application/x-zip-compressed',
+  'application/x-rar-compressed',
+  'application/x-7z-compressed'
+] as const;
+
 // Allowed image file extensions (for display)
 export const ALLOWED_IMAGE_EXTENSIONS = ['.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg'] as const;
 
+// Allowed attachment file extensions (for display)
+export const ALLOWED_ATTACHMENT_EXTENSIONS = [
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg',
+  '.pdf',
+  '.zip', '.rar', '.7z'
+] as const;
+
 // Human-readable allowed types for error messages
 export const ALLOWED_IMAGE_TYPES_DISPLAY = 'PNG, JPEG, GIF, WebP, SVG';
+
+// Human-readable allowed attachment types for error messages
+export const ALLOWED_ATTACHMENT_TYPES_DISPLAY = 'PNG, JPEG, GIF, WebP, SVG, PDF, ZIP, RAR, 7Z';
 
 // Attachments directory name within spec folder
 export const ATTACHMENTS_DIR = 'attachments';

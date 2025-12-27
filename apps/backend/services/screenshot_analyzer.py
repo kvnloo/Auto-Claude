@@ -43,25 +43,46 @@ MAX_SCREENSHOTS = 10
 # Maximum filename length
 MAX_FILENAME_LENGTH = 255
 
-# Allowed MIME types for screenshots
+# Maximum file size for PDFs/archives (20MB)
+MAX_ATTACHMENT_SIZE_BYTES = 20 * 1024 * 1024
+
+# Allowed MIME types for screenshots and attachments
 ALLOWED_MIME_TYPES = frozenset([
+    # Images
     "image/png",
     "image/jpeg",
     "image/jpg",
     "image/gif",
     "image/webp",
     "image/svg+xml",
+    # Documents
+    "application/pdf",
+    # Archives (can contain multiple images)
+    "application/zip",
+    "application/x-zip-compressed",
+    "application/x-rar-compressed",
+    "application/x-7z-compressed",
 ])
 
-# Image magic bytes (file signatures) for content validation
+# File magic bytes (file signatures) for content validation
 # Maps MIME type to list of possible magic byte sequences
-IMAGE_MAGIC_BYTES: dict[str, list[bytes]] = {
+FILE_MAGIC_BYTES: dict[str, list[bytes]] = {
+    # Images
     "image/png": [b"\x89PNG\r\n\x1a\n"],
     "image/jpeg": [b"\xff\xd8\xff"],
     "image/jpg": [b"\xff\xd8\xff"],  # Same as jpeg
     "image/gif": [b"GIF87a", b"GIF89a"],
     "image/webp": [b"RIFF"],  # WebP starts with RIFF, then has WEBP after size
+    # Documents
+    "application/pdf": [b"%PDF-"],
+    # Archives
+    "application/zip": [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"],
+    "application/x-zip-compressed": [b"PK\x03\x04", b"PK\x05\x06", b"PK\x07\x08"],
+    "application/x-rar-compressed": [b"Rar!\x1a\x07\x00", b"Rar!\x1a\x07\x01\x00"],
+    "application/x-7z-compressed": [b"7z\xbc\xaf'\x1c"],
 }
+# Backward compatibility alias
+IMAGE_MAGIC_BYTES = FILE_MAGIC_BYTES
 # SVG is text-based, so we check for XML/SVG markers instead
 SVG_MARKERS = [b"<?xml", b"<svg", b"<!DOCTYPE svg"]
 
@@ -149,9 +170,9 @@ def validate_magic_bytes(data: bytes, mime_type: str) -> tuple[bool, str]:
                 return True, ""
         return False, "File content does not appear to be SVG"
 
-    # Check binary image magic bytes
-    if mime_type in IMAGE_MAGIC_BYTES:
-        magic_sequences = IMAGE_MAGIC_BYTES[mime_type]
+    # Check binary file magic bytes
+    if mime_type in FILE_MAGIC_BYTES:
+        magic_sequences = FILE_MAGIC_BYTES[mime_type]
         for magic in magic_sequences:
             if data.startswith(magic):
                 # Special case for WebP: verify WEBP signature at offset 8
@@ -561,19 +582,22 @@ class ScreenshotAnalyzer:
                     ValidationError(
                         image_id=image.id,
                         filename=image.filename,
-                        error=f"Invalid file type: {image.mime_type}. Allowed: PNG, JPEG, GIF, WebP, SVG",
+                        error=f"Invalid file type: {image.mime_type}. Allowed: PNG, JPEG, GIF, WebP, SVG, PDF, ZIP, RAR, 7Z",
                     )
                 )
                 continue
 
-            # Check reported file size
-            if image.size > MAX_FILE_SIZE_BYTES:
+            # Check reported file size (different limits for different file types)
+            is_image = image.mime_type.startswith("image/")
+            max_size = MAX_FILE_SIZE_BYTES if is_image else MAX_ATTACHMENT_SIZE_BYTES
+            max_size_mb = max_size / (1024 * 1024)
+            if image.size > max_size:
                 size_mb = image.size / (1024 * 1024)
                 errors.append(
                     ValidationError(
                         image_id=image.id,
                         filename=image.filename,
-                        error=f"File too large: {size_mb:.1f}MB exceeds maximum of 10MB",
+                        error=f"File too large: {size_mb:.1f}MB exceeds maximum of {max_size_mb:.0f}MB",
                     )
                 )
                 continue

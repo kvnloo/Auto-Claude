@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef, useMemo, type ClipboardEvent, type DragEvent } from 'react';
-import { Loader2, ChevronDown, ChevronUp, Image as ImageIcon, X, RotateCcw, FolderTree, GitBranch, Camera, FileEdit } from 'lucide-react';
+import { Loader2, ChevronDown, ChevronUp, Image as ImageIcon, X, RotateCcw, FolderTree, GitBranch, Sparkles } from 'lucide-react';
 import {
   Dialog,
   DialogContent,
@@ -73,10 +73,7 @@ export function TaskCreationWizard({
   const [showAdvanced, setShowAdvanced] = useState(false);
   const [showFileExplorer, setShowFileExplorer] = useState(false);
   const [showGitOptions, setShowGitOptions] = useState(false);
-
-  // Creation mode: manual entry or screenshot-based generation
-  type CreationMode = 'manual' | 'screenshot';
-  const [creationMode, setCreationMode] = useState<CreationMode>('manual');
+  const [showScreenshotAnalyzer, setShowScreenshotAnalyzer] = useState(false);
 
   // Git options state
   // Use a special value to represent "use project default" since Radix UI Select doesn't allow empty string values
@@ -629,10 +626,11 @@ export function TaskCreationWizard({
 
     const generatedDescription = `# Screenshot Analysis Results\n\n${taskDescriptions.join('\n\n---\n\n')}`;
 
-    // Set the description and switch to manual mode for editing
+    // Set the description - screenshot analyzer is now integrated inline
     setDescription(generatedDescription);
-    setCreationMode('manual');
     setError(null);
+    // Collapse the screenshot analyzer after tasks are generated
+    setShowScreenshotAnalyzer(false);
 
     // Auto-generate a title if empty
     if (!title.trim()) {
@@ -716,9 +714,9 @@ export function TaskCreationWizard({
     setShowAdvanced(false);
     setShowFileExplorer(false);
     setShowGitOptions(false);
+    setShowScreenshotAnalyzer(false);
     setIsDraftRestored(false);
     setPasteSuccess(false);
-    setCreationMode('manual');
   };
 
   /**
@@ -792,56 +790,7 @@ export function TaskCreationWizard({
           </DialogDescription>
         </DialogHeader>
 
-        {/* Creation Mode Toggle */}
-        <div className="flex items-center gap-1 p-1 bg-muted rounded-lg mb-2">
-          <button
-            type="button"
-            onClick={() => setCreationMode('manual')}
-            disabled={isCreating}
-            className={cn(
-              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all',
-              creationMode === 'manual'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            <FileEdit className="h-4 w-4" />
-            Manual Entry
-          </button>
-          <button
-            type="button"
-            onClick={() => setCreationMode('screenshot')}
-            disabled={isCreating}
-            className={cn(
-              'flex-1 flex items-center justify-center gap-2 px-3 py-2 rounded-md text-sm font-medium transition-all',
-              creationMode === 'screenshot'
-                ? 'bg-background text-foreground shadow-sm'
-                : 'text-muted-foreground hover:text-foreground'
-            )}
-          >
-            <Camera className="h-4 w-4" />
-            From Screenshot
-          </button>
-        </div>
-
         <div className="space-y-5 py-4">
-          {/* Screenshot Mode Content */}
-          {creationMode === 'screenshot' && (
-            <div className="space-y-4">
-              <ScreenshotAnalyzer
-                onTasksGenerated={handleScreenshotTasksGenerated}
-                disabled={isCreating}
-              />
-              <p className="text-xs text-muted-foreground text-center">
-                Upload design screenshots to generate implementation tasks automatically.
-                Selected tasks will populate the description for editing.
-              </p>
-            </div>
-          )}
-
-          {/* Manual Entry Mode Content */}
-          {creationMode === 'manual' && (
-            <>
           {/* Description (Primary - Required) */}
           <div className="space-y-2">
             <Label htmlFor="description" className="text-sm font-medium text-foreground">
@@ -1199,7 +1148,40 @@ export function TaskCreationWizard({
               </div>
             </div>
           )}
-            </>
+
+          {/* Screenshot Analyzer Toggle */}
+          <button
+            type="button"
+            onClick={() => setShowScreenshotAnalyzer(!showScreenshotAnalyzer)}
+            className={cn(
+              'flex items-center gap-2 text-sm text-muted-foreground hover:text-foreground transition-colors',
+              'w-full justify-between py-2 px-3 rounded-md hover:bg-muted/50'
+            )}
+            disabled={isCreating}
+          >
+            <span className="flex items-center gap-2">
+              <Sparkles className="h-4 w-4" />
+              Generate from Screenshot
+            </span>
+            {showScreenshotAnalyzer ? (
+              <ChevronUp className="h-4 w-4" />
+            ) : (
+              <ChevronDown className="h-4 w-4" />
+            )}
+          </button>
+
+          {/* Screenshot Analyzer Content */}
+          {showScreenshotAnalyzer && (
+            <div className="space-y-3 p-4 rounded-lg border border-border bg-muted/30">
+              <ScreenshotAnalyzer
+                onTasksGenerated={handleScreenshotTasksGenerated}
+                disabled={isCreating}
+              />
+              <p className="text-xs text-muted-foreground text-center">
+                Upload design screenshots, PDFs, or ZIP files to generate implementation tasks.
+                Selected tasks will populate the description above.
+              </p>
+            </div>
           )}
 
           {/* Error */}
@@ -1213,8 +1195,8 @@ export function TaskCreationWizard({
 
         <DialogFooter>
           <div className="flex items-center gap-2">
-            {/* File Explorer Toggle Button - only in manual mode */}
-            {projectPath && creationMode === 'manual' && (
+            {/* File Explorer Toggle Button */}
+            {projectPath && (
               <Button
                 type="button"
                 variant={showFileExplorer ? 'default' : 'outline'}
@@ -1232,19 +1214,16 @@ export function TaskCreationWizard({
             <Button variant="outline" onClick={handleClose} disabled={isCreating}>
               Cancel
             </Button>
-            {/* Create Task button - only in manual mode */}
-            {creationMode === 'manual' && (
-              <Button onClick={handleCreate} disabled={isCreating || !description.trim()}>
-                {isCreating ? (
-                  <>
-                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                    Creating...
-                  </>
-                ) : (
-                  'Create Task'
-                )}
-              </Button>
-            )}
+            <Button onClick={handleCreate} disabled={isCreating || !description.trim()}>
+              {isCreating ? (
+                <>
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                  Creating...
+                </>
+              ) : (
+                'Create Task'
+              )}
+            </Button>
           </div>
         </DialogFooter>
           </div>
