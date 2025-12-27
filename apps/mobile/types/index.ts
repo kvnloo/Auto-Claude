@@ -19,3 +19,46 @@ export {
   TAILSCALE_CGNAT,
   TAILSCALE_IP_PATTERN,
 } from './settings';
+
+// API types
+export type {
+  // Health check types
+  HealthStatus,
+  HealthCheckResponse,
+  // Version types
+  VersionResponse,
+  // Error types
+  ApiErrorResponse,
+  ApiResponseWrapper,
+  // Status types
+  ComponentStatus,
+  ApiComponentStatus,
+  ProjectStoreStatus,
+  MemoryUsage,
+  SystemStatusResponse,
+  // Connection types
+  ApiConnectionState,
+  ConnectionStatus,
+  // Request/Response types
+  HttpMethod,
+  ApiEndpoint,
+  // Task types
+  TaskStatus,
+  SubtaskStatus,
+  ExecutionPhase,
+  TaskSummary,
+  ListTasksResponse,
+  ProjectSummary,
+  ListProjectsResponse,
+  // Pagination types
+  PaginationParams,
+  PaginatedResponse,
+} from './api';
+
+export {
+  // Type guards
+  isApiErrorResponse,
+  isHealthy,
+  isDegraded,
+  isUnhealthy,
+} from './api';
