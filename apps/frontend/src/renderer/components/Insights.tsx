@@ -31,7 +31,8 @@ import {
   renameSession,
   updateModelConfig,
   createTaskFromSuggestion,
-  setupInsightsListeners
+  setupInsightsListeners,
+  setActiveContext
 } from '../stores/insights-store';
 import { loadTasks } from '../stores/task-store';
 import { ChatHistorySidebar } from './ChatHistorySidebar';
@@ -70,6 +71,16 @@ export function Insights({ projectId }: InsightsProps) {
     const cleanup = setupInsightsListeners();
     return cleanup;
   }, [projectId]);
+
+  // Set active context for cross-session isolation
+  // This ensures IPC events are only processed for the active project/session
+  useEffect(() => {
+    setActiveContext(projectId, session?.id || null);
+    // Clear active context on unmount
+    return () => {
+      setActiveContext(null, null);
+    };
+  }, [projectId, session?.id]);
 
   // Auto-scroll to bottom when messages change
   useEffect(() => {

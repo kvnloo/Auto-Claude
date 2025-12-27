@@ -729,3 +729,9 @@ export function setupInsightsListeners(): () => void {
     unsubError();
   };
 }
+
+// Set active context for cross-session isolation
+// Call this when mounting the Insights component or switching sessions
+export function setActiveContext(projectId: string | null, sessionId: string | null): void {
+  useInsightsStore.getState().setActiveContext(projectId, sessionId);
+}
