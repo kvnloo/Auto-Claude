@@ -447,6 +447,342 @@ describe('Insights Store - Cross-Session Isolation', () => {
     });
   });
 
+  describe('Cross-Project Isolation - Full E2E Flow', () => {
+    /**
+     * These tests verify the complete cross-project isolation flow as specified in the spec:
+     * 1. Use tools in Project X conversation
+     * 2. Switch to Project Y
+     * 3. Verify no loading states, tool indicators, or suggestions from X appear in Y
+     * 4. Return to Project X and verify state is preserved
+     */
+
+    it('should complete full cross-project isolation E2E flow', () => {
+      const store = useInsightsStore.getState();
+
+      // Step 1: Use tools in Project X conversation
+      store.setActiveContext('project-X', 'session-X');
+      store.setSession({
+        id: 'session-X',
+        projectId: 'project-X',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Simulate tool usage in Project X
+      store.setSessionCurrentTool('project-X', 'session-X', {
+        name: 'Read',
+        input: 'file-from-x.ts'
+      });
+      store.addSessionToolUsage('project-X', 'session-X', {
+        name: 'Read',
+        input: 'file-from-x.ts'
+      });
+      store.setSessionStatus('project-X', 'session-X', {
+        phase: 'streaming',
+        message: 'Using Read...'
+      });
+      store.appendToSessionStreamingContent('project-X', 'session-X', 'Content from Project X');
+
+      // Also update global state (simulating IPC handler behavior)
+      store.setCurrentTool({ name: 'Read', input: 'file-from-x.ts' });
+      store.setStatus({ phase: 'streaming', message: 'Using Read...' });
+      store.appendStreamingContent('Content from Project X');
+
+      // Verify Project X state is active
+      let state = useInsightsStore.getState();
+      expect(state.currentTool?.name).toBe('Read');
+      expect(state.status.phase).toBe('streaming');
+      expect(state.streamingContent).toBe('Content from Project X');
+
+      // Step 2: Switch to Project Y
+      store.setActiveContext('project-Y', 'session-Y');
+      store.setSession({
+        id: 'session-Y',
+        projectId: 'project-Y',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Step 3: Verify no loading states, tool indicators, or suggestions from X appear in Y
+      state = useInsightsStore.getState();
+
+      // No loading state from X
+      expect(state.status.phase).toBe('idle');
+      expect(state.status.message).toBe('');
+
+      // No tool indicators from X
+      expect(state.currentTool).toBeNull();
+
+      // No streaming content from X
+      expect(state.streamingContent).toBe('');
+
+      // Verify active session state also shows no X state
+      const activeState = store.getActiveSessionState();
+      expect(activeState?.status.phase).toBe('idle');
+      expect(activeState?.currentTool).toBeNull();
+      expect(activeState?.streamingContent).toBe('');
+
+      // Step 4: Return to Project X and verify state is preserved
+      store.setActiveContext('project-X', 'session-X');
+
+      state = useInsightsStore.getState();
+
+      // Loading state should be restored
+      expect(state.status.phase).toBe('streaming');
+      expect(state.status.message).toBe('Using Read...');
+
+      // Tool indicators should be restored
+      expect(state.currentTool?.name).toBe('Read');
+      expect(state.currentTool?.input).toBe('file-from-x.ts');
+
+      // Streaming content should be restored
+      expect(state.streamingContent).toBe('Content from Project X');
+
+      // Session-scoped state should still have all the data
+      const sessionXState = store.getSessionState('project-X', 'session-X');
+      expect(sessionXState.currentTool?.name).toBe('Read');
+      expect(sessionXState.status.phase).toBe('streaming');
+      expect(sessionXState.toolsUsed).toHaveLength(1);
+    });
+
+    it('should not leak loading states from Project X to Project Y', () => {
+      const store = useInsightsStore.getState();
+
+      // Project X is actively loading (agent running)
+      store.setActiveContext('project-X', 'session-X');
+      store.setSessionStatus('project-X', 'session-X', {
+        phase: 'thinking',
+        message: 'Agent is thinking...'
+      });
+
+      // Switch to Project Y
+      store.setActiveContext('project-Y', 'session-Y');
+
+      // Project Y should NOT be in loading state
+      const state = useInsightsStore.getState();
+      const isLoading =
+        state.status.phase === 'thinking' ||
+        state.status.phase === 'streaming';
+
+      expect(isLoading).toBe(false);
+      expect(state.status.phase).toBe('idle');
+    });
+
+    it('should not leak tool indicators from Project X to Project Y', () => {
+      const store = useInsightsStore.getState();
+
+      // Project X has active tool (e.g., "Searching files...")
+      store.setActiveContext('project-X', 'session-X');
+      store.setSessionCurrentTool('project-X', 'session-X', {
+        name: 'Grep',
+        input: 'search pattern'
+      });
+
+      // Also set global state (simulating active tool display)
+      store.setCurrentTool({ name: 'Grep', input: 'search pattern' });
+
+      // Switch to Project Y
+      store.setActiveContext('project-Y', 'session-Y');
+
+      // Project Y should NOT show tool from Project X
+      const state = useInsightsStore.getState();
+      expect(state.currentTool).toBeNull();
+
+      // Active session state should also show no tool
+      const activeState = store.getActiveSessionState();
+      expect(activeState?.currentTool).toBeNull();
+    });
+
+    it('should not leak suggestions from Project X to Project Y', () => {
+      const store = useInsightsStore.getState();
+
+      // Project X has a session with suggestions
+      store.setActiveContext('project-X', 'session-X');
+      store.setSession({
+        id: 'session-X',
+        projectId: 'project-X',
+        messages: [
+          {
+            id: 'msg-1',
+            role: 'assistant',
+            content: 'Here is a suggestion',
+            timestamp: new Date(),
+            suggestedTask: {
+              title: 'Project X Task',
+              description: 'Task specific to Project X'
+            }
+          }
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Verify Project X has the suggestion
+      let state = useInsightsStore.getState();
+      expect(state.session?.messages[0].suggestedTask?.title).toBe('Project X Task');
+
+      // Switch to Project Y with its own session
+      store.setActiveContext('project-Y', 'session-Y');
+      store.setSession({
+        id: 'session-Y',
+        projectId: 'project-Y',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Project Y should NOT show suggestions from Project X
+      state = useInsightsStore.getState();
+      expect(state.session?.projectId).toBe('project-Y');
+      expect(state.session?.messages).toHaveLength(0);
+    });
+
+    it('should preserve all Project X state after roundtrip through Project Y', () => {
+      const store = useInsightsStore.getState();
+
+      // Set up comprehensive state in Project X
+      store.setActiveContext('project-X', 'session-X');
+      store.setSession({
+        id: 'session-X',
+        projectId: 'project-X',
+        messages: [
+          {
+            id: 'msg-x',
+            role: 'assistant',
+            content: 'X content',
+            timestamp: new Date(),
+            suggestedTask: {
+              title: 'X Task',
+              description: 'X Description'
+            }
+          }
+        ],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+
+      // Set session-scoped state
+      store.setSessionStatus('project-X', 'session-X', {
+        phase: 'streaming',
+        message: 'X is streaming'
+      });
+      store.setSessionCurrentTool('project-X', 'session-X', {
+        name: 'Read',
+        input: 'x-file.ts'
+      });
+      store.appendToSessionStreamingContent('project-X', 'session-X', 'X streaming content');
+      store.addSessionToolUsage('project-X', 'session-X', { name: 'Read', input: 'x-file.ts' });
+      store.addSessionToolUsage('project-X', 'session-X', { name: 'Grep', input: 'pattern' });
+
+      // Switch to Project Y and do some work
+      store.setActiveContext('project-Y', 'session-Y');
+      store.setSession({
+        id: 'session-Y',
+        projectId: 'project-Y',
+        messages: [],
+        createdAt: new Date(),
+        updatedAt: new Date()
+      });
+      store.appendToSessionStreamingContent('project-Y', 'session-Y', 'Y content');
+      store.setSessionStatus('project-Y', 'session-Y', {
+        phase: 'complete',
+        message: 'Y is done'
+      });
+
+      // Switch back to Project X
+      store.setActiveContext('project-X', 'session-X');
+
+      // Verify ALL Project X state is restored
+      const state = useInsightsStore.getState();
+
+      // Global state should reflect X
+      expect(state.streamingContent).toBe('X streaming content');
+      expect(state.status.phase).toBe('streaming');
+      expect(state.status.message).toBe('X is streaming');
+      expect(state.currentTool?.name).toBe('Read');
+
+      // Session-scoped state should be intact
+      const xState = store.getSessionState('project-X', 'session-X');
+      expect(xState.streamingContent).toBe('X streaming content');
+      expect(xState.status.phase).toBe('streaming');
+      expect(xState.currentTool?.name).toBe('Read');
+      expect(xState.toolsUsed).toHaveLength(2);
+      expect(xState.toolsUsed[0].name).toBe('Read');
+      expect(xState.toolsUsed[1].name).toBe('Grep');
+
+      // Project Y state should also be preserved (not lost)
+      const yState = store.getSessionState('project-Y', 'session-Y');
+      expect(yState.streamingContent).toBe('Y content');
+      expect(yState.status.phase).toBe('complete');
+    });
+
+    it('should handle rapid project switching without state corruption', () => {
+      const store = useInsightsStore.getState();
+
+      // Set up states for multiple projects
+      const projects = ['project-A', 'project-B', 'project-C'];
+      projects.forEach((projectId, index) => {
+        store.setActiveContext(projectId, `session-${index}`);
+        store.appendToSessionStreamingContent(projectId, `session-${index}`, `Content from ${projectId}`);
+        store.setSessionStatus(projectId, `session-${index}`, {
+          phase: 'streaming',
+          message: `Working on ${projectId}`
+        });
+      });
+
+      // Rapid switching between projects
+      store.setActiveContext('project-A', 'session-0');
+      store.setActiveContext('project-C', 'session-2');
+      store.setActiveContext('project-B', 'session-1');
+      store.setActiveContext('project-A', 'session-0');
+      store.setActiveContext('project-C', 'session-2');
+
+      // Verify final state is for project-C
+      const state = useInsightsStore.getState();
+      expect(state.activeProjectId).toBe('project-C');
+      expect(state.activeSessionId).toBe('session-2');
+      expect(state.streamingContent).toBe('Content from project-C');
+
+      // Verify all project states are preserved
+      projects.forEach((projectId, index) => {
+        const projectState = store.getSessionState(projectId, `session-${index}`);
+        expect(projectState.streamingContent).toBe(`Content from ${projectId}`);
+        expect(projectState.status.message).toBe(`Working on ${projectId}`);
+      });
+    });
+
+    it('should properly isolate toolsUsed array between projects', () => {
+      const store = useInsightsStore.getState();
+
+      // Project X uses multiple tools
+      store.setActiveContext('project-X', 'session-X');
+      store.addSessionToolUsage('project-X', 'session-X', { name: 'Read', input: 'file1.ts' });
+      store.addSessionToolUsage('project-X', 'session-X', { name: 'Grep', input: 'pattern' });
+      store.addSessionToolUsage('project-X', 'session-X', { name: 'Bash', input: 'npm test' });
+
+      // Project Y uses different tools
+      store.setActiveContext('project-Y', 'session-Y');
+      store.addSessionToolUsage('project-Y', 'session-Y', { name: 'WebFetch', input: 'https://example.com' });
+
+      // Verify Project Y only has its own tool
+      const yState = store.getSessionState('project-Y', 'session-Y');
+      expect(yState.toolsUsed).toHaveLength(1);
+      expect(yState.toolsUsed[0].name).toBe('WebFetch');
+
+      // Verify Project X still has all its tools
+      const xState = store.getSessionState('project-X', 'session-X');
+      expect(xState.toolsUsed).toHaveLength(3);
+      expect(xState.toolsUsed.map(t => t.name)).toEqual(['Read', 'Grep', 'Bash']);
+
+      // Switch back to X and verify global state
+      store.setActiveContext('project-X', 'session-X');
+      const state = useInsightsStore.getState();
+      expect(state.toolsUsed).toHaveLength(3);
+    });
+  });
+
   describe('Task Suggestions Isolation', () => {
     it('should store task suggestions in session-specific messages', () => {
       const store = useInsightsStore.getState();
