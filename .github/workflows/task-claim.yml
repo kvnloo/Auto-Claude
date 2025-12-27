@@ -1,0 +1,358 @@
+name: Task Claim
+
+on:
+  # Trigger when a fork or user wants to claim an issue
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to claim'
+        required: true
+        type: number
+
+# Cancel in-progress runs for the same issue
+concurrency:
+  group: task-claim-${{ github.event.inputs.issue_number || 'none' }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  claim-task:
+    name: Claim Task
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Claim Issue
+        uses: actions/github-script@v7
+        with:
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            const { owner, repo } = context.repo;
+            const actor = context.actor;
+
+            // ═══════════════════════════════════════════════════════════════
+            // CONFIGURATION
+            // ═══════════════════════════════════════════════════════════════
+            const LABEL_AVAILABLE = 'task:available';
+            const LABEL_CLAIMED = 'task:claimed';
+            const CLAIM_EXPIRY_DAYS = 7;
+
+            // ═══════════════════════════════════════════════════════════════
+            // DETERMINE ISSUE NUMBER
+            // ═══════════════════════════════════════════════════════════════
+            let issueNumber;
+
+            if (context.eventName === 'workflow_dispatch') {
+              issueNumber = parseInt(context.payload.inputs.issue_number, 10);
+              console.log(`::group::Claim via workflow_dispatch`);
+              console.log(`Issue: #${issueNumber}`);
+              console.log(`Actor: @${actor}`);
+            } else {
+              core.setFailed('This workflow only supports workflow_dispatch trigger');
+              return;
+            }
+
+            if (!issueNumber || isNaN(issueNumber)) {
+              core.setFailed('Invalid issue number provided');
+              return;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // VALIDATE ACTOR (Fork Identity)
+            // ═══════════════════════════════════════════════════════════════
+            // Validate GitHub username format (alphanumeric and hyphens, 1-39 chars)
+            const usernamePattern = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+            if (!usernamePattern.test(actor)) {
+              core.setFailed(`Invalid GitHub username format: ${actor}`);
+              return;
+            }
+            console.log(`Actor validated: @${actor}`);
+
+            // ═══════════════════════════════════════════════════════════════
+            // FETCH ISSUE AND CHECK STATE
+            // ═══════════════════════════════════════════════════════════════
+            console.log('::endgroup::');
+            console.log(`::group::Checking issue #${issueNumber} state`);
+
+            let issue;
+            try {
+              const { data } = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: issueNumber
+              });
+              issue = data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed(`Issue #${issueNumber} not found`);
+              } else {
+                core.setFailed(`Failed to fetch issue: ${error.message}`);
+              }
+              return;
+            }
+
+            // Check if issue is open
+            if (issue.state !== 'open') {
+              core.setFailed(`Issue #${issueNumber} is ${issue.state}, cannot claim closed issues`);
+              return;
+            }
+            console.log(`Issue state: ${issue.state}`);
+            console.log(`Issue title: ${issue.title}`);
+
+            // Extract current labels
+            const currentLabels = issue.labels.map(l => typeof l === 'string' ? l : l.name);
+            console.log(`Current labels: ${currentLabels.join(', ') || 'none'}`);
+
+            const hasAvailable = currentLabels.includes(LABEL_AVAILABLE);
+            const hasClaimed = currentLabels.includes(LABEL_CLAIMED);
+
+            // ═══════════════════════════════════════════════════════════════
+            // VALIDATE CLAIM ELIGIBILITY
+            // ═══════════════════════════════════════════════════════════════
+            if (hasClaimed && !hasAvailable) {
+              // Already claimed - check if by same actor (idempotent)
+              console.log('Issue already has task:claimed label, checking for idempotent claim...');
+
+              // Fetch comments to find existing claim
+              const { data: comments } = await github.rest.issues.listComments({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                per_page: 100
+              });
+
+              // Find most recent claim comment
+              const claimPattern = /<!--\s*CLAIM_METADATA:\s*(\{.*?\})\s*-->/s;
+              let existingClaim = null;
+
+              for (const comment of comments.reverse()) {
+                const match = comment.body?.match(claimPattern);
+                if (match) {
+                  try {
+                    existingClaim = JSON.parse(match[1]);
+                    break;
+                  } catch (e) {
+                    console.log(`Failed to parse claim metadata: ${e.message}`);
+                  }
+                }
+              }
+
+              if (existingClaim && existingClaim.claimed_by === actor) {
+                // Idempotent claim - already claimed by same actor
+                console.log(`Issue already claimed by @${actor} (idempotent - no action needed)`);
+                console.log(`Existing claim_id: ${existingClaim.claim_id}`);
+                console.log('::endgroup::');
+                core.notice(`Issue #${issueNumber} is already claimed by you (claim_id: ${existingClaim.claim_id})`);
+                return;
+              } else if (existingClaim) {
+                // Claimed by someone else - race condition or conflict
+                console.log(`Issue already claimed by @${existingClaim.claimed_by}`);
+                console.log('::endgroup::');
+                core.setFailed(
+                  `Issue #${issueNumber} is already claimed by @${existingClaim.claimed_by}. ` +
+                  `Please find another available task or wait for this claim to expire.`
+                );
+                return;
+              } else {
+                // Has claimed label but no claim comment - inconsistent state
+                console.log('Issue has task:claimed label but no claim comment found');
+                core.setFailed(
+                  `Issue #${issueNumber} is in an inconsistent state (claimed label but no claim comment). ` +
+                  `Please contact a maintainer to resolve this.`
+                );
+                return;
+              }
+            }
+
+            if (!hasAvailable && !hasClaimed) {
+              core.setFailed(
+                `Issue #${issueNumber} does not have the '${LABEL_AVAILABLE}' label. ` +
+                `Only issues marked as available can be claimed.`
+              );
+              return;
+            }
+
+            if (hasAvailable && hasClaimed) {
+              // Conflicting labels - this shouldn't happen but handle gracefully
+              console.log('Warning: Issue has both available and claimed labels (inconsistent state)');
+              console.log('Treating as claimed - please contact maintainer if this is incorrect');
+              core.setFailed(
+                `Issue #${issueNumber} has conflicting labels (both available and claimed). ` +
+                `Please contact a maintainer to resolve this inconsistency.`
+              );
+              return;
+            }
+
+            console.log('Issue is eligible for claiming');
+            console.log('::endgroup::');
+
+            // ═══════════════════════════════════════════════════════════════
+            // GENERATE CLAIM ID
+            // ═══════════════════════════════════════════════════════════════
+            console.log(`::group::Claiming issue #${issueNumber}`);
+
+            // Generate unique claim ID: claim-{timestamp}-{random}
+            const timestamp = Date.now().toString(36);
+            const random = Math.random().toString(36).substring(2, 10);
+            const claimId = `claim-${timestamp}-${random}`;
+            console.log(`Generated claim_id: ${claimId}`);
+
+            // ═══════════════════════════════════════════════════════════════
+            // PERFORM CLAIM (Add label first, then remove old, then comment)
+            // Order matters for race condition handling
+            // ═══════════════════════════════════════════════════════════════
+
+            // Step 1: Add task:claimed label
+            try {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                labels: [LABEL_CLAIMED]
+              });
+              console.log(`Added label: ${LABEL_CLAIMED}`);
+            } catch (error) {
+              core.setFailed(`Failed to add claimed label: ${error.message}`);
+              return;
+            }
+
+            // Step 2: Remove task:available label
+            try {
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                name: LABEL_AVAILABLE
+              });
+              console.log(`Removed label: ${LABEL_AVAILABLE}`);
+            } catch (error) {
+              // Label might not exist - that's okay
+              if (error.status !== 404) {
+                console.log(`Warning: Could not remove available label: ${error.message}`);
+              }
+            }
+
+            // Step 3: Post claim comment with metadata
+            const claimTimestamp = new Date().toISOString();
+            const metadata = {
+              claimed_by: actor,
+              claim_id: claimId,
+              timestamp: claimTimestamp,
+              issue_number: issueNumber
+            };
+
+            const commentBody = `## Task Claimed by @${actor}
+
+**Claim ID:** \`${claimId}\`
+**Timestamp:** ${claimTimestamp}
+
+---
+*This claim will expire in ${CLAIM_EXPIRY_DAYS} days if no PR is submitted.*
+
+<!-- CLAIM_METADATA: ${JSON.stringify(metadata)} -->`;
+
+            try {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: commentBody
+              });
+              console.log('Posted claim comment');
+            } catch (error) {
+              // Comment failed - try to rollback labels
+              console.log(`Failed to post claim comment: ${error.message}`);
+              console.log('Attempting to rollback label changes...');
+
+              try {
+                await github.rest.issues.removeLabel({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  name: LABEL_CLAIMED
+                });
+                await github.rest.issues.addLabels({
+                  owner,
+                  repo,
+                  issue_number: issueNumber,
+                  labels: [LABEL_AVAILABLE]
+                });
+                console.log('Rollback successful');
+              } catch (rollbackError) {
+                console.log(`Rollback failed: ${rollbackError.message}`);
+              }
+
+              core.setFailed(`Failed to post claim comment: ${error.message}`);
+              return;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // RACE CONDITION CHECK (Verify claim succeeded)
+            // ═══════════════════════════════════════════════════════════════
+            console.log('::endgroup::');
+            console.log(`::group::Verifying claim`);
+
+            // Re-fetch issue to verify final state
+            try {
+              const { data: updatedIssue } = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: issueNumber
+              });
+
+              const finalLabels = updatedIssue.labels.map(l => typeof l === 'string' ? l : l.name);
+              const finalHasClaimed = finalLabels.includes(LABEL_CLAIMED);
+              const finalHasAvailable = finalLabels.includes(LABEL_AVAILABLE);
+
+              console.log(`Final labels: ${finalLabels.join(', ')}`);
+
+              if (!finalHasClaimed) {
+                // Our claim was overwritten - race condition lost
+                console.log('Race condition detected: task:claimed label was removed');
+                core.setFailed(
+                  `Race condition: Another process modified issue #${issueNumber} during claim. ` +
+                  `Please try again.`
+                );
+                return;
+              }
+
+              if (finalHasAvailable) {
+                // Both labels present - inconsistent state
+                console.log('Warning: Both labels present after claim (inconsistent state)');
+              }
+
+              console.log('Claim verified successfully');
+            } catch (error) {
+              console.log(`Warning: Could not verify claim state: ${error.message}`);
+              // Don't fail here - claim might still be valid
+            }
+
+            console.log('::endgroup::');
+
+            // ═══════════════════════════════════════════════════════════════
+            // SUCCESS
+            // ═══════════════════════════════════════════════════════════════
+            console.log(`Successfully claimed issue #${issueNumber} for @${actor}`);
+            console.log(`Claim ID: ${claimId}`);
+
+            // Write job summary
+            core.summary
+              .addHeading(`Task Claimed: Issue #${issueNumber}`, 2)
+              .addTable([
+                [{data: 'Field', header: true}, {data: 'Value', header: true}],
+                ['Issue', `#${issueNumber}`],
+                ['Claimed By', `@${actor}`],
+                ['Claim ID', claimId],
+                ['Timestamp', claimTimestamp],
+                ['Expires', `${CLAIM_EXPIRY_DAYS} days from now`]
+              ])
+              .addRaw('\n**Next Steps:**\n')
+              .addList([
+                'Work on the issue in your fork',
+                `Submit a PR referencing this issue (use "Fixes #${issueNumber}")`,
+                `If unable to complete, release the claim with the task-release workflow`
+              ]);
+            await core.summary.write();
