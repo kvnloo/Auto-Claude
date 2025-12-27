@@ -211,6 +211,35 @@ export function GitHubIntegrationSection({
             </div>
           )}
 
+          {/* Manual Parent Repository Override */}
+          <div className="space-y-2">
+            <div className="flex items-center gap-2">
+              <GitFork className="h-4 w-4 text-muted-foreground" />
+              <Label className="text-sm font-medium text-foreground">Parent Repository Override</Label>
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {gitHubConnectionStatus?.isFork
+                ? 'Override the auto-detected parent repository, or clear to use the detected value.'
+                : 'If your repository is a fork, you can manually specify the parent repository for issue syncing.'}
+            </p>
+            <Input
+              placeholder={
+                gitHubConnectionStatus?.parentRepository?.fullName
+                  ? `Auto-detected: ${gitHubConnectionStatus.parentRepository.fullName}`
+                  : 'owner/repository (e.g., facebook/react)'
+              }
+              value={envConfig.githubParentRepo || ''}
+              onChange={(e) => onUpdateConfig({ githubParentRepo: e.target.value || undefined })}
+            />
+            {envConfig.githubParentRepo && (
+              <p className="text-xs text-muted-foreground">
+                Issues and pull requests will be loaded from{' '}
+                <span className="font-medium text-foreground">{envConfig.githubParentRepo}</span>
+                {' '}instead of the configured repository.
+              </p>
+            )}
+          </div>
+
           {/* Info about accessing issues */}
           {gitHubConnectionStatus?.connected && (
             <div className="rounded-lg border border-info/30 bg-info/5 p-3">
