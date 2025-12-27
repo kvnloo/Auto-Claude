@@ -36,6 +36,7 @@ import {
 } from './event-bridge';
 import { closeAllConnections, getClientCount } from './websocket';
 import { areKeysLoaded } from './middleware/auth';
+import { writePortFile, cleanupPortFile } from './backend-discovery';
 
 // ============================================
 // Types
@@ -226,6 +227,28 @@ export async function initializeApiServer(
       debug: options.debug,
     });
 
+    // Write port file for backend discovery by other instances
+    try {
+      const addressUrl = new URL(address);
+      const port = parseInt(addressUrl.port, 10);
+      if (!isNaN(port)) {
+        const portFileWritten = writePortFile(port);
+        if (options.debug) {
+          if (portFileWritten) {
+            process.stdout.write(`[API Startup] Port file written for backend discovery (port ${port})\n`);
+          } else {
+            process.stdout.write('[API Startup] Warning: Failed to write port file for backend discovery\n');
+          }
+        }
+      }
+    } catch (error) {
+      // Log but don't fail startup - port file is optional for discovery
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      if (options.debug) {
+        process.stdout.write(`[API Startup] Warning: Could not write port file: ${errorMessage}\n`);
+      }
+    }
+
     if (options.debug) {
       process.stdout.write(`[API Startup] API server started successfully at ${address}\n`);
     }
@@ -294,6 +317,14 @@ export async function shutdownApiServer(): Promise<ApiShutdownResult> {
 
     const eventBridgeStats = getEventBridgeStats();
     result.eventsBridged = eventBridgeStats.eventCount;
+
+    // Clean up port file for backend discovery
+    try {
+      cleanupPortFile();
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      process.stderr.write(`[API Shutdown] Error cleaning up port file: ${errorMessage}\n`);
+    }
 
     // Close all WebSocket connections
     try {
