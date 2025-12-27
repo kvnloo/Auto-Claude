@@ -1,6 +1,45 @@
 import { create } from 'zustand';
 import type { Task, TaskStatus, ImplementationPlan, Subtask, TaskMetadata, ExecutionProgress, ExecutionPhase, ReviewReason, TaskDraft } from '../../shared/types';
 
+// ============================================
+// Task Event Listener Types
+// ============================================
+
+/**
+ * Callback type for task progress events (plan updates)
+ */
+type TaskProgressCallback = (taskId: string, plan: ImplementationPlan) => void;
+
+/**
+ * Callback type for task status change events
+ */
+type TaskStatusChangeCallback = (taskId: string, status: TaskStatus) => void;
+
+/**
+ * Callback type for task log events
+ */
+type TaskLogCallback = (taskId: string, log: string) => void;
+
+/**
+ * Callback type for task error events
+ */
+type TaskErrorCallback = (taskId: string, error: string) => void;
+
+/**
+ * Callback type for task execution progress events
+ */
+type TaskExecutionProgressCallback = (taskId: string, progress: ExecutionProgress) => void;
+
+/**
+ * Result of initializing task event listeners
+ */
+interface TaskEventListenersResult {
+  /** Function to cleanup all listeners */
+  cleanup: () => void;
+  /** Whether initialization was successful */
+  success: boolean;
+}
+
 interface TaskState {
   tasks: Task[];
   selectedTaskId: string | null;
@@ -565,4 +604,176 @@ export function getTaskProgress(task: Task): { completed: number; total: number;
   const completed = task.subtasks?.filter(s => s.status === 'completed').length || 0;
   const percentage = total > 0 ? Math.round((completed / total) * 100) : 0;
   return { completed, total, percentage };
+}
+
+// ============================================
+// Task Event Listeners for IPC (Multi-Instance Support)
+// ============================================
+
+/**
+ * Track if event listeners have been initialized
+ * Prevents duplicate listener registration
+ */
+let eventListenersInitialized = false;
+
+/**
+ * Store cleanup functions for all registered listeners
+ */
+let cleanupFunctions: (() => void)[] = [];
+
+/**
+ * Handler for task progress events (plan updates)
+ * Updates the task store with the new implementation plan
+ */
+export const onTaskProgress: TaskProgressCallback = (taskId, plan) => {
+  const store = useTaskStore.getState();
+  store.updateTaskFromPlan(taskId, plan);
+};
+
+/**
+ * Handler for task status change events
+ * Updates the task store with the new status
+ */
+export const onTaskStatusChange: TaskStatusChangeCallback = (taskId, status) => {
+  const store = useTaskStore.getState();
+  store.updateTaskStatus(taskId, status);
+};
+
+/**
+ * Handler for task log events
+ * Appends the log to the task's log history
+ */
+export const onTaskLog: TaskLogCallback = (taskId, log) => {
+  const store = useTaskStore.getState();
+  store.appendLog(taskId, log);
+};
+
+/**
+ * Handler for task error events
+ * Sets the error in the store and appends to task logs
+ */
+export const onTaskError: TaskErrorCallback = (taskId, error) => {
+  const store = useTaskStore.getState();
+  store.setError(`Task ${taskId}: ${error}`);
+  store.appendLog(taskId, `[ERROR] ${error}`);
+};
+
+/**
+ * Handler for task execution progress events
+ * Updates the task's execution progress (phase, progress percentage)
+ */
+export const onTaskExecutionProgress: TaskExecutionProgressCallback = (taskId, progress) => {
+  const store = useTaskStore.getState();
+  store.updateExecutionProgress(taskId, progress);
+};
+
+/**
+ * Initialize task event listeners for IPC communication.
+ *
+ * This function sets up listeners for task-related IPC events that are sent from
+ * the main process. Works for both primary instances (direct IPC from AgentManager)
+ * and secondary instances (IPC forwarded from WebSocket client mode).
+ *
+ * The events handled are:
+ * - task-progress: Plan/subtask updates
+ * - task-status-change: Status transitions (backlog -> in_progress -> done, etc.)
+ * - task-log: Runtime log output from the task
+ * - task-error: Error messages from the task
+ * - task-execution-progress: Phase progress updates (planning, coding, etc.)
+ *
+ * @returns Object with cleanup function and success status
+ *
+ * @example
+ * ```typescript
+ * // Initialize on app startup
+ * const { cleanup, success } = initializeTaskEventListeners();
+ *
+ * // Cleanup on app shutdown
+ * if (success) {
+ *   cleanup();
+ * }
+ * ```
+ */
+export function initializeTaskEventListeners(): TaskEventListenersResult {
+  // Prevent duplicate initialization
+  if (eventListenersInitialized) {
+    return {
+      cleanup: cleanupTaskEventListeners,
+      success: true
+    };
+  }
+
+  // Check if electronAPI is available
+  if (typeof window === 'undefined' || !window.electronAPI) {
+    return {
+      cleanup: () => {},
+      success: false
+    };
+  }
+
+  try {
+    // Register task progress listener
+    const cleanupProgress = window.electronAPI.onTaskProgress(onTaskProgress);
+    cleanupFunctions.push(cleanupProgress);
+
+    // Register task status change listener
+    const cleanupStatus = window.electronAPI.onTaskStatusChange(onTaskStatusChange);
+    cleanupFunctions.push(cleanupStatus);
+
+    // Register task log listener
+    const cleanupLog = window.electronAPI.onTaskLog(onTaskLog);
+    cleanupFunctions.push(cleanupLog);
+
+    // Register task error listener
+    const cleanupError = window.electronAPI.onTaskError(onTaskError);
+    cleanupFunctions.push(cleanupError);
+
+    // Register task execution progress listener
+    const cleanupExecutionProgress = window.electronAPI.onTaskExecutionProgress(
+      onTaskExecutionProgress
+    );
+    cleanupFunctions.push(cleanupExecutionProgress);
+
+    eventListenersInitialized = true;
+
+    return {
+      cleanup: cleanupTaskEventListeners,
+      success: true
+    };
+  } catch (error) {
+    // Clean up any listeners that were registered before the error
+    cleanupTaskEventListeners();
+    return {
+      cleanup: () => {},
+      success: false
+    };
+  }
+}
+
+/**
+ * Cleanup all registered task event listeners.
+ *
+ * Call this function when the app is shutting down or when you need to
+ * reinitialize the listeners.
+ */
+export function cleanupTaskEventListeners(): void {
+  // Call all cleanup functions
+  for (const cleanup of cleanupFunctions) {
+    try {
+      cleanup();
+    } catch {
+      // Ignore cleanup errors
+    }
+  }
+
+  // Reset state
+  cleanupFunctions = [];
+  eventListenersInitialized = false;
+}
+
+/**
+ * Check if task event listeners are currently initialized
+ */
+export function areTaskEventListenersInitialized(): boolean {
+  return eventListenersInitialized;
 }
