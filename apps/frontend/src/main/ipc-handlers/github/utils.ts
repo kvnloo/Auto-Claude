@@ -95,6 +95,30 @@ export function normalizeRepoReference(repo: string): string {
 }
 
 /**
+ * Get the target repository for API calls
+ *
+ * For fork repositories, returns the parent repository when useParentForIssues is true
+ * (used for fetching issues and PRs which belong to the upstream repo).
+ * Otherwise, returns the fork repository (used for code operations).
+ *
+ * @param config - The GitHub configuration containing repo and optional fork info
+ * @param useParentForIssues - Whether to use the parent repo (true for issues/PRs, false for code ops)
+ * @returns The repository reference in owner/repo format
+ */
+export function getTargetRepo(config: GitHubConfig, useParentForIssues: boolean): string {
+  // Use parent repo only when:
+  // 1. We want to use parent for issues/PRs (useParentForIssues = true)
+  // 2. The repo is marked as a fork (config.isFork = true)
+  // 3. A parent repository is configured (config.parentRepo exists)
+  if (useParentForIssues && config.isFork && config.parentRepo) {
+    return normalizeRepoReference(config.parentRepo);
+  }
+
+  // Default to the fork/current repository
+  return normalizeRepoReference(config.repo);
+}
+
+/**
  * Make a request to the GitHub API
  */
 export async function githubFetch(
