@@ -361,5 +361,17 @@ export const IPC_CHANNELS = {
   RELEASE_GET_VERSIONS: 'release:getVersions',
 
   // Release events (main -> renderer)
-  RELEASE_PROGRESS: 'release:progress'
+  RELEASE_PROGRESS: 'release:progress',
+
+  // Explorer operations (codebase visualization)
+  EXPLORER_GET_GRAPH: 'explorer:getGraph',
+  EXPLORER_PARSE_PROJECT: 'explorer:parseProject',
+  EXPLORER_STOP: 'explorer:stop',
+  EXPLORER_REFRESH: 'explorer:refresh',
+  EXPLORER_CLEAR_CACHE: 'explorer:clearCache',
+
+  // Explorer events (main -> renderer)
+  EXPLORER_PARSE_PROGRESS: 'explorer:parseProgress',
+  EXPLORER_PARSE_COMPLETE: 'explorer:parseComplete',
+  EXPLORER_PARSE_ERROR: 'explorer:parseError'
 } as const;
