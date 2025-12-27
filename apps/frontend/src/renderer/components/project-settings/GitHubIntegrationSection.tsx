@@ -42,6 +42,56 @@ export function GitHubIntegrationSection({
   const [isDetectingFork, setIsDetectingFork] = useState(false);
   const [forkDetectionError, setForkDetectionError] = useState<string | null>(null);
 
+  // Parent repo validation state
+  const [parentRepoValidationError, setParentRepoValidationError] = useState<string | null>(null);
+
+  /**
+   * Validate parent repository format
+   * Accepts: owner/repo, GitHub URLs, or empty string
+   * Returns error message or null if valid
+   */
+  const validateParentRepo = (value: string): string | null => {
+    if (!value || value.trim() === '') {
+      return null; // Empty is valid (optional field)
+    }
+
+    let normalized = value.trim();
+
+    // Remove trailing .git if present
+    normalized = normalized.replace(/\.git$/, '');
+
+    // Handle full GitHub URLs
+    if (normalized.startsWith('https://github.com/')) {
+      normalized = normalized.replace('https://github.com/', '');
+    } else if (normalized.startsWith('http://github.com/')) {
+      normalized = normalized.replace('http://github.com/', '');
+    } else if (normalized.startsWith('git@github.com:')) {
+      normalized = normalized.replace('git@github.com:', '');
+    }
+
+    normalized = normalized.trim();
+
+    // Check if the normalized value matches owner/repo format
+    // Valid format: alphanumeric, hyphens, underscores, dots, with exactly one slash
+    const ownerRepoPattern = /^[a-zA-Z0-9._-]+\/[a-zA-Z0-9._-]+$/;
+
+    if (!ownerRepoPattern.test(normalized)) {
+      return 'Invalid format. Use owner/repo format (e.g., facebook/react) or a GitHub URL.';
+    }
+
+    return null;
+  };
+
+  /**
+   * Handle parent repo input change with validation
+   */
+  const handleParentRepoChange = (value: string) => {
+    const error = validateParentRepo(value);
+    setParentRepoValidationError(error);
+    // Always update the value, but show error if invalid
+    onUpdateConfig({ githubParentRepo: value || undefined });
+  };
+
   // Handle fork detection
   const handleDetectFork = async () => {
     if (!projectId) return;
@@ -323,9 +373,16 @@ export function GitHubIntegrationSection({
                   : 'owner/repository (e.g., facebook/react)'
               }
               value={envConfig.githubParentRepo || ''}
-              onChange={(e) => onUpdateConfig({ githubParentRepo: e.target.value || undefined })}
+              onChange={(e) => handleParentRepoChange(e.target.value)}
+              className={parentRepoValidationError ? 'border-destructive focus-visible:ring-destructive' : ''}
             />
-            {envConfig.githubParentRepo && (
+            {parentRepoValidationError && (
+              <div className="flex items-start gap-2 text-destructive">
+                <AlertCircle className="h-4 w-4 mt-0.5 shrink-0" />
+                <p className="text-xs">{parentRepoValidationError}</p>
+              </div>
+            )}
+            {envConfig.githubParentRepo && !parentRepoValidationError && (
               <p className="text-xs text-muted-foreground">
                 Issues and pull requests will be loaded from{' '}
                 <span className="font-medium text-foreground">{envConfig.githubParentRepo}</span>
