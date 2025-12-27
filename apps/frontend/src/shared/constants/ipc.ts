@@ -135,6 +135,24 @@ export const IPC_CHANNELS = {
   ROADMAP_ERROR: 'roadmap:error',
   ROADMAP_STOPPED: 'roadmap:stopped',
 
+  // Autonomous mode operations
+  AUTONOMOUS_START: 'autonomous:start',
+  AUTONOMOUS_STOP: 'autonomous:stop',
+  AUTONOMOUS_PAUSE: 'autonomous:pause',
+  AUTONOMOUS_RESUME: 'autonomous:resume',
+  AUTONOMOUS_GET_STATUS: 'autonomous:getStatus',
+  AUTONOMOUS_ADD_TASK: 'autonomous:addTask',
+  AUTONOMOUS_REMOVE_TASK: 'autonomous:removeTask',
+  AUTONOMOUS_GET_QUEUE: 'autonomous:getQueue',
+  AUTONOMOUS_SETTINGS_GET: 'autonomous:settingsGet',
+  AUTONOMOUS_SETTINGS_SAVE: 'autonomous:settingsSave',
+
+  // Autonomous mode events (main -> renderer)
+  AUTONOMOUS_PROGRESS: 'autonomous:progress',
+  AUTONOMOUS_TASK_COMPLETE: 'autonomous:taskComplete',
+  AUTONOMOUS_TASK_FAILED: 'autonomous:taskFailed',
+  AUTONOMOUS_ERROR: 'autonomous:error',
+
   // Context operations
   CONTEXT_GET: 'context:get',
   CONTEXT_REFRESH_INDEX: 'context:refreshIndex',
