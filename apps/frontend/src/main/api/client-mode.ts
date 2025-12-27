@@ -190,6 +190,16 @@ let pingInterval: ReturnType<typeof setInterval> | null = null;
  */
 let shutdownRequested = false;
 
+/**
+ * Whether the primary instance has closed and we've notified the renderer
+ */
+let primaryClosedNotified = false;
+
+/**
+ * Maximum reconnection attempts before giving up
+ */
+const MAX_RECONNECT_ATTEMPTS = 10;
+
 // ============================================
 // Internal Helpers
 // ============================================
@@ -245,6 +255,38 @@ function sendToRenderer(channel: string, ...args: unknown[]): void {
       errorLog(`Failed to send to renderer: ${error instanceof Error ? error.message : String(error)}`);
     }
   }
+}
+
+/**
+ * Handle disconnection from primary instance
+ *
+ * Called when the primary instance closes or becomes unreachable.
+ * Notifies the renderer to show a notification and reload tasks from disk.
+ *
+ * @param reason - The reason for disconnection
+ * @param isServerShutdown - Whether this was a clean server shutdown (code 1001)
+ */
+function handlePrimaryDisconnect(reason: string, isServerShutdown: boolean): void {
+  if (primaryClosedNotified) {
+    debugLog('Primary disconnect already notified, skipping');
+    return;
+  }
+
+  primaryClosedNotified = true;
+  debugLog(`Primary instance disconnected: ${reason} (serverShutdown=${isServerShutdown})`);
+
+  // Notify renderer that primary has closed
+  sendToRenderer(IPC_CHANNELS.CONNECTION_PRIMARY_CLOSED, {
+    reason,
+    isServerShutdown,
+    timestamp: new Date().toISOString(),
+  });
+
+  // Request renderer to reload tasks from disk to get latest persisted state
+  sendToRenderer(IPC_CHANNELS.CONNECTION_RELOAD_TASKS, {
+    reason: 'primary_closed',
+    timestamp: new Date().toISOString(),
+  });
 }
 
 /**
@@ -393,9 +435,19 @@ function scheduleReconnect(): void {
   }
 
   reconnectAttempts++;
+
+  // Check if we've exceeded max reconnection attempts
+  if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+    handlePrimaryDisconnect(
+      `Connection lost after ${MAX_RECONNECT_ATTEMPTS} reconnection attempts`,
+      false // isServerShutdown
+    );
+    return;
+  }
+
   setConnectionState('reconnecting');
 
-  debugLog(`Scheduling reconnect in ${currentReconnectDelay}ms (attempt ${reconnectAttempts})`);
+  debugLog(`Scheduling reconnect in ${currentReconnectDelay}ms (attempt ${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`);
 
   reconnectTimeout = setTimeout(() => {
     reconnectTimeout = null;
@@ -417,6 +469,7 @@ function scheduleReconnect(): void {
 function resetReconnectState(): void {
   currentReconnectDelay = INITIAL_RECONNECT_DELAY_MS;
   reconnectAttempts = 0;
+  primaryClosedNotified = false;
   if (reconnectTimeout) {
     clearTimeout(reconnectTimeout);
     reconnectTimeout = null;
@@ -465,14 +518,46 @@ function connectToBackend(backendInfo: BackendInfo): void {
     });
 
     wsClient.on('close', (code, reason) => {
-      debugLog(`WebSocket closed: code=${code} reason=${reason.toString('utf-8')}`);
+      const reasonStr = reason.toString('utf-8');
+      debugLog(`WebSocket closed: code=${code} reason=${reasonStr}`);
       setConnectionState('disconnected');
       stopPingInterval();
 
-      // Schedule reconnection unless shutdown was requested or server is shutting down
-      if (!shutdownRequested && code !== 1001) {
-        scheduleReconnect();
+      // Don't reconnect if shutdown was requested
+      if (shutdownRequested) {
+        debugLog('Shutdown requested, not reconnecting');
+        return;
       }
+
+      // Code 1001 = Going Away (server shutting down)
+      // This indicates the primary instance is closing intentionally
+      if (code === 1001) {
+        handlePrimaryDisconnect(
+          reasonStr || 'Primary instance is shutting down',
+          true // isServerShutdown
+        );
+        return;
+      }
+
+      // Code 1000 = Normal closure (could be server shutdown or clean disconnect)
+      if (code === 1000) {
+        // Still try to reconnect for normal closures
+        // If server is truly gone, we'll hit max attempts
+        scheduleReconnect();
+        return;
+      }
+
+      // For other close codes (1006 = abnormal, etc.), attempt reconnection
+      // Check if we've exceeded max reconnection attempts
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        handlePrimaryDisconnect(
+          `Connection lost after ${MAX_RECONNECT_ATTEMPTS} reconnection attempts`,
+          false // isServerShutdown
+        );
+        return;
+      }
+
+      scheduleReconnect();
     });
 
     wsClient.on('error', (error) => {
@@ -521,6 +606,7 @@ export function initializeClientMode(
   // Reset state
   eventsReceivedCount = 0;
   shutdownRequested = false;
+  primaryClosedNotified = false;
   isInitialized = true;
 
   // Connect to the backend

@@ -369,5 +369,7 @@ export const IPC_CHANNELS = {
   CONNECTION_RECONNECT: 'connection:reconnect',
 
   // Multi-instance connection events (main -> renderer)
-  CONNECTION_STATUS_CHANGE: 'connection:status-change'
+  CONNECTION_STATUS_CHANGE: 'connection:status-change',
+  CONNECTION_PRIMARY_CLOSED: 'connection:primary-closed',
+  CONNECTION_RELOAD_TASKS: 'connection:reload-tasks'
 } as const;
