@@ -12,8 +12,57 @@
  * - Graceful startup with error handling (non-fatal to main app)
  * - Graceful shutdown with resource cleanup
  *
+ * ## Tailscale Network Security Configuration
+ *
+ * For secure remote access via the mobile companion app, configure the API
+ * server to bind exclusively to your Tailscale IP address. This ensures the
+ * API is ONLY accessible through Tailscale's encrypted mesh network.
+ *
+ * ### Configuration Steps:
+ *
+ * 1. Find your Tailscale IP address:
+ *    ```bash
+ *    tailscale ip -4
+ *    # Example output: 100.85.123.45
+ *    ```
+ *
+ * 2. Set environment variables in apps/frontend/.env:
+ *    ```
+ *    API_KEY=your-secure-api-key
+ *    API_HOST=100.85.123.45  # Your Tailscale IP
+ *    API_PORT=3001           # Optional, defaults to 3001
+ *    ```
+ *
+ * 3. The mobile app can now connect using your Tailscale IP.
+ *
+ * ### Security Model:
+ *
+ * - **Tailscale CGNAT Range**: Tailscale IPs are in the 100.64.0.0/10 range
+ *   (100.64.0.0 - 100.127.255.255). Only these IPs enable Tailscale-only binding.
+ *
+ * - **When API_HOST is a Tailscale IP**: The server binds to the Tailscale
+ *   network interface only. Connections from other networks are impossible.
+ *
+ * - **When API_HOST is 0.0.0.0**: The server accepts connections from ALL
+ *   network interfaces. A security warning is logged if API_KEY is set,
+ *   as this defeats the purpose of Tailscale-only access.
+ *
+ * - **When API_HOST is localhost/127.0.0.1**: Local-only access (no remote).
+ *
+ * ### Why Tailscale?
+ *
+ * Tailscale provides zero-trust networking with:
+ * - End-to-end encryption (WireGuard)
+ * - Device-level authentication
+ * - No port forwarding or firewall configuration needed
+ * - Works across NAT and mobile networks
+ *
+ * The mobile companion app enforces Tailscale connectivity by checking
+ * reachability to the /api/health endpoint before any API calls.
+ *
  * Based on patterns from:
  * - apps/frontend/src/main/index.ts (Electron main process lifecycle)
+ * - apps/frontend/src/main/api/server.ts (Tailscale IP validation)
  */
 
 import type { FastifyInstance } from 'fastify';
@@ -43,15 +92,61 @@ import { areKeysLoaded } from './middleware/auth';
 
 /**
  * Configuration options for API server startup
+ *
+ * @example
+ * ```typescript
+ * // Development: bind to all interfaces
+ * await initializeApiServer(agentManager, fileWatcher, {
+ *   host: '0.0.0.0',
+ *   port: 3001,
+ * });
+ *
+ * // Production: bind to Tailscale IP only
+ * await initializeApiServer(agentManager, fileWatcher, {
+ *   host: '100.85.123.45', // Your Tailscale IP
+ *   port: 3001,
+ * });
+ * ```
  */
 export interface ApiStartupOptions {
-  /** Server port (default: 3001 or API_PORT env var) */
+  /**
+   * Server port to listen on.
+   * @default 3001 (or API_PORT environment variable)
+   */
   port?: number;
-  /** Server host (default: '0.0.0.0' or API_HOST env var) */
+
+  /**
+   * Server host/IP address to bind to.
+   *
+   * For secure Tailscale-only access, set this to your Tailscale IP address
+   * (100.64.0.0/10 CGNAT range). This ensures the API server is only accessible
+   * via the Tailscale mesh network.
+   *
+   * Common values:
+   * - `'0.0.0.0'` - All interfaces (development/insecure)
+   * - `'127.0.0.1'` or `'localhost'` - Local only (no remote access)
+   * - `'100.x.y.z'` - Tailscale IP (secure remote access)
+   *
+   * @default '0.0.0.0' (or API_HOST environment variable)
+   *
+   * @example
+   * ```typescript
+   * // Get Tailscale IP: `tailscale ip -4`
+   * host: '100.85.123.45'
+   * ```
+   */
   host?: string;
-  /** Enable verbose logging (default: false) */
+
+  /**
+   * Enable verbose logging for debugging startup issues.
+   * @default false
+   */
   debug?: boolean;
-  /** Application version for OpenAPI info */
+
+  /**
+   * Application version for OpenAPI/Swagger info.
+   * Displayed in the API documentation.
+   */
   version?: string;
 }
 
