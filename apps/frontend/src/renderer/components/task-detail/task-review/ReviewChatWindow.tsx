@@ -88,7 +88,7 @@ export function ReviewChatWindow({
 
   return (
     <Collapsible open={isOpen} onOpenChange={setIsOpen}>
-      <div className="rounded-xl border border-primary/30 bg-primary/5 overflow-hidden">
+      <div className="rounded-xl border border-primary/30 bg-primary/10 overflow-hidden">
         {/* Collapsible Header */}
         <CollapsibleTrigger asChild>
           <button
@@ -149,11 +149,9 @@ export function ReviewChatWindow({
                       <div className="text-sm font-medium text-foreground">
                         Assistant
                       </div>
-                      <div className="prose prose-sm dark:prose-invert max-w-none">
-                        <p className="whitespace-pre-wrap break-words">
-                          {streamingContent}
-                          <span className="inline-block w-2 h-4 bg-primary/50 ml-0.5 animate-pulse" />
-                        </p>
+                      <div className="text-sm whitespace-pre-wrap break-words rounded-lg p-3 bg-primary/10 text-foreground">
+                        {streamingContent}
+                        <span className="inline-block w-2 h-4 bg-primary/50 ml-0.5 animate-pulse" />
                       </div>
                     </div>
                   </div>
@@ -184,7 +182,7 @@ export function ReviewChatWindow({
             </ScrollArea>
 
             {/* Input Area */}
-            <div className="border-t border-primary/20 p-3">
+            <div className="border-t border-primary/20 p-3 bg-background/50">
               <div className="flex gap-2">
                 <Textarea
                   ref={textareaRef}
@@ -192,7 +190,7 @@ export function ReviewChatWindow({
                   onChange={(e) => setInputValue(e.target.value)}
                   onKeyDown={handleKeyDown}
                   placeholder="Ask a question about the changes..."
-                  className="min-h-[60px] max-h-[120px] resize-none text-sm"
+                  className="min-h-[60px] max-h-[120px] resize-none text-sm bg-background border-border/50 focus:border-primary"
                   disabled={isLoading}
                   aria-label="Chat message input"
                 />

@@ -37,8 +37,13 @@ export function ReviewChatMessage({ message }: ReviewChatMessageProps) {
         <div className="text-sm font-medium text-foreground">
           {isUser ? 'You' : 'Assistant'}
         </div>
-        <div className="prose prose-sm dark:prose-invert max-w-none">
-          <p className="whitespace-pre-wrap break-words">{message.content}</p>
+        <div className={cn(
+          'text-sm whitespace-pre-wrap break-words rounded-lg p-3',
+          isUser
+            ? 'bg-muted/50 text-foreground'
+            : 'bg-primary/10 text-foreground'
+        )}>
+          {message.content}
         </div>
       </div>
     </div>
