@@ -1,16 +1,26 @@
-import { useState, useEffect } from 'react';
+import { useState, useCallback } from 'react';
 import {
   Network,
   Loader2,
   RefreshCw,
   AlertCircle,
   FolderTree,
-  GitBranch
+  GitBranch,
+  PanelRightClose,
+  PanelRight,
+  Search,
+  X
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
-import { cn } from '../../lib/utils';
-import type { ExplorerLoadingStatus } from '../../../shared/types/explorer';
+import { Input } from '../ui/input';
+import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
+import { DependencyGraph } from './DependencyGraph';
+import { DepthSlider, DepthSliderCompact } from './DepthSlider';
+import { InfoPanel } from './InfoPanel';
+import { GraphLegend, GraphLegendInline } from './GraphLegend';
+import { useExplorer } from './hooks/useExplorer';
+import type { ExplorerLoadingStatus, DepthLevel, GraphNode } from '../../../shared/types/explorer';
 
 interface CodebaseExplorerProps {
   projectId: string;
@@ -24,48 +34,281 @@ interface CodebaseExplorerProps {
  * and progressive disclosure of code relationships.
  */
 export function CodebaseExplorer({ projectId }: CodebaseExplorerProps) {
-  const [isLoading, setIsLoading] = useState(true);
-  const [loadingStatus, setLoadingStatus] = useState<ExplorerLoadingStatus>({
-    phase: 'idle',
-    progress: 0,
-    message: 'Initializing...'
-  });
-  const [error, setError] = useState<string | null>(null);
+  const {
+    // Graph data
+    graph,
+    graphError,
+    filteredNodes,
+    graphStats,
+    hasGraph,
+    isFilteredEmpty,
 
-  // Simulate initial load - will be replaced with actual graph loading
-  useEffect(() => {
-    const timer = setTimeout(() => {
-      setIsLoading(false);
-      setLoadingStatus({
-        phase: 'complete',
-        progress: 100,
-        message: 'Ready'
-      });
-    }, 1000);
+    // Selection state
+    selectedNodeId,
+    selectedNodeInfo,
+    isInfoPanelOpen,
 
-    return () => clearTimeout(timer);
-  }, [projectId]);
+    // Depth and filtering
+    depthLevel,
+    searchQuery,
+
+    // Loading state
+    isLoading,
+    loadingStatus,
+
+    // UI state
+    showLegend,
+
+    // Actions
+    loadGraph,
+    refreshGraph,
+    selectNode,
+    handleNodeClick,
+    handleEdgeClick,
+    handleDepthChange,
+    closeInfoPanel,
+    setSearchQuery
+  } = useExplorer(projectId);
+
+  // Local UI state
+  const [showSearch, setShowSearch] = useState(false);
+
+  // Handle node hover (optional callback)
+  const handleNodeHover = useCallback((_node: GraphNode | null) => {
+    // Could update UI state here if needed
+  }, []);
 
   // Loading state
-  if (isLoading) {
+  if (isLoading && !hasGraph) {
     return <ExplorerLoadingState status={loadingStatus} />;
   }
 
   // Error state
-  if (error) {
+  if (graphError && !hasGraph) {
     return (
       <ExplorerErrorState
-        error={error}
-        onRetry={() => {
-          setError(null);
-          setIsLoading(true);
-        }}
+        error={graphError}
+        onRetry={() => loadGraph()}
       />
     );
   }
 
   // Empty state - no graph data yet
-  return <ExplorerEmptyState projectId={projectId} onParse={() => setIsLoading(true)} />;
+  if (!hasGraph) {
+    return <ExplorerEmptyState projectId={projectId} onParse={() => loadGraph()} />;
+  }
+
+  // Main explorer view with graph
+  return (
+    <div className="flex h-full flex-col">
+      {/* Header */}
+      <div className="flex items-center justify-between border-b border-border px-6 py-4">
+        <div className="flex items-center gap-3">
+          <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10">
+            <Network className="h-5 w-5 text-primary" />
+          </div>
+          <div>
+            <h2 className="font-semibold text-foreground">Codebase Explorer</h2>
+            <p className="text-sm text-muted-foreground">
+              {graphStats
+                ? `${graphStats.visibleNodes} nodes · ${graphStats.visibleEdges} edges`
+                : 'Visualize and understand your codebase'}
+            </p>
+          </div>
+        </div>
+
+        <div className="flex items-center gap-2">
+          {/* Search Toggle */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => setShowSearch(!showSearch)}
+              >
+                <Search className="h-4 w-4" />
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Search nodes</TooltipContent>
+          </Tooltip>
+
+          {/* Depth slider compact */}
+          <DepthSliderCompact
+            depthLevel={depthLevel}
+            onChange={handleDepthChange}
+            disabled={isLoading}
+            className="hidden md:flex"
+          />
+
+          {/* Refresh button */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => refreshGraph()}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                ) : (
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                )}
+                Refresh
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>Re-parse codebase</TooltipContent>
+          </Tooltip>
+
+          {/* Info Panel Toggle */}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                size="icon"
+                className="h-8 w-8"
+                onClick={() => {
+                  if (isInfoPanelOpen) {
+                    closeInfoPanel();
+                  } else if (selectedNodeId) {
+                    // Re-open panel if node is selected
+                    selectNode(selectedNodeId);
+                  }
+                }}
+                disabled={!selectedNodeId}
+              >
+                {isInfoPanelOpen ? (
+                  <PanelRightClose className="h-4 w-4" />
+                ) : (
+                  <PanelRight className="h-4 w-4" />
+                )}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {isInfoPanelOpen ? 'Hide info panel' : 'Show info panel'}
+            </TooltipContent>
+          </Tooltip>
+        </div>
+      </div>
+
+      {/* Search bar (collapsible) */}
+      {showSearch && (
+        <div className="flex items-center gap-2 border-b border-border px-6 py-2">
+          <Search className="h-4 w-4 text-muted-foreground" />
+          <Input
+            type="text"
+            placeholder="Search nodes by name or path..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="flex-1 h-8 border-0 bg-transparent focus-visible:ring-0"
+            autoFocus
+          />
+          {searchQuery && (
+            <Button
+              variant="ghost"
+              size="icon"
+              className="h-6 w-6"
+              onClick={() => setSearchQuery('')}
+            >
+              <X className="h-3 w-3" />
+            </Button>
+          )}
+          <span className="text-xs text-muted-foreground">
+            {filteredNodes.length} results
+          </span>
+        </div>
+      )}
+
+      {/* Main Content */}
+      <div className="flex flex-1 overflow-hidden">
+        {/* Graph Container */}
+        <div className="relative flex-1 flex flex-col">
+          {/* Filtered empty state */}
+          {isFilteredEmpty ? (
+            <div className="flex flex-1 items-center justify-center">
+              <div className="text-center">
+                <Search className="mx-auto h-12 w-12 text-muted-foreground/50" />
+                <h3 className="mt-4 text-lg font-medium">No nodes match your filters</h3>
+                <p className="mt-2 text-sm text-muted-foreground">
+                  Try adjusting the depth level or search query
+                </p>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="mt-4"
+                  onClick={() => {
+                    setSearchQuery('');
+                    handleDepthChange(3 as DepthLevel);
+                  }}
+                >
+                  Reset Filters
+                </Button>
+              </div>
+            </div>
+          ) : (
+            <DependencyGraph
+              graph={graph}
+              depthLevel={depthLevel}
+              selectedNodeId={selectedNodeId}
+              onSelectNode={(node) => {
+                if (node) {
+                  handleNodeClick(node);
+                } else {
+                  selectNode(null);
+                }
+              }}
+              onHoverNode={handleNodeHover}
+              className="flex-1"
+            />
+          )}
+
+          {/* Legend (bottom left) */}
+          {showLegend && !isFilteredEmpty && (
+            <GraphLegend
+              showNodeTypes
+              className="absolute bottom-4 left-4 w-48 z-10"
+            />
+          )}
+
+          {/* Stats overlay (bottom center) - on mobile */}
+          <div className="absolute bottom-4 left-1/2 -translate-x-1/2 md:hidden">
+            <GraphLegendInline />
+          </div>
+
+          {/* Depth slider (mobile - bottom) */}
+          <div className="md:hidden p-4 border-t border-border bg-background">
+            <DepthSlider
+              depthLevel={depthLevel}
+              onChange={handleDepthChange}
+              disabled={isLoading}
+            />
+          </div>
+        </div>
+
+        {/* Info Panel (right side) */}
+        {isInfoPanelOpen && selectedNodeInfo && (
+          <div className="border-l border-border">
+            <InfoPanel
+              selectedNodeInfo={selectedNodeInfo}
+              onClose={closeInfoPanel}
+              onNodeClick={handleEdgeClick}
+            />
+          </div>
+        )}
+      </div>
+
+      {/* Loading overlay */}
+      {isLoading && hasGraph && (
+        <div className="absolute inset-0 flex items-center justify-center bg-background/80">
+          <div className="flex items-center gap-3 rounded-lg bg-card px-4 py-3 shadow-lg">
+            <Loader2 className="h-5 w-5 animate-spin text-primary" />
+            <span className="text-sm">{loadingStatus.message || 'Updating graph...'}</span>
+          </div>
+        </div>
+      )}
+    </div>
+  );
 }
 
 /**
