@@ -40,3 +40,20 @@ export {
   ConnectionStatusBar,
   useConnectionState,
 } from './ConnectionStatus';
+
+// Error Handling Components
+export {
+  default as ErrorBoundary,
+  ScreenErrorBoundary,
+  withErrorBoundary,
+} from './ErrorBoundary';
+
+// Offline Components
+export {
+  default as OfflineIndicator,
+  OfflineBanner,
+  OfflineBadge,
+  OfflineToast,
+  NetworkStatusBanner,
+  useNetworkStatus,
+} from './OfflineIndicator';

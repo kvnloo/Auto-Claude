@@ -3,25 +3,28 @@
  * Wraps the entire app with necessary providers:
  * - QueryClientProvider (TanStack Query)
  * - PaperProvider (React Native Paper)
+ * - ErrorBoundary (Error handling)
  *
  * Sets up:
  * - Push notifications (expo-notifications)
  * - WebSocket notification handling
+ * - Offline indicator
  *
  * Note: The queryClient is imported from api/client.ts which sets up
  * AppState and NetInfo integrations for proper React Native support.
  */
 
-import { useEffect, useRef, useCallback } from 'react';
+import React, { useEffect, useRef, useCallback } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClientProvider } from '@tanstack/react-query';
-import { PaperProvider } from 'react-native-paper';
+import { PaperProvider, Portal } from 'react-native-paper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { StyleSheet, Platform } from 'react-native';
+import { StyleSheet, Platform, View } from 'react-native';
 
 import { darkTheme, colors } from '../theme';
 import { queryClient } from '../api/client';
+import { ErrorBoundary, OfflineBanner } from '../components';
 import {
   initializeNotifications,
   setupNotificationListeners,
@@ -121,12 +124,28 @@ export default function RootLayout() {
     };
   }, [handleWebSocketNotificationEvent]);
 
+  /**
+   * Handle error boundary errors
+   * Could be extended to send to error reporting service
+   */
+  const handleError = useCallback((error: Error, errorInfo: React.ErrorInfo) => {
+    // Log error in development
+    if (__DEV__) {
+      // eslint-disable-next-line no-console
+      console.error('App Error:', error.message);
+    }
+    // In production, this could send to an error reporting service
+  }, []);
+
   return (
     <GestureHandlerRootView style={styles.container}>
       <QueryClientProvider client={queryClient}>
         <PaperProvider theme={darkTheme}>
-          <StatusBar style="light" />
-          <Stack screenOptions={screenOptions}>
+          <ErrorBoundary name="App" onError={handleError}>
+            <StatusBar style="light" />
+            {/* Offline indicator banner */}
+            <OfflineBanner testID="offline-banner" />
+            <Stack screenOptions={screenOptions}>
             {/* Tab Navigator - hides header since tabs have their own */}
             <Stack.Screen
               name="(tabs)"
@@ -240,6 +259,7 @@ export default function RootLayout() {
               }}
             />
           </Stack>
+          </ErrorBoundary>
         </PaperProvider>
       </QueryClientProvider>
     </GestureHandlerRootView>
