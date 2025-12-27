@@ -44,15 +44,17 @@ from __future__ import annotations
 
 import argparse
 import asyncio
+import errno
 import json
 import logging
 import os
+import shutil
 import signal
 import subprocess
 import sys
 import time
 from dataclasses import dataclass, field
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from enum import Enum
 from pathlib import Path
 from typing import Any
@@ -108,6 +110,26 @@ class PRCreationError(Exception):
     """Raised when PR creation fails."""
 
     pass
+
+
+class AuthenticationError(Exception):
+    """Raised when GitHub authentication fails or expires (401 errors)."""
+
+    pass
+
+
+class CriticalSystemError(Exception):
+    """Raised for critical system errors (disk full, out of memory, etc.)."""
+
+    pass
+
+
+class DependencyCycleError(Exception):
+    """Raised when a dependency cycle is detected."""
+
+    def __init__(self, cycle: list[str], message: str = "Dependency cycle detected"):
+        self.cycle = cycle
+        super().__init__(f"{message}: {' -> '.join(cycle)}")
 
 
 # ============================================
@@ -319,6 +341,16 @@ class AutonomousRunner:
         # Track base branch for PR creation
         self._base_branch: str | None = None
 
+        # Rate limit tracking
+        self._rate_limit_reset_time: datetime | None = None
+        self._rate_limit_backoff_seconds: float = 60.0  # Initial backoff
+
+        # Blocked tasks due to dependency cycles
+        self._blocked_task_ids: set[str] = set()
+
+        # Track original branch for rollback
+        self._original_branch: str | None = None
+
     def _detect_repository(self) -> str | None:
         """
         Auto-detect repository from git remote.
@@ -345,6 +377,504 @@ class AutonomousRunner:
         return None
 
     # =========================================================================
+    # Edge Case Handling
+    # =========================================================================
+
+    async def _handle_rate_limit(
+        self,
+        error: Exception,
+        operation: str = "unknown",
+    ) -> bool:
+        """
+        Handle GitHub API rate limiting with exponential backoff.
+
+        Implements exponential backoff with jitter:
+        - First hit: wait 60s
+        - Subsequent hits: double the wait time up to 15 minutes
+        - Jitter added to prevent thundering herd
+
+        Args:
+            error: The rate limit exception
+            operation: Description of the operation that was rate limited
+
+        Returns:
+            True if we should retry, False if we should pause the queue
+        """
+        import random
+
+        now = datetime.now(timezone.utc)
+
+        # Check if we're already in a rate limit cooldown period
+        if self._rate_limit_reset_time and now < self._rate_limit_reset_time:
+            wait_seconds = (self._rate_limit_reset_time - now).total_seconds()
+            logger.info(
+                f"Rate limit cooldown active, waiting {wait_seconds:.0f}s "
+                f"until {self._rate_limit_reset_time.isoformat()}"
+            )
+            emit_event(
+                "rate_limit_wait",
+                operation=operation,
+                wait_seconds=wait_seconds,
+                reset_time=self._rate_limit_reset_time.isoformat(),
+            )
+            await asyncio.sleep(wait_seconds)
+            return True
+
+        # Apply exponential backoff with jitter
+        jitter = random.uniform(0.8, 1.2)
+        wait_seconds = self._rate_limit_backoff_seconds * jitter
+
+        # Cap at 15 minutes
+        max_backoff = 900.0
+        if wait_seconds > max_backoff:
+            wait_seconds = max_backoff
+
+        logger.warning(
+            f"Rate limit exceeded during {operation}. "
+            f"Backing off for {wait_seconds:.0f}s (backoff: {self._rate_limit_backoff_seconds:.0f}s)"
+        )
+
+        # Update rate limit tracking
+        self._rate_limit_reset_time = now + timedelta(seconds=wait_seconds)
+
+        # Double the backoff for next time (up to max)
+        self._rate_limit_backoff_seconds = min(
+            self._rate_limit_backoff_seconds * 2,
+            max_backoff,
+        )
+
+        emit_event(
+            "rate_limit_backoff",
+            operation=operation,
+            error=str(error),
+            wait_seconds=wait_seconds,
+            next_backoff_seconds=self._rate_limit_backoff_seconds,
+            reset_time=self._rate_limit_reset_time.isoformat(),
+        )
+
+        # If backoff exceeds threshold, pause the queue
+        if self._rate_limit_backoff_seconds >= max_backoff:
+            logger.error("Rate limit backoff exceeded maximum. Pausing queue.")
+            emit_event(
+                "guardrail_triggered",
+                reason="rate_limit_max_backoff",
+                details={
+                    "operation": operation,
+                    "wait_seconds": wait_seconds,
+                },
+            )
+            await self.pause(reason="Rate limit - maximum backoff exceeded")
+            return False
+
+        await asyncio.sleep(wait_seconds)
+        return True
+
+    def _reset_rate_limit_backoff(self) -> None:
+        """Reset rate limit backoff after successful operations."""
+        if self._rate_limit_backoff_seconds > 60.0:
+            logger.debug(
+                f"Resetting rate limit backoff from {self._rate_limit_backoff_seconds}s to 60s"
+            )
+        self._rate_limit_backoff_seconds = 60.0
+        self._rate_limit_reset_time = None
+
+    def _detect_auth_error(self, error: Exception) -> bool:
+        """
+        Detect if an error is due to authentication failure.
+
+        Checks for 401 Unauthorized errors which indicate:
+        - Expired GitHub token
+        - Invalid credentials
+        - Missing authentication
+
+        Args:
+            error: The exception to check
+
+        Returns:
+            True if this is an authentication error
+        """
+        error_str = str(error).lower()
+        auth_indicators = [
+            "401",
+            "unauthorized",
+            "authentication failed",
+            "auth required",
+            "bad credentials",
+            "token expired",
+            "invalid token",
+            "not logged in",
+            "gh auth login",
+        ]
+        return any(indicator in error_str for indicator in auth_indicators)
+
+    async def _handle_auth_error(self, error: Exception) -> None:
+        """
+        Handle authentication errors by pausing and notifying.
+
+        When authentication fails, the queue is paused and the user
+        needs to re-authenticate using `gh auth login`.
+
+        Args:
+            error: The authentication error
+        """
+        logger.error(f"GitHub authentication error: {error}")
+        emit_event(
+            "auth_error",
+            error=str(error),
+            action_required="Run 'gh auth login' to re-authenticate",
+        )
+        emit_event(
+            "guardrail_triggered",
+            reason="auth_failure",
+            details={
+                "error": str(error),
+                "action": "gh auth login",
+            },
+        )
+        await self.pause(reason="Authentication failed - run 'gh auth login'")
+        raise AuthenticationError(str(error))
+
+    def _detect_dependency_cycles(
+        self,
+        tasks: list[AutonomousTask],
+    ) -> list[list[str]]:
+        """
+        Detect circular dependencies in task list using DFS.
+
+        Implements Tarjan's algorithm variant to find all cycles.
+
+        Args:
+            tasks: List of tasks to check
+
+        Returns:
+            List of cycles found (each cycle is a list of task IDs)
+        """
+        # Build dependency graph
+        task_map = {task.id: task for task in tasks}
+        cycles: list[list[str]] = []
+
+        # Track visited states
+        WHITE = 0  # Not visited
+        GRAY = 1   # In current DFS path
+        BLACK = 2  # Finished processing
+
+        color: dict[str, int] = {task_id: WHITE for task_id in task_map}
+        path: list[str] = []
+
+        def dfs(task_id: str) -> None:
+            """DFS to detect cycles."""
+            if task_id not in task_map:
+                return
+
+            if color[task_id] == BLACK:
+                return
+
+            if color[task_id] == GRAY:
+                # Found a cycle - extract it from path
+                cycle_start = path.index(task_id)
+                cycle = path[cycle_start:] + [task_id]
+                cycles.append(cycle)
+                return
+
+            color[task_id] = GRAY
+            path.append(task_id)
+
+            # Visit dependencies
+            task = task_map[task_id]
+            for dep_id in task.dependencies:
+                dfs(dep_id)
+
+            path.pop()
+            color[task_id] = BLACK
+
+        # Run DFS from each unvisited node
+        for task_id in task_map:
+            if color[task_id] == WHITE:
+                dfs(task_id)
+
+        return cycles
+
+    def _handle_dependency_cycles(
+        self,
+        tasks: list[AutonomousTask],
+    ) -> list[AutonomousTask]:
+        """
+        Detect and handle dependency cycles.
+
+        Cycles are detected and affected tasks are marked as blocked.
+        Returns list of tasks with cycle participants excluded.
+
+        Args:
+            tasks: List of tasks to process
+
+        Returns:
+            List of tasks without cycle participants
+        """
+        cycles = self._detect_dependency_cycles(tasks)
+
+        if not cycles:
+            return tasks
+
+        # Collect all task IDs involved in cycles
+        cycle_task_ids: set[str] = set()
+        for cycle in cycles:
+            cycle_task_ids.update(cycle)
+            # Log the cycle
+            cycle_str = " -> ".join(cycle)
+            logger.warning(f"Dependency cycle detected: {cycle_str}")
+            emit_event(
+                "dependency_cycle",
+                cycle=cycle,
+                message=f"Tasks blocked due to circular dependency: {cycle_str}",
+            )
+
+        # Add to blocked set
+        self._blocked_task_ids.update(cycle_task_ids)
+
+        # Filter out blocked tasks
+        filtered_tasks = [
+            task for task in tasks if task.id not in cycle_task_ids
+        ]
+
+        # Emit summary
+        if cycle_task_ids:
+            emit_event(
+                "tasks_blocked",
+                count=len(cycle_task_ids),
+                task_ids=list(cycle_task_ids),
+                reason="dependency_cycle",
+            )
+
+        return filtered_tasks
+
+    def _detect_critical_error(self, error: Exception) -> bool:
+        """
+        Detect critical system errors that require immediate pause.
+
+        Checks for:
+        - Disk full (ENOSPC)
+        - Out of memory
+        - Network unreachable
+        - Permission denied (on critical paths)
+
+        Args:
+            error: The exception to check
+
+        Returns:
+            True if this is a critical system error
+        """
+        error_str = str(error).lower()
+
+        # Check for errno-based errors
+        if isinstance(error, OSError):
+            critical_errnos = [
+                errno.ENOSPC,  # No space left on device
+                errno.ENOMEM,  # Out of memory
+                errno.ENETUNREACH,  # Network unreachable
+                errno.EHOSTUNREACH,  # Host unreachable
+                errno.ECONNREFUSED,  # Connection refused
+            ]
+            if error.errno in critical_errnos:
+                return True
+
+        # Check error message patterns
+        critical_patterns = [
+            "no space left",
+            "disk full",
+            "out of memory",
+            "cannot allocate",
+            "memory exhausted",
+            "network is unreachable",
+            "host is down",
+            "connection timed out",
+            "permission denied",
+        ]
+        return any(pattern in error_str for pattern in critical_patterns)
+
+    async def _handle_critical_error(self, error: Exception) -> None:
+        """
+        Handle critical system errors by pausing and preserving state.
+
+        Attempts to:
+        1. Save current queue state
+        2. Emit critical alert
+        3. Pause the queue
+
+        Args:
+            error: The critical error
+        """
+        logger.critical(f"Critical system error: {error}")
+
+        # Attempt to save queue state
+        try:
+            await self._save_queue_state()
+        except Exception as save_error:
+            logger.error(f"Failed to save queue state: {save_error}")
+
+        # Emit critical alert
+        emit_event(
+            "critical_error",
+            error=str(error),
+            error_type=type(error).__name__,
+            stats=self.stats.to_dict(),
+        )
+
+        emit_event(
+            "guardrail_triggered",
+            reason="critical_error",
+            details={
+                "error": str(error),
+                "error_type": type(error).__name__,
+            },
+        )
+
+        await self.pause(reason=f"Critical error: {type(error).__name__}")
+        raise CriticalSystemError(str(error))
+
+    async def _save_queue_state(self) -> None:
+        """
+        Save current queue state for recovery.
+
+        Saves to .auto-claude/autonomous_queue_state.json
+        """
+        state_dir = self.project_dir / ".auto-claude"
+        state_file = state_dir / "autonomous_queue_state.json"
+
+        try:
+            state_dir.mkdir(parents=True, exist_ok=True)
+
+            state = {
+                "saved_at": datetime.now(timezone.utc).isoformat(),
+                "state": self.state.value,
+                "stats": self.stats.to_dict(),
+                "current_task": self.current_task.to_dict() if self.current_task else None,
+                "queue": [task.to_dict() for task in self.task_queue],
+                "completed_task_ids": list(self.completed_task_ids),
+                "blocked_task_ids": list(self._blocked_task_ids),
+            }
+
+            # Write atomically
+            temp_file = state_file.with_suffix(".tmp")
+            temp_file.write_text(json.dumps(state, indent=2))
+            temp_file.rename(state_file)
+
+            logger.info(f"Queue state saved to {state_file}")
+            emit_event(
+                "queue_state_saved",
+                file=str(state_file),
+                task_count=len(self.task_queue),
+            )
+
+        except Exception as e:
+            logger.error(f"Failed to save queue state: {e}")
+            raise
+
+    async def _check_disk_space(self, min_bytes: int = 100 * 1024 * 1024) -> bool:
+        """
+        Check if sufficient disk space is available.
+
+        Args:
+            min_bytes: Minimum required free space (default: 100MB)
+
+        Returns:
+            True if sufficient space, False otherwise
+        """
+        try:
+            usage = shutil.disk_usage(self.project_dir)
+            if usage.free < min_bytes:
+                logger.warning(
+                    f"Low disk space: {usage.free / (1024*1024):.1f}MB free, "
+                    f"need {min_bytes / (1024*1024):.1f}MB"
+                )
+                emit_event(
+                    "warning",
+                    source="system",
+                    message=f"Low disk space: {usage.free / (1024*1024):.1f}MB free",
+                )
+                return False
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to check disk space: {e}")
+            return True  # Assume OK if check fails
+
+    async def _rollback_task_changes(self, task: AutonomousTask) -> bool:
+        """
+        Rollback any uncommitted changes from a failed task.
+
+        Attempts to:
+        1. Discard any uncommitted changes (git checkout .)
+        2. Return to base branch if we switched
+
+        Args:
+            task: The failed task
+
+        Returns:
+            True if rollback succeeded, False otherwise
+        """
+        try:
+            logger.info(f"Rolling back changes for failed task: {task.id}")
+
+            # Check for uncommitted changes
+            result = await asyncio.create_subprocess_exec(
+                "git", "status", "--porcelain",
+                cwd=self.project_dir,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await result.communicate()
+
+            if stdout.strip():
+                # Discard all uncommitted changes
+                logger.info("Discarding uncommitted changes...")
+                result = await asyncio.create_subprocess_exec(
+                    "git", "checkout", ".",
+                    cwd=self.project_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await result.communicate()
+
+                # Also clean untracked files
+                result = await asyncio.create_subprocess_exec(
+                    "git", "clean", "-fd",
+                    cwd=self.project_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await result.communicate()
+
+            # Return to base branch if we're on a task branch
+            current_branch = await self._get_current_branch()
+            if current_branch and current_branch.startswith("auto-claude/"):
+                base_branch = await self._get_base_branch()
+                logger.info(f"Returning to base branch: {base_branch}")
+                result = await asyncio.create_subprocess_exec(
+                    "git", "checkout", base_branch,
+                    cwd=self.project_dir,
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
+                )
+                await result.communicate()
+
+            emit_event(
+                "task_rollback",
+                task_id=task.id,
+                success=True,
+            )
+            logger.info(f"Rollback completed for task: {task.id}")
+            return True
+
+        except Exception as e:
+            logger.error(f"Rollback failed for task {task.id}: {e}")
+            emit_event(
+                "task_rollback",
+                task_id=task.id,
+                success=False,
+                error=str(e),
+            )
+            return False
+
+    # =========================================================================
     # Task Fetching
     # =========================================================================
 
@@ -352,25 +882,69 @@ class AutonomousRunner:
         """
         Fetch GitHub issues with 'auto-claude-ready' label.
 
+        Handles:
+        - Rate limiting with exponential backoff
+        - Authentication errors (401)
+        - Critical system errors
+
         Returns:
             List of AutonomousTask objects from GitHub issues
         """
         tasks = []
-        try:
-            issues = await self.issue_fetcher.fetch_ready_issues()
-            for issue in issues:
-                task = create_task_from_github_issue(
-                    issue=issue,
-                    repository=self.repository or "unknown/unknown",
-                )
-                tasks.append(task)
-            logger.info(f"Fetched {len(tasks)} tasks from GitHub issues")
-        except IssueFetchError as e:
-            logger.warning(f"Failed to fetch GitHub issues: {e}")
-            emit_event("warning", source="github", message=str(e))
-        except RateLimitExceeded as e:
-            logger.warning(f"GitHub rate limit exceeded: {e}")
-            emit_event("rate_limit", source="github", message=str(e))
+        max_retries = 3
+
+        for attempt in range(max_retries):
+            try:
+                issues = await self.issue_fetcher.fetch_ready_issues()
+                for issue in issues:
+                    task = create_task_from_github_issue(
+                        issue=issue,
+                        repository=self.repository or "unknown/unknown",
+                    )
+                    tasks.append(task)
+                logger.info(f"Fetched {len(tasks)} tasks from GitHub issues")
+
+                # Reset rate limit backoff on success
+                self._reset_rate_limit_backoff()
+                return tasks
+
+            except RateLimitExceeded as e:
+                logger.warning(f"GitHub rate limit exceeded: {e}")
+                should_retry = await self._handle_rate_limit(e, "fetch_github_issues")
+                if not should_retry:
+                    return tasks
+                # Retry on next loop iteration
+
+            except IssueFetchError as e:
+                # Check for auth errors
+                if self._detect_auth_error(e):
+                    await self._handle_auth_error(e)
+                    return tasks
+
+                # Check for critical errors
+                if self._detect_critical_error(e):
+                    await self._handle_critical_error(e)
+                    return tasks
+
+                logger.warning(f"Failed to fetch GitHub issues: {e}")
+                emit_event("warning", source="github", message=str(e))
+                return tasks
+
+            except Exception as e:
+                # Check for auth errors
+                if self._detect_auth_error(e):
+                    await self._handle_auth_error(e)
+                    return tasks
+
+                # Check for critical errors
+                if self._detect_critical_error(e):
+                    await self._handle_critical_error(e)
+                    return tasks
+
+                logger.warning(f"Unexpected error fetching GitHub issues: {e}")
+                emit_event("warning", source="github", message=str(e))
+                return tasks
+
         return tasks
 
     def _fetch_roadmap_features(self) -> list[AutonomousTask]:
@@ -403,9 +977,22 @@ class AutonomousRunner:
         """
         Refresh the task queue by fetching from all sources.
 
-        Deduplicates tasks and sorts by priority.
+        Performs:
+        - Deduplication of tasks
+        - Dependency cycle detection
+        - Priority-based sorting
+        - Disk space check before processing
         """
         logger.info("Refreshing task queue...")
+
+        # Pre-flight check: disk space
+        has_space = await self._check_disk_space()
+        if not has_space:
+            emit_event(
+                "warning",
+                source="system",
+                message="Low disk space - proceeding with caution",
+            )
 
         # Fetch from both sources
         github_tasks = await self._fetch_github_issues()
@@ -419,14 +1006,29 @@ class AutonomousRunner:
         for completed_id in self.completed_task_ids:
             task_map.pop(completed_id, None)
 
+        # Remove previously blocked tasks
+        for blocked_id in self._blocked_task_ids:
+            task_map.pop(blocked_id, None)
+
+        # Detect and handle dependency cycles
+        tasks_list = list(task_map.values())
+        tasks_list = self._handle_dependency_cycles(tasks_list)
+
         # Sort by priority
         self.task_queue = sort_tasks_by_priority(
-            list(task_map.values()),
+            tasks_list,
             completed_task_ids=self.completed_task_ids,
         )
 
         logger.info(f"Task queue refreshed: {len(self.task_queue)} tasks available")
-        emit_event("queue_updated", count=len(self.task_queue))
+        if self._blocked_task_ids:
+            logger.info(f"Blocked tasks: {len(self._blocked_task_ids)} (dependency cycles)")
+
+        emit_event(
+            "queue_updated",
+            count=len(self.task_queue),
+            blocked_count=len(self._blocked_task_ids),
+        )
 
     # =========================================================================
     # Task Execution
@@ -436,6 +1038,12 @@ class AutonomousRunner:
         """
         Execute a single task through the spec_runner.py -> run.py pipeline.
 
+        Includes:
+        - Pre-flight disk space check
+        - Error categorization (auth, rate limit, critical)
+        - Rollback on failure
+        - Status synchronization with retry
+
         Args:
             task: Task to execute
 
@@ -443,6 +1051,22 @@ class AutonomousRunner:
             True if successful, False otherwise
         """
         logger.info(f"Starting task execution: {task.id} - {task.title}")
+
+        # Pre-flight check: disk space
+        has_space = await self._check_disk_space()
+        if not has_space:
+            task.mark_failed("Insufficient disk space")
+            self.stats.record_failure()
+            emit_event(
+                "task_failed",
+                task=task.to_dict(),
+                error="Insufficient disk space",
+            )
+            return False
+
+        # Save original branch for potential rollback
+        self._original_branch = await self._get_current_branch()
+
         task.mark_in_progress()
         self.current_task = task
 
@@ -464,6 +1088,9 @@ class AutonomousRunner:
                 self.completed_task_ids.add(task.id)
                 self.stats.record_success()
 
+                # Reset rate limit backoff on successful task
+                self._reset_rate_limit_backoff()
+
                 # Update external status (bidirectional sync)
                 await self._update_task_status_completed(task, spec_id)
 
@@ -478,7 +1105,9 @@ class AutonomousRunner:
                 )
                 return True
             else:
-                # Task failed
+                # Task failed - rollback any changes
+                await self._rollback_task_changes(task)
+
                 task.mark_failed("Pipeline execution failed")
                 self.stats.record_failure()
 
@@ -495,16 +1124,50 @@ class AutonomousRunner:
                 )
                 return False
 
+        except RateLimitExceeded as e:
+            logger.warning(f"Rate limit during task execution: {e}")
+            # Rollback changes
+            await self._rollback_task_changes(task)
+
+            # Handle rate limit
+            should_retry = await self._handle_rate_limit(e, f"execute_task:{task.id}")
+
+            task.mark_failed(f"Rate limit: {e}")
+            self.stats.record_failure()
+
+            emit_event(
+                "task_failed",
+                task=task.to_dict(),
+                error=str(e),
+                retryable=should_retry,
+            )
+            return False
+
         except Exception as e:
             logger.error(f"Task execution error: {e}")
+
+            # Rollback any partial changes
+            await self._rollback_task_changes(task)
+
+            # Check for auth errors
+            if self._detect_auth_error(e):
+                await self._handle_auth_error(e)
+                return False
+
+            # Check for critical system errors
+            if self._detect_critical_error(e):
+                await self._handle_critical_error(e)
+                return False
+
             task.mark_failed(str(e))
             self.stats.record_failure()
 
             # Update external status (bidirectional sync)
-            await self._update_task_status_failed(task)
-
-            # Add failure comment to GitHub issue
-            await self._add_comment_on_failure(task)
+            try:
+                await self._update_task_status_failed(task)
+                await self._add_comment_on_failure(task)
+            except Exception as status_error:
+                logger.warning(f"Failed to update status after error: {status_error}")
 
             emit_event(
                 "task_failed",
@@ -515,6 +1178,7 @@ class AutonomousRunner:
 
         finally:
             self.current_task = None
+            self._original_branch = None
 
     async def _run_spec_pipeline(self, task: AutonomousTask) -> str | None:
         """
@@ -1580,6 +2244,13 @@ class AutonomousRunner:
         Start the autonomous runner main loop.
 
         Continuously fetches tasks, executes them, and respects guardrails.
+
+        Handles:
+        - Empty queue with efficient polling
+        - Rate limiting with exponential backoff
+        - Authentication errors
+        - Critical system errors
+        - Graceful shutdown
         """
         if self.state == RunnerState.RUNNING:
             logger.warning("Runner is already running")
@@ -1587,6 +2258,10 @@ class AutonomousRunner:
 
         self.state = RunnerState.RUNNING
         self.stats = SessionStats()  # Reset stats for new session
+
+        # Track consecutive empty polls for adaptive polling
+        consecutive_empty_polls = 0
+        max_consecutive_empty = 10  # Increase poll interval after this many
 
         logger.info("Autonomous runner started")
         emit_event("started", settings=self.guardrails.to_dict())
@@ -1606,7 +2281,21 @@ class AutonomousRunner:
                     break
 
                 # Refresh task queue
-                await self._refresh_task_queue()
+                try:
+                    await self._refresh_task_queue()
+                except (AuthenticationError, CriticalSystemError):
+                    # Already handled - just break out of loop
+                    break
+                except Exception as refresh_error:
+                    logger.error(f"Failed to refresh task queue: {refresh_error}")
+                    emit_event(
+                        "error",
+                        source="queue_refresh",
+                        message=str(refresh_error),
+                    )
+                    # Wait a bit before retrying
+                    await asyncio.sleep(30)
+                    continue
 
                 # Get next task
                 ready_tasks = get_ready_tasks(
@@ -1615,32 +2304,79 @@ class AutonomousRunner:
                 )
 
                 if not ready_tasks:
-                    logger.info("No tasks available, waiting for next poll...")
-                    emit_event("idle", message="No tasks available")
+                    consecutive_empty_polls += 1
+
+                    # Adaptive polling - increase interval after many empty polls
+                    poll_interval = self.guardrails.poll_interval_seconds
+                    if consecutive_empty_polls > max_consecutive_empty:
+                        # Double the poll interval (up to 5 minutes)
+                        poll_interval = min(poll_interval * 2, 300)
+
+                    # Log based on situation
+                    if consecutive_empty_polls == 1:
+                        logger.info("No tasks available, waiting for next poll...")
+                    elif consecutive_empty_polls % 5 == 0:
+                        logger.info(
+                            f"Queue empty for {consecutive_empty_polls} consecutive polls "
+                            f"(poll interval: {poll_interval}s)"
+                        )
+
+                    # Emit idle event with details
+                    emit_event(
+                        "idle",
+                        message="No tasks available",
+                        consecutive_empty_polls=consecutive_empty_polls,
+                        poll_interval_seconds=poll_interval,
+                        blocked_tasks=len(self._blocked_task_ids),
+                    )
 
                     # Wait for poll interval or shutdown signal
                     try:
                         await asyncio.wait_for(
                             self._shutdown_event.wait(),
-                            timeout=self.guardrails.poll_interval_seconds,
+                            timeout=poll_interval,
                         )
                         # Shutdown was requested
                         break
                     except asyncio.TimeoutError:
                         # Poll interval elapsed, continue loop
                         continue
+                else:
+                    # Reset consecutive empty counter when we have tasks
+                    consecutive_empty_polls = 0
 
                 # Execute highest priority task
                 next_task = ready_tasks[0]
-                success = await self._execute_task(next_task)
+                try:
+                    success = await self._execute_task(next_task)
+                except (AuthenticationError, CriticalSystemError):
+                    # Already handled and paused - break out of loop
+                    break
+                except Exception as task_error:
+                    logger.error(f"Unexpected task error: {task_error}")
+                    # Continue with next task after brief pause
+                    await asyncio.sleep(5)
+                    continue
 
                 # Brief pause between tasks
                 if not self._shutdown_event.is_set():
                     await asyncio.sleep(1)
 
+        except (AuthenticationError, CriticalSystemError) as e:
+            # Already handled, just log
+            logger.info(f"Runner paused due to: {type(e).__name__}")
+
         except Exception as e:
             logger.error(f"Runner error: {e}")
-            emit_event("error", message=str(e))
+
+            # Check if this is a critical error
+            if self._detect_critical_error(e):
+                try:
+                    await self._handle_critical_error(e)
+                except CriticalSystemError:
+                    pass  # Already logged and handled
+
+            emit_event("error", message=str(e), error_type=type(e).__name__)
 
         finally:
             await self._cleanup()
