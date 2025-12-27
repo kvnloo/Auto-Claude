@@ -23,6 +23,7 @@ Thank you for your interest in contributing to Auto Claude! This document provid
   - [Pull Request Targets](#pull-request-targets)
   - [Release Process](#release-process-maintainers)
   - [Commit Messages](#commit-messages)
+- [Contributing from Forks](#contributing-from-forks)
 - [Pull Request Process](#pull-request-process)
 - [Issue Reporting](#issue-reporting)
 - [Architecture Overview](#architecture-overview)
@@ -565,6 +566,44 @@ hotfix/125 ─────────────────●─────
 ```
 
 > **Note:** Hotfixes branch FROM `main` and merge TO `main` first, then sync back to `develop` to keep branches aligned.
+
+## Contributing from Forks
+
+Community forks can contribute using our **distributed task claiming system**, which prevents duplicate work by allowing forks to safely claim issues before working on them.
+
+### Quick Overview
+
+1. **Find** an available task: `gh issue list --label "task:available"`
+2. **Claim** it: `gh workflow run task-claim.yml -f issue_number=123`
+3. **Work** on the issue in your fork
+4. **Submit** a PR with claim metadata (`Claimed-By`, `Claim-ID`)
+5. **Release** if unable to complete: `gh workflow run task-release.yml -f issue_number=123`
+
+### Task Labels
+
+| Label | Meaning |
+|-------|---------|
+| `task:available` | Open for claiming - you can work on this |
+| `task:claimed` | Already claimed - choose a different issue |
+
+### Reputation System
+
+Your fork builds a reputation score based on contribution history:
+
+| Event | Points |
+|-------|--------|
+| PR Merged | **+10** |
+| Claim Abandoned | **-5** |
+| Stale Timeout (7 days) | **-3** |
+
+> **Important:** Claims automatically expire after **7 days** of inactivity. Post progress updates or release your claim early to avoid reputation penalties.
+
+### Full Documentation
+
+For detailed instructions, see:
+- [Fork Contributing Guide](.github/CONTRIBUTING.md) - Step-by-step workflow
+- [Workflow Documentation](.github/workflows/README.md) - Technical details
+- [Fork Reputation System](docs/fork-reputation.md) - Scoring rules
 
 ### Commit Messages
 
