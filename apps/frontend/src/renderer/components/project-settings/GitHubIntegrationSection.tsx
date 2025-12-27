@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Github, RefreshCw, KeyRound, Info, CheckCircle2 } from 'lucide-react';
+import { Github, RefreshCw, KeyRound, Info, CheckCircle2, GitFork } from 'lucide-react';
 import { CollapsibleSection } from './CollapsibleSection';
 import { StatusBadge } from './StatusBadge';
 import { PasswordInput } from './PasswordInput';
@@ -36,8 +36,14 @@ export function GitHubIntegrationSection({
     envConfig.githubAuthMethod === 'oauth' || (!envConfig.githubToken && !envConfig.githubAuthMethod)
   );
 
-  const badge = envConfig.githubEnabled ? (
-    <StatusBadge status="success" label="Enabled" />
+  // Build badges: "Enabled" when GitHub is enabled, "Fork" when connected to a fork
+  const badges = envConfig.githubEnabled ? (
+    <>
+      <StatusBadge status="success" label="Enabled" />
+      {gitHubConnectionStatus?.connected && gitHubConnectionStatus?.isFork && (
+        <StatusBadge status="info" label="Fork" />
+      )}
+    </>
   ) : null;
 
   const handleOAuthSuccess = (token: string, _username?: string) => {
@@ -55,7 +61,7 @@ export function GitHubIntegrationSection({
       icon={<Github className="h-4 w-4" />}
       isExpanded={isExpanded}
       onToggle={onToggle}
-      badge={badge}
+      badge={badges}
     >
       {/* Project-Specific Configuration Notice */}
       {projectName && (
@@ -179,6 +185,30 @@ export function GitHubIntegrationSection({
               errorMessage={gitHubConnectionStatus?.error || 'Not connected'}
               additionalInfo={gitHubConnectionStatus?.repoDescription}
             />
+          )}
+
+          {/* Fork Repository Info */}
+          {gitHubConnectionStatus?.connected && gitHubConnectionStatus?.isFork && gitHubConnectionStatus?.parentRepository && (
+            <div className="rounded-lg border border-info/30 bg-info/5 p-3">
+              <div className="flex items-start gap-3">
+                <GitFork className="h-5 w-5 text-info mt-0.5" />
+                <div className="flex-1">
+                  <p className="text-sm font-medium text-foreground">Fork Repository</p>
+                  <p className="text-xs text-muted-foreground mt-1">
+                    This is a fork of{' '}
+                    <a
+                      href={gitHubConnectionStatus.parentRepository.url}
+                      target="_blank"
+                      rel="noopener noreferrer"
+                      className="text-info hover:underline font-medium"
+                    >
+                      {gitHubConnectionStatus.parentRepository.fullName}
+                    </a>
+                    . Issues from the parent repository are available.
+                  </p>
+                </div>
+              </div>
+            </div>
           )}
 
           {/* Info about accessing issues */}
