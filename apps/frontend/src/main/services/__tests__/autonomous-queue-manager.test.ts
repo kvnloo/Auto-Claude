@@ -113,10 +113,10 @@ describe('AutonomousQueueManager', () => {
     mockProcess.on = vi.fn((event: string, handler: (...args: unknown[]) => void) => {
       if (event === 'exit') {
         // Store the exit handler for later invocation
-        (mockProcess as Record<string, unknown>)._exitHandler = handler;
+        (mockProcess as unknown as Record<string, unknown>)._exitHandler = handler;
       }
       if (event === 'error') {
-        (mockProcess as Record<string, unknown>)._errorHandler = handler;
+        (mockProcess as unknown as Record<string, unknown>)._errorHandler = handler;
       }
       return mockProcess;
     });

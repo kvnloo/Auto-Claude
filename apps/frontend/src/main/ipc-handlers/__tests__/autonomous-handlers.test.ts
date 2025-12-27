@@ -24,7 +24,7 @@ import type { AutonomousModeSettings } from '../../../shared/types/settings';
 
 // Mock BrowserWindow
 const mockWebContents = {
-  send: vi.fn()
+  send: vi.fn() as ReturnType<typeof vi.fn> & { mock: { calls: Array<[string, unknown]> } }
 };
 
 const mockMainWindow: Partial<BrowserWindow> = {
@@ -43,11 +43,11 @@ const mockQueueManager = {
   resume: vi.fn().mockResolvedValue(undefined),
   getStatus: vi.fn(),
   getSessionStats: vi.fn(),
-  getQueue: vi.fn(() => []),
+  getQueue: vi.fn((): AutonomousTask[] => []),
   addTask: vi.fn(),
   removeTask: vi.fn(() => true),
   getTask: vi.fn(),
-  on: vi.fn(),
+  on: vi.fn() as ReturnType<typeof vi.fn> & { mock: { calls: Array<[string, (...args: unknown[]) => void]> } },
   off: vi.fn(),
   emit: vi.fn()
 };
@@ -1091,7 +1091,7 @@ describe('Autonomous Mode IPC Handlers', () => {
       const results = await Promise.all([
         ipcHandlers['autonomous:start'](createMockEvent(), 'test-project-id'),
         ipcHandlers['autonomous:start'](createMockEvent(), 'test-project-id')
-      ]);
+      ]) as Array<{ success: boolean }>;
 
       // Both should return success since queue manager handles the actual state
       expect(results[0].success).toBe(true);
