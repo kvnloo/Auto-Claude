@@ -309,6 +309,8 @@ export const IssueListItem: React.FC<IssueListItemProps> = ({
                       style={styles.actionChip}
                       textStyle={styles.actionChipText}
                       compact
+                      accessibilityLabel="AI investigation in progress"
+                      accessibilityRole="progressbar"
                     >
                       Investigating
                     </Chip>
@@ -320,6 +322,8 @@ export const IssueListItem: React.FC<IssueListItemProps> = ({
                       style={styles.actionChip}
                       textStyle={styles.actionChipText}
                       compact
+                      accessibilityLabel="AI auto-fix in progress"
+                      accessibilityRole="progressbar"
                     >
                       Fixing
                     </Chip>
@@ -356,7 +360,11 @@ export const IssueListItem: React.FC<IssueListItemProps> = ({
 
             {/* Linked task indicator */}
             {issue.linkedTaskId && (
-              <View style={styles.linkedTask}>
+              <View
+                style={styles.linkedTask}
+                accessibilityLabel="This issue is linked to a task"
+                accessibilityRole="text"
+              >
                 <Avatar.Icon
                   size={14}
                   icon="link"

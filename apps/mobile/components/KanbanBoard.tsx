@@ -358,11 +358,22 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
     <GestureDetector gesture={panGesture}>
       <View style={styles.container} testID={testID}>
         {/* Column headers summary (optional) */}
-        <View style={styles.headerSummary}>
+        <View
+          style={styles.headerSummary}
+          accessibilityRole="summary"
+          accessibilityLabel={`Task summary: ${KANBAN_COLUMNS.map(
+            (col) => `${tasksByStatus[col.id].length} ${col.title}`
+          ).join(', ')}`}
+        >
           {KANBAN_COLUMNS.map((col) => (
-            <View key={col.id} style={styles.summaryItem}>
+            <View
+              key={col.id}
+              style={styles.summaryItem}
+              accessibilityLabel={`${tasksByStatus[col.id].length} tasks in ${col.title}`}
+            >
               <View
                 style={[styles.summaryDot, { backgroundColor: col.color }]}
+                accessibilityElementsHidden
               />
               <Text style={styles.summaryCount}>
                 {tasksByStatus[col.id].length}
@@ -405,7 +416,12 @@ export const KanbanBoard: React.FC<KanbanBoardProps> = ({
 
         {/* Drag instruction hint (when dragging) */}
         {isDragging && (
-          <View style={styles.dragHint}>
+          <View
+            style={styles.dragHint}
+            accessibilityRole="alert"
+            accessibilityLabel="Drag to a column to move task. Release over desired column to drop."
+            accessibilityLiveRegion="polite"
+          >
             <Text style={styles.dragHintText}>
               Drag to a column to move task
             </Text>

@@ -289,6 +289,7 @@ export const PRListItem: React.FC<PRListItemProps> = ({
                       style={styles.draftChip}
                       textStyle={styles.draftChipText}
                       compact
+                      accessibilityLabel="Draft pull request"
                     >
                       Draft
                     </Chip>
@@ -392,6 +393,8 @@ export const PRListItem: React.FC<PRListItemProps> = ({
                       style={styles.actionChip}
                       textStyle={styles.actionChipText}
                       compact
+                      accessibilityLabel="AI investigation in progress"
+                      accessibilityRole="progressbar"
                     >
                       Investigating
                     </Chip>
@@ -403,6 +406,8 @@ export const PRListItem: React.FC<PRListItemProps> = ({
                       style={styles.actionChip}
                       textStyle={styles.actionChipText}
                       compact
+                      accessibilityLabel="AI auto-fix in progress"
+                      accessibilityRole="progressbar"
                     >
                       Fixing
                     </Chip>
@@ -439,7 +444,17 @@ export const PRListItem: React.FC<PRListItemProps> = ({
 
             {/* Merge status */}
             {pr.state === 'open' && (
-              <View style={styles.mergeStatus}>
+              <View
+                style={styles.mergeStatus}
+                accessibilityLabel={`Merge status: ${
+                  pr.mergeableState === 'conflicting'
+                    ? 'Has conflicts'
+                    : pr.mergeable
+                    ? 'Ready to merge'
+                    : 'Cannot merge'
+                }`}
+                accessibilityRole="text"
+              >
                 <Avatar.Icon
                   size={14}
                   icon={pr.mergeable ? 'check-circle' : 'alert-circle'}
@@ -463,7 +478,11 @@ export const PRListItem: React.FC<PRListItemProps> = ({
 
             {/* Linked task indicator */}
             {pr.linkedTaskId && (
-              <View style={styles.linkedTask}>
+              <View
+                style={styles.linkedTask}
+                accessibilityLabel="This pull request is linked to a task"
+                accessibilityRole="text"
+              >
                 <Avatar.Icon
                   size={14}
                   icon="link"
