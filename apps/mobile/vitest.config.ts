@@ -22,9 +22,15 @@ export default defineConfig({
       include: ['utils/**/*.ts', 'types/**/*.ts'],
       exclude: ['**/*.test.ts', '**/*.spec.ts', '**/*.d.ts'],
     },
+    deps: {
+      // Inline dependencies that need mocking to avoid parsing issues
+      inline: ['react-native'],
+    },
   },
   resolve: {
     alias: {
+      // Mock react-native with a simple stub to avoid Flow parsing issues
+      'react-native': resolve(__dirname, '__tests__/__mocks__/react-native.ts'),
       '@': resolve(__dirname),
     },
   },
