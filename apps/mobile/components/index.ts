@@ -16,3 +16,12 @@ export {
   type CompactReconnectBannerProps,
   type BannerRenderProps,
 } from './ReconnectBanner';
+
+export {
+  ConnectionStatus,
+  StatusDot,
+  StatusBadge,
+  type ConnectionStatusProps,
+  type ConnectionStatusVariant,
+  type ConnectionStatusSize,
+} from './ConnectionStatus';
