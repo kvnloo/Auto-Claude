@@ -44,6 +44,7 @@ import { GitHubIssues } from './components/GitHubIssues';
 import { GitHubPRs } from './components/github-prs';
 import { Changelog } from './components/Changelog';
 import { Worktrees } from './components/Worktrees';
+import { AgentReasoningDashboard } from './components/Dashboard';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { RateLimitModal } from './components/RateLimitModal';
 import { SDKRateLimitModal } from './components/SDKRateLimitModal';
@@ -686,6 +687,9 @@ export function App() {
                 )}
                 {activeView === 'worktrees' && (activeProjectId || selectedProjectId) && (
                   <Worktrees projectId={activeProjectId || selectedProjectId!} />
+                )}
+                {activeView === 'agent-dashboard' && (activeProjectId || selectedProjectId) && (
+                  <AgentReasoningDashboard />
                 )}
                 {activeView === 'agent-tools' && (
                   <div className="flex h-full items-center justify-center">

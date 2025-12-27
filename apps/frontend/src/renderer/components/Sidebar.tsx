@@ -17,7 +17,8 @@ import {
   FileText,
   Sparkles,
   GitBranch,
-  HelpCircle
+  HelpCircle,
+  Activity
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
@@ -50,7 +51,7 @@ import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus } from '../../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'roadmap' | 'context' | 'ideation' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools';
+export type SidebarView = 'kanban' | 'terminals' | 'roadmap' | 'context' | 'ideation' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'agent-dashboard';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -69,6 +70,7 @@ interface NavItem {
 const projectNavItems: NavItem[] = [
   { id: 'kanban', labelKey: 'navigation:items.kanban', icon: LayoutGrid, shortcut: 'K' },
   { id: 'terminals', labelKey: 'navigation:items.terminals', icon: Terminal, shortcut: 'A' },
+  { id: 'agent-dashboard', labelKey: 'navigation:items.agentDashboard', icon: Activity, shortcut: 'R' },
   { id: 'insights', labelKey: 'navigation:items.insights', icon: Sparkles, shortcut: 'N' },
   { id: 'roadmap', labelKey: 'navigation:items.roadmap', icon: Map, shortcut: 'D' },
   { id: 'ideation', labelKey: 'navigation:items.ideation', icon: Lightbulb, shortcut: 'I' },
