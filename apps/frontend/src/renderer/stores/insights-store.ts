@@ -77,6 +77,7 @@ interface InsightsState {
   updateSessionState: (projectId: string, sessionId: string, updates: Partial<SessionState>) => void;
   clearSessionState: (projectId: string, sessionId: string) => void;
   initializeSessionState: (projectId: string, sessionId: string) => void;
+  restoreSessionToGlobalState: (projectId: string, sessionId: string) => void;
 
   // Session-specific methods for IPC listeners (cross-session isolation)
   isActiveSession: (projectId: string, sessionId: string) => boolean;
@@ -247,9 +248,19 @@ export const useInsightsStore = create<InsightsState>((set, get) => ({
       activeProjectId: projectId,
       activeSessionId: sessionId
     });
-    // Initialize session state for new sessions when context is set
+    // Initialize session state and restore to global state when context is set
     if (projectId && sessionId) {
       get().initializeSessionState(projectId, sessionId);
+      // Restore session state to global state for UI rendering
+      get().restoreSessionToGlobalState(projectId, sessionId);
+    } else {
+      // Clear global state when no active session
+      set({
+        streamingContent: '',
+        currentTool: null,
+        status: { phase: 'idle', message: '' },
+        toolsUsed: []
+      });
     }
   },
 
@@ -325,6 +336,28 @@ export const useInsightsStore = create<InsightsState>((set, get) => ({
           [key]: createDefaultSessionState()
         }
       }));
+    }
+  },
+
+  restoreSessionToGlobalState: (projectId, sessionId) => {
+    const key = createSessionKey(projectId, sessionId);
+    const sessionState = get().sessionStates[key];
+    if (sessionState) {
+      // Restore session-scoped state to global state for UI rendering
+      set({
+        streamingContent: sessionState.streamingContent,
+        currentTool: sessionState.currentTool,
+        status: sessionState.status,
+        toolsUsed: sessionState.toolsUsed
+      });
+    } else {
+      // No existing session state, reset global state to defaults
+      set({
+        streamingContent: '',
+        currentTool: null,
+        status: { phase: 'idle', message: '' },
+        toolsUsed: []
+      });
     }
   },
 
@@ -553,12 +586,11 @@ export async function newSession(projectId: string): Promise<void> {
 export async function switchSession(projectId: string, sessionId: string): Promise<void> {
   const result = await window.electronAPI.switchInsightsSession(projectId, sessionId);
   if (result.success && result.data) {
-    useInsightsStore.getState().setSession(result.data);
-    // Reset streaming state when switching sessions
-    useInsightsStore.getState().clearStreamingContent();
-    useInsightsStore.getState().clearToolsUsed();
-    useInsightsStore.getState().setCurrentTool(null);
-    useInsightsStore.getState().setStatus({ phase: 'idle', message: '' });
+    const store = useInsightsStore.getState();
+    store.setSession(result.data);
+    // Set active context which will restore session state to global state
+    // This preserves any streaming content, tool indicators, etc. from a previous session
+    store.setActiveContext(projectId, sessionId);
   }
 }
 
