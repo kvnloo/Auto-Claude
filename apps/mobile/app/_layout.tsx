@@ -4,19 +4,32 @@
  * - QueryClientProvider (TanStack Query)
  * - PaperProvider (React Native Paper)
  *
+ * Sets up:
+ * - Push notifications (expo-notifications)
+ * - WebSocket notification handling
+ *
  * Note: The queryClient is imported from api/client.ts which sets up
  * AppState and NetInfo integrations for proper React Native support.
  */
 
+import { useEffect, useRef, useCallback } from 'react';
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
 import { QueryClientProvider } from '@tanstack/react-query';
 import { PaperProvider } from 'react-native-paper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
-import { StyleSheet } from 'react-native';
+import { StyleSheet, Platform } from 'react-native';
 
 import { darkTheme, colors } from '../theme';
 import { queryClient } from '../api/client';
+import {
+  initializeNotifications,
+  setupNotificationListeners,
+  requestNotificationPermissions,
+  registerForPushNotifications,
+  handleWebSocketNotification,
+} from '../utils/notifications';
+import type { NotificationType } from '../types';
 
 /**
  * Stack screen options with dark theme styling
@@ -36,7 +49,78 @@ const screenOptions = {
   animation: 'default' as const,
 };
 
+/**
+ * WebSocket notification event payload
+ */
+interface WebSocketNotificationPayload {
+  type: NotificationType;
+  title: string;
+  body: string;
+  data?: Record<string, unknown>;
+}
+
 export default function RootLayout() {
+  const notificationCleanupRef = useRef<(() => void) | null>(null);
+
+  /**
+   * Handle WebSocket notification events
+   * This is triggered when a notification message is received via WebSocket
+   */
+  const handleWebSocketNotificationEvent = useCallback((event: Event) => {
+    const customEvent = event as CustomEvent<WebSocketNotificationPayload>;
+    const payload = customEvent.detail;
+
+    if (payload) {
+      handleWebSocketNotification(payload);
+    }
+  }, []);
+
+  /**
+   * Initialize notifications on app mount
+   */
+  useEffect(() => {
+    const setupNotifications = async (): Promise<void> => {
+      // Initialize notification channels and check for launch notification
+      await initializeNotifications();
+
+      // Set up notification listeners (received and response)
+      notificationCleanupRef.current = setupNotificationListeners();
+
+      // Request notification permissions
+      const hasPermission = await requestNotificationPermissions();
+
+      if (hasPermission) {
+        // Register for push notifications (mock token in development)
+        await registerForPushNotifications();
+      }
+    };
+
+    setupNotifications();
+
+    // Listen for WebSocket notification events
+    // The WebSocket client emits these when notification messages are received
+    if (Platform.OS !== 'web' && typeof window !== 'undefined') {
+      window.addEventListener(
+        'autoclaude:notification',
+        handleWebSocketNotificationEvent
+      );
+    }
+
+    // Cleanup on unmount
+    return () => {
+      if (notificationCleanupRef.current) {
+        notificationCleanupRef.current();
+      }
+
+      if (Platform.OS !== 'web' && typeof window !== 'undefined') {
+        window.removeEventListener(
+          'autoclaude:notification',
+          handleWebSocketNotificationEvent
+        );
+      }
+    };
+  }, [handleWebSocketNotificationEvent]);
+
   return (
     <GestureHandlerRootView style={styles.container}>
       <QueryClientProvider client={queryClient}>
