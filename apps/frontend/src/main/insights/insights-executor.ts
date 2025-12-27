@@ -137,7 +137,9 @@ export class InsightsExecutor extends EventEmitter {
     if (modelConfig) {
       const modelId = MODEL_ID_MAP[modelConfig.model] || MODEL_ID_MAP['sonnet'];
       args.push('--model', modelId);
-      args.push('--thinking-level', modelConfig.thinkingLevel);
+      // Ensure thinkingLevel has a valid value, fallback to 'medium' if undefined/empty
+      const thinkingLevel = modelConfig.thinkingLevel || 'medium';
+      args.push('--thinking-level', thinkingLevel);
     }
 
     // Spawn Python process

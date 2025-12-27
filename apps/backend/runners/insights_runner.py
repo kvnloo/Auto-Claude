@@ -681,4 +681,14 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except SystemExit as e:
+        # Let argparse exit codes pass through
+        raise
+    except Exception as e:
+        # Catch any unexpected exceptions and print helpful error message
+        import traceback
+        print(f"ERROR: Unexpected error in insights_runner: {e}", file=sys.stderr)
+        traceback.print_exc(file=sys.stderr)
+        sys.exit(1)
