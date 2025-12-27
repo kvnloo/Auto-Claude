@@ -28,6 +28,7 @@ import { registerChangelogHandlers } from './changelog-handlers';
 import { registerInsightsHandlers } from './insights-handlers';
 import { registerMemoryHandlers } from './memory-handlers';
 import { registerAppUpdateHandlers } from './app-update-handlers';
+import { registerConnectionHandlers, setInstanceMode } from './connection-handlers';
 import { notificationService } from '../notification-service';
 
 /**
@@ -49,6 +50,10 @@ export function setupIpcHandlers(
 
   // Determine if we're running in primary mode (has AgentManager) or secondary mode (client mode)
   const isPrimaryInstance = agentManager !== null;
+
+  // Set and register connection status handlers (work in both modes)
+  setInstanceMode(isPrimaryInstance ? 'primary' : 'secondary');
+  registerConnectionHandlers(getMainWindow);
 
   // File explorer handlers (work in both modes)
   registerFileHandlers();
@@ -131,5 +136,6 @@ export {
   registerChangelogHandlers,
   registerInsightsHandlers,
   registerMemoryHandlers,
-  registerAppUpdateHandlers
+  registerAppUpdateHandlers,
+  registerConnectionHandlers
 };

@@ -361,5 +361,13 @@ export const IPC_CHANNELS = {
   RELEASE_GET_VERSIONS: 'release:getVersions',
 
   // Release events (main -> renderer)
-  RELEASE_PROGRESS: 'release:progress'
+  RELEASE_PROGRESS: 'release:progress',
+
+  // Multi-instance connection operations
+  CONNECTION_GET_BACKEND_MODE: 'connection:get-backend-mode',
+  CONNECTION_GET_STATUS: 'connection:get-status',
+  CONNECTION_RECONNECT: 'connection:reconnect',
+
+  // Multi-instance connection events (main -> renderer)
+  CONNECTION_STATUS_CHANGE: 'connection:status-change'
 } as const;

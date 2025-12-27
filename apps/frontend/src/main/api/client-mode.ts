@@ -211,6 +211,20 @@ function errorLog(message: string): void {
 }
 
 /**
+ * Update connection state and notify renderer
+ */
+function setConnectionState(newState: ClientConnectionState): void {
+  if (connectionState === newState) {
+    return;
+  }
+  connectionState = newState;
+  debugLog(`Connection state changed to: ${newState}`);
+
+  // Notify renderer of state change
+  sendToRenderer(IPC_CHANNELS.CONNECTION_STATUS_CHANGE, newState);
+}
+
+/**
  * Get the WebSocket URL for the backend
  */
 function getWebSocketUrl(backendInfo: BackendInfo): string {
@@ -379,7 +393,7 @@ function scheduleReconnect(): void {
   }
 
   reconnectAttempts++;
-  connectionState = 'reconnecting';
+  setConnectionState('reconnecting');
 
   debugLog(`Scheduling reconnect in ${currentReconnectDelay}ms (attempt ${reconnectAttempts})`);
 
@@ -424,7 +438,7 @@ function connectToBackend(backendInfo: BackendInfo): void {
     wsClient = null;
   }
 
-  connectionState = 'connecting';
+  setConnectionState('connecting');
   currentBackendInfo = backendInfo;
 
   const wsUrl = getWebSocketUrl(backendInfo);
@@ -435,7 +449,7 @@ function connectToBackend(backendInfo: BackendInfo): void {
 
     wsClient.on('open', () => {
       debugLog('WebSocket connected');
-      connectionState = 'connected';
+      setConnectionState('connected');
       connectionEstablishedAt = new Date();
       resetReconnectState();
 
@@ -452,7 +466,7 @@ function connectToBackend(backendInfo: BackendInfo): void {
 
     wsClient.on('close', (code, reason) => {
       debugLog(`WebSocket closed: code=${code} reason=${reason.toString('utf-8')}`);
-      connectionState = 'disconnected';
+      setConnectionState('disconnected');
       stopPingInterval();
 
       // Schedule reconnection unless shutdown was requested or server is shutting down
@@ -468,7 +482,7 @@ function connectToBackend(backendInfo: BackendInfo): void {
 
   } catch (error) {
     errorLog(`Failed to create WebSocket: ${error instanceof Error ? error.message : String(error)}`);
-    connectionState = 'disconnected';
+    setConnectionState('disconnected');
     scheduleReconnect();
   }
 }
@@ -569,7 +583,7 @@ export function shutdownClientMode(): ClientModeShutdownResult {
     }
   }
 
-  // Reset state
+  // Reset state (use direct assignment since we're shutting down and may not have a window)
   connectionState = 'disconnected';
   currentBackendInfo = null;
   connectionEstablishedAt = null;
