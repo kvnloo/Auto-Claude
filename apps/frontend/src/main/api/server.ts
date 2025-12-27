@@ -13,6 +13,23 @@
  * 3. Swagger UI
  * 4. WebSocket
  * 5. Routes (registered last before listen)
+ *
+ * Tailscale Security Configuration:
+ * The API server supports binding to a Tailscale IP address for secure,
+ * mesh-network-only access. When API_HOST is set to a Tailscale IP
+ * (100.64.0.0/10 CGNAT range), the server will only accept connections
+ * from the Tailscale network interface.
+ *
+ * Environment Variables:
+ * - API_HOST: Set to Tailscale IP (e.g., 100.64.x.x) for Tailscale-only binding
+ * - API_PORT: Server port (default: 3001)
+ * - API_KEY: Required API key(s) for authentication
+ *
+ * Security Warning:
+ * If API_HOST is set to 0.0.0.0 (all interfaces) with API_KEY configured,
+ * a security warning is logged because the API will be accessible from
+ * any network interface, not just Tailscale. For production deployments
+ * with remote access needs, always set API_HOST to a Tailscale IP.
  */
 
 import Fastify, { FastifyInstance, FastifyServerOptions, FastifyError } from 'fastify';
@@ -23,6 +40,109 @@ import fastifyCors from '@fastify/cors';
 
 import { loadApiKeys } from './middleware/auth';
 import { apiKeySecurityScheme } from './schemas';
+
+// ============================================
+// Tailscale CGNAT Range Validation
+// ============================================
+
+/**
+ * Tailscale CGNAT (Carrier-Grade NAT) IP range constants
+ * RFC 6598 defines 100.64.0.0/10 as shared address space
+ * Tailscale uses this range for its mesh network addresses
+ */
+const TAILSCALE_CGNAT = {
+  /** First octet for all Tailscale IPs */
+  FIRST_OCTET: 100,
+  /** Minimum value for second octet (64 = 0100 0000 in binary) */
+  SECOND_OCTET_MIN: 64,
+  /** Maximum value for second octet (127 = 0111 1111 in binary) */
+  SECOND_OCTET_MAX: 127,
+  /** CIDR notation for the range */
+  CIDR: '100.64.0.0/10',
+  /** Human-readable range description */
+  RANGE_DESCRIPTION: '100.64.0.0 - 100.127.255.255',
+} as const;
+
+/**
+ * Check if an IP address is in the Tailscale CGNAT range (100.64.0.0/10)
+ *
+ * The CGNAT range is 100.64.0.0 to 100.127.255.255:
+ * - First octet: must be 100
+ * - Second octet: must be 64-127 (binary: 01xxxxxx)
+ * - Third and fourth octets: any value 0-255
+ *
+ * @param ip - IPv4 address string to check
+ * @returns true if IP is in Tailscale CGNAT range
+ */
+export function isTailscaleIp(ip: string | null | undefined): boolean {
+  if (!ip || typeof ip !== 'string') {
+    return false;
+  }
+
+  const trimmed = ip.trim();
+  const parts = trimmed.split('.');
+
+  if (parts.length !== 4) {
+    return false;
+  }
+
+  const octets = parts.map(Number);
+
+  // Check all octets are valid numbers 0-255
+  if (octets.some((n) => isNaN(n) || n < 0 || n > 255)) {
+    return false;
+  }
+
+  const [first, second] = octets;
+
+  return (
+    first === TAILSCALE_CGNAT.FIRST_OCTET &&
+    second >= TAILSCALE_CGNAT.SECOND_OCTET_MIN &&
+    second <= TAILSCALE_CGNAT.SECOND_OCTET_MAX
+  );
+}
+
+/**
+ * Log security warnings and information about API server binding configuration
+ *
+ * This function checks the binding configuration and logs appropriate messages:
+ * - Warning if binding to 0.0.0.0 with API_KEY set (defeats Tailscale-only access)
+ * - Info if binding to a Tailscale IP (secure configuration)
+ *
+ * @param host - The host address the server is binding to
+ * @param fastify - The Fastify instance for logging
+ */
+function logBindingSecurityInfo(host: string, fastify: FastifyInstance): void {
+  const apiKeySet = !!(process.env.API_KEY && process.env.API_KEY.trim() !== '');
+
+  if (isTailscaleIp(host)) {
+    // Binding to Tailscale IP - this is the secure configuration
+    fastify.log.info(
+      `API server binding to Tailscale IP ${host} (CGNAT range ${TAILSCALE_CGNAT.CIDR}) - ` +
+      'API is only accessible via Tailscale network'
+    );
+  } else if (host === '0.0.0.0' && apiKeySet) {
+    // Binding to all interfaces with API_KEY set - potential security concern
+    fastify.log.warn(
+      'API server binding to 0.0.0.0 with API_KEY authentication enabled. ' +
+      'For enhanced security, consider setting API_HOST to a Tailscale IP (100.x.x.x) ' +
+      'to restrict access to Tailscale network only. ' +
+      `See: Tailscale CGNAT range ${TAILSCALE_CGNAT.RANGE_DESCRIPTION}`
+    );
+  } else if (host === '0.0.0.0') {
+    // Binding to all interfaces without API_KEY - development mode
+    fastify.log.info(
+      'API server binding to 0.0.0.0 (all interfaces). ' +
+      'No API_KEY set - API server is in development/open mode.'
+    );
+  } else if (host === 'localhost' || host === '127.0.0.1') {
+    // Binding to localhost - local-only access
+    fastify.log.info(
+      `API server binding to ${host} - API is only accessible locally`
+    );
+  }
+  // For other hosts, no special logging needed
+}
 
 /**
  * API Server configuration options
@@ -299,6 +419,9 @@ export async function startApiServer(
 ): Promise<string> {
   const port = config.port ?? parseInt(process.env.API_PORT || '3001', 10);
   const host = config.host ?? process.env.API_HOST ?? '0.0.0.0';
+
+  // Log security information about the binding configuration
+  logBindingSecurityInfo(host, fastify);
 
   // Start listening
   const address = await fastify.listen({ port, host });
