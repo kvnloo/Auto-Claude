@@ -3,37 +3,20 @@
  * Wraps the entire app with necessary providers:
  * - QueryClientProvider (TanStack Query)
  * - PaperProvider (React Native Paper)
+ *
+ * Note: The queryClient is imported from api/client.ts which sets up
+ * AppState and NetInfo integrations for proper React Native support.
  */
 
 import { Stack } from 'expo-router';
 import { StatusBar } from 'expo-status-bar';
-import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
+import { QueryClientProvider } from '@tanstack/react-query';
 import { PaperProvider } from 'react-native-paper';
 import { GestureHandlerRootView } from 'react-native-gesture-handler';
 import { StyleSheet } from 'react-native';
 
 import { darkTheme, colors } from '../theme';
-
-/**
- * TanStack Query client configuration
- * Configured for mobile with appropriate defaults
- */
-const queryClient = new QueryClient({
-  defaultOptions: {
-    queries: {
-      // Cache data for 1 minute before considering it stale
-      staleTime: 60 * 1000,
-      // Retry failed requests up to 2 times
-      retry: 2,
-      // Don't refetch on window focus by default (mobile-specific)
-      refetchOnWindowFocus: false,
-    },
-    mutations: {
-      // Retry mutations once on failure
-      retry: 1,
-    },
-  },
-});
+import { queryClient } from '../api/client';
 
 /**
  * Stack screen options with dark theme styling
