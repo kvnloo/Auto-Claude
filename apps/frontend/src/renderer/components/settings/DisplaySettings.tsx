@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Monitor, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
+import { Monitor, ZoomIn, ZoomOut, RotateCcw, Check } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../lib/utils';
 import { Label } from '../ui/label';
@@ -31,50 +31,55 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
 
   const currentScale = settings.uiScale ?? UI_SCALE_DEFAULT;
 
-  // Local state for slider during drag - prevents view reload on every slider movement
-  const [sliderValue, setSliderValue] = useState<number | null>(null);
+  // Local state for pending scale changes - prevents view reload until user applies
+  const [pendingScale, setPendingScale] = useState<number | null>(null);
 
-  // Display value: use local slider value during drag, otherwise use current scale
-  const displayScale = sliderValue ?? currentScale;
+  // Display value: use pending scale if set, otherwise use current applied scale
+  const displayScale = pendingScale ?? currentScale;
 
-  const handleScaleChange = (newScale: number) => {
-    // Clamp to valid range
+  // Check if there are pending changes to apply
+  const hasPendingChanges = pendingScale !== null && pendingScale !== currentScale;
+
+  // Update pending scale (for slider and +/- buttons) - doesn't trigger view reload
+  const updatePendingScale = (newScale: number) => {
     const clampedScale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, newScale));
-
-    // Update local draft state
-    onSettingsChange({ ...settings, uiScale: clampedScale });
-
-    // Apply immediately to store for live preview (triggers App.tsx useEffect)
-    updateStoreSettings({ uiScale: clampedScale });
-  };
-
-  // Handle slider drag - only update local state and settings display, not the store
-  const handleSliderChange = (newScale: number) => {
-    const clampedScale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, newScale));
-    setSliderValue(clampedScale);
+    setPendingScale(clampedScale);
     // Update settings for display but don't trigger store update (no view reload)
     onSettingsChange({ ...settings, uiScale: clampedScale });
   };
 
-  // Handle slider release - apply final value to store (triggers view reload)
-  const handleSliderRelease = () => {
-    if (sliderValue !== null) {
-      updateStoreSettings({ uiScale: sliderValue });
-      setSliderValue(null);
+  // Apply pending changes to store (triggers view reload)
+  const handleApplyChanges = () => {
+    if (pendingScale !== null) {
+      updateStoreSettings({ uiScale: pendingScale });
+      setPendingScale(null);
     }
   };
 
-  // Handle zoom button clicks - increment/decrement by step
+  // Handle preset button clicks - apply immediately (presets are intentional selections)
+  const handlePresetChange = (newScale: number) => {
+    const clampedScale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, newScale));
+    onSettingsChange({ ...settings, uiScale: clampedScale });
+    updateStoreSettings({ uiScale: clampedScale });
+    setPendingScale(null);
+  };
+
+  // Handle slider drag - only update pending state
+  const handleSliderChange = (newScale: number) => {
+    updatePendingScale(newScale);
+  };
+
+  // Handle zoom button clicks - increment/decrement by step (updates pending state)
   const handleZoomOut = () => {
-    handleScaleChange(currentScale - UI_SCALE_STEP);
+    updatePendingScale(displayScale - UI_SCALE_STEP);
   };
 
   const handleZoomIn = () => {
-    handleScaleChange(currentScale + UI_SCALE_STEP);
+    updatePendingScale(displayScale + UI_SCALE_STEP);
   };
 
   const handleReset = () => {
-    handleScaleChange(UI_SCALE_DEFAULT);
+    handlePresetChange(UI_SCALE_DEFAULT);
   };
 
   return (
@@ -95,7 +100,7 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
               return (
                 <button
                   key={preset.value}
-                  onClick={() => handleScaleChange(preset.value)}
+                  onClick={() => handlePresetChange(preset.value)}
                   className={cn(
                     'flex flex-col items-center gap-2 p-4 rounded-lg border-2 transition-all',
                     'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
@@ -142,7 +147,7 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
             {t('scale.fineTuneDescription')}
           </p>
 
-          {/* Slider with zoom buttons */}
+          {/* Slider with zoom buttons and apply button */}
           <div className="flex items-center gap-3 pt-1">
             <button
               onClick={handleZoomOut}
@@ -164,8 +169,6 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
               step={UI_SCALE_STEP}
               value={displayScale}
               onChange={(e) => handleSliderChange(parseInt(e.target.value, 10))}
-              onPointerUp={handleSliderRelease}
-              onMouseUp={handleSliderRelease}
               className={cn(
                 'flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
@@ -201,6 +204,20 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
               title={`Increase scale by ${UI_SCALE_STEP}%`}
             >
               <ZoomIn className="h-4 w-4" />
+            </button>
+            <button
+              onClick={handleApplyChanges}
+              disabled={!hasPendingChanges}
+              className={cn(
+                'px-2 py-1 rounded-md transition-colors shrink-0 flex items-center gap-1',
+                'bg-primary text-primary-foreground hover:bg-primary/90',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-primary'
+              )}
+              title="Apply scale changes"
+            >
+              <Check className="h-4 w-4" />
+              <span className="text-sm font-medium">Apply</span>
             </button>
           </div>
 
