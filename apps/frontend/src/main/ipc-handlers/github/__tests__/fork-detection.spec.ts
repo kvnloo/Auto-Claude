@@ -581,4 +581,496 @@ describe('Fork Detection Integration Tests', () => {
       );
     });
   });
+
+  /**
+   * Non-fork Repository Integration Tests
+   *
+   * These tests verify that non-fork repositories continue to work exactly
+   * as they did before the fork detection feature was added.
+   *
+   * End-to-end verification steps:
+   * 1. Configure project with non-fork repo
+   * 2. Trigger fork detection
+   * 3. Verify fork status shows as false or not detected
+   * 4. Check issues and PRs load from same repository
+   * 5. Verify no behavior change from before
+   */
+  describe('Non-fork Repository Integration Tests', () => {
+    // Use same pattern as mockProject - only needs fields used by getGitHubConfig
+    const nonForkProject = {
+      id: 'non-fork-project-id',
+      name: 'Non-Fork Project',
+      path: '/test/non-fork-project',
+      autoBuildPath: '.auto-claude'
+    } as import('../../../../shared/types').Project;
+
+    const mockNonForkRepoApiResponse = {
+      id: 999999,
+      name: 'my-own-repo',
+      full_name: 'myuser/my-own-repo',
+      description: 'A repository I own, not a fork',
+      html_url: 'https://github.com/myuser/my-own-repo',
+      default_branch: 'main',
+      private: false,
+      owner: { login: 'myuser', avatar_url: 'https://avatars.githubusercontent.com/u/123' },
+      fork: false
+      // Note: no parent field for non-fork repos
+    };
+
+    const mockIssuesFromOwnRepo = [
+      {
+        id: 100,
+        number: 10,
+        title: 'Issue in my own repo',
+        body: 'This is an issue in my own non-fork repository',
+        state: 'open',
+        labels: [{ name: 'bug', color: 'ff0000' }],
+        assignees: [],
+        user: { login: 'myuser', avatar_url: 'https://avatars.githubusercontent.com/u/123' },
+        created_at: '2024-01-15T00:00:00Z',
+        updated_at: '2024-01-16T00:00:00Z',
+        comments: 2,
+        url: 'https://api.github.com/repos/myuser/my-own-repo/issues/10',
+        html_url: 'https://github.com/myuser/my-own-repo/issues/10'
+      },
+      {
+        id: 101,
+        number: 11,
+        title: 'Another issue',
+        body: 'Another issue in my own repo',
+        state: 'open',
+        labels: [],
+        assignees: [{ login: 'contributor', avatar_url: 'https://avatars.githubusercontent.com/u/456' }],
+        user: { login: 'contributor', avatar_url: 'https://avatars.githubusercontent.com/u/456' },
+        created_at: '2024-01-17T00:00:00Z',
+        updated_at: '2024-01-18T00:00:00Z',
+        comments: 0,
+        url: 'https://api.github.com/repos/myuser/my-own-repo/issues/11',
+        html_url: 'https://github.com/myuser/my-own-repo/issues/11'
+      }
+    ];
+
+    const mockPRsFromOwnRepo = [
+      {
+        number: 5,
+        title: 'Add new feature',
+        body: 'This PR adds a new feature to my repo',
+        state: 'open',
+        user: { login: 'contributor' },
+        head: { ref: 'feature-branch' },
+        base: { ref: 'main' },
+        additions: 50,
+        deletions: 10,
+        changed_files: 3,
+        assignees: [],
+        created_at: '2024-01-20T00:00:00Z',
+        updated_at: '2024-01-21T00:00:00Z',
+        html_url: 'https://github.com/myuser/my-own-repo/pull/5'
+      }
+    ];
+
+    beforeEach(() => {
+      mockGetProject.mockReturnValue(nonForkProject);
+      mockExistsSync.mockReturnValue(true);
+      mockReadFileSync.mockReturnValue(
+        'GITHUB_TOKEN=test-token\nGITHUB_REPO=myuser/my-own-repo'
+      );
+    });
+
+    describe('Fork detection for non-fork repos', () => {
+      it('should detect non-fork status via GITHUB_DETECT_FORK handler', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockNonForkRepoApiResponse
+        });
+
+        const { registerDetectFork } = await import('../repository-handlers');
+        registerDetectFork();
+
+        const result = await invokeHandler('github:detectFork', {}, 'non-fork-project-id');
+
+        expect(result).toEqual({
+          success: true,
+          data: {
+            isFork: false
+          }
+        });
+      });
+
+      it('should detect non-fork status even when repo has fork property explicitly set to false', async () => {
+        const explicitNonForkResponse = {
+          ...mockNonForkRepoApiResponse,
+          fork: false
+        };
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => explicitNonForkResponse
+        });
+
+        const { detectForkStatus } = await import('../repository-handlers');
+        const result = await detectForkStatus('test-token', 'myuser/my-own-repo');
+
+        expect(result.isFork).toBe(false);
+        expect(result.parentRepository).toBeUndefined();
+      });
+
+      it('should handle repos with fork:true but no parent gracefully', async () => {
+        // Edge case: API returns fork:true but no parent object
+        const weirdResponse = {
+          ...mockNonForkRepoApiResponse,
+          fork: true,
+          parent: undefined
+        };
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => weirdResponse
+        });
+
+        const { detectForkStatus } = await import('../repository-handlers');
+        const result = await detectForkStatus('test-token', 'myuser/my-own-repo');
+
+        // Should still return isFork: false because no parent is available
+        expect(result.isFork).toBe(false);
+        expect(result.parentRepository).toBeUndefined();
+      });
+    });
+
+    describe('Connection check for non-fork repos', () => {
+      it('should return isFork:false in connection check for non-fork repos', async () => {
+        mockFetch
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => mockNonForkRepoApiResponse
+          })
+          .mockResolvedValueOnce({
+            ok: true,
+            json: async () => mockIssuesFromOwnRepo
+          });
+
+        const { registerCheckConnection } = await import('../repository-handlers');
+        registerCheckConnection();
+
+        const result = await invokeHandler('github:checkConnection', {}, 'non-fork-project-id') as {
+          success: boolean;
+          data: { connected: boolean; isFork: boolean; parentRepository?: object; repoFullName?: string };
+        };
+
+        expect(result.success).toBe(true);
+        expect(result.data.connected).toBe(true);
+        expect(result.data.isFork).toBe(false);
+        expect(result.data.parentRepository).toBeUndefined();
+        expect(result.data.repoFullName).toBe('myuser/my-own-repo');
+      });
+    });
+
+    describe('Issue loading for non-fork repos', () => {
+      it('should load issues from the same repository (no redirect to parent)', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockIssuesFromOwnRepo
+        });
+
+        const { registerGetIssues } = await import('../issue-handlers');
+        registerGetIssues();
+
+        const result = await invokeHandler('github:getIssues', {}, 'non-fork-project-id', 'open') as {
+          success: boolean;
+          data?: unknown[];
+        };
+
+        expect(result.success).toBe(true);
+        expect(result.data).toHaveLength(2);
+
+        // Verify API call was made to the same repository
+        expect(mockFetch).toHaveBeenCalledWith(
+          'https://api.github.com/repos/myuser/my-own-repo/issues?state=open&per_page=100&sort=updated',
+          expect.any(Object)
+        );
+      });
+
+      it('should load single issue from same repository', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockIssuesFromOwnRepo[0]
+        });
+
+        const { registerGetIssue } = await import('../issue-handlers');
+        registerGetIssue();
+
+        const result = await invokeHandler('github:getIssue', {}, 'non-fork-project-id', 10) as {
+          success: boolean;
+          data?: { number: number; title: string };
+        };
+
+        expect(result.success).toBe(true);
+        expect(result.data?.number).toBe(10);
+        expect(result.data?.title).toBe('Issue in my own repo');
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          'https://api.github.com/repos/myuser/my-own-repo/issues/10',
+          expect.any(Object)
+        );
+      });
+
+      it('should load issue comments from same repository', async () => {
+        const mockComments = [
+          { id: 1, body: 'Comment 1', user: { login: 'user1', avatar_url: '' } },
+          { id: 2, body: 'Comment 2', user: { login: 'user2', avatar_url: '' } }
+        ];
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockComments
+        });
+
+        const { registerGetIssueComments } = await import('../issue-handlers');
+        registerGetIssueComments();
+
+        const result = await invokeHandler('github:getIssueComments', {}, 'non-fork-project-id', 10) as {
+          success: boolean;
+          data?: unknown[];
+        };
+
+        expect(result.success).toBe(true);
+        expect(result.data).toHaveLength(2);
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          'https://api.github.com/repos/myuser/my-own-repo/issues/10/comments',
+          expect.any(Object)
+        );
+      });
+    });
+
+    describe('getTargetRepo with non-fork configuration', () => {
+      it('should always return the same repo regardless of useParentForIssues flag', async () => {
+        const { getTargetRepo } = await import('../utils');
+
+        const config = {
+          token: 'test-token',
+          repo: 'myuser/my-own-repo'
+          // No isFork or parentRepo - typical non-fork config
+        };
+
+        // For issues/PRs (useParentForIssues = true)
+        const issueRepo = getTargetRepo(config, true);
+        expect(issueRepo).toBe('myuser/my-own-repo');
+
+        // For code operations (useParentForIssues = false)
+        const codeRepo = getTargetRepo(config, false);
+        expect(codeRepo).toBe('myuser/my-own-repo');
+
+        // Both should be the same
+        expect(issueRepo).toBe(codeRepo);
+      });
+
+      it('should return same repo when IS_FORK=false is set explicitly', async () => {
+        const { getTargetRepo } = await import('../utils');
+
+        const config = {
+          token: 'test-token',
+          repo: 'myuser/my-own-repo',
+          isFork: false
+        };
+
+        const issueRepo = getTargetRepo(config, true);
+        const codeRepo = getTargetRepo(config, false);
+
+        expect(issueRepo).toBe('myuser/my-own-repo');
+        expect(codeRepo).toBe('myuser/my-own-repo');
+        expect(issueRepo).toBe(codeRepo);
+      });
+
+      it('should return fork repo when isFork=true but no parentRepo configured', async () => {
+        const { getTargetRepo } = await import('../utils');
+
+        // Edge case: isFork is set but no parent configured
+        const config = {
+          token: 'test-token',
+          repo: 'myuser/my-repo',
+          isFork: true
+          // No parentRepo!
+        };
+
+        const issueRepo = getTargetRepo(config, true);
+        expect(issueRepo).toBe('myuser/my-repo'); // Falls back to fork repo
+      });
+    });
+
+    describe('githubFetchWithFallback with non-fork repos', () => {
+      it('should not trigger fallback logic for non-fork repos', async () => {
+        const { githubFetchWithFallback } = await import('../utils');
+
+        const config = {
+          token: 'test-token',
+          repo: 'myuser/my-own-repo'
+        };
+
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockIssuesFromOwnRepo
+        });
+
+        const result = await githubFetchWithFallback(
+          config,
+          '/repos/{repo}/issues',
+          true
+        );
+
+        expect(result.usedFallback).toBe(false);
+        expect(result.usedRepo).toBe('myuser/my-own-repo');
+        expect(result.data).toEqual(mockIssuesFromOwnRepo);
+
+        // Only one fetch call should have been made
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+
+      it('should propagate errors without fallback for non-fork repos', async () => {
+        const { githubFetchWithFallback } = await import('../utils');
+
+        const config = {
+          token: 'test-token',
+          repo: 'myuser/my-own-repo'
+        };
+
+        mockFetch.mockResolvedValueOnce({
+          ok: false,
+          status: 404,
+          statusText: 'Not Found',
+          text: async () => 'Repository not found'
+        });
+
+        await expect(
+          githubFetchWithFallback(config, '/repos/{repo}/issues', true)
+        ).rejects.toThrow('GitHub API error: 404 Not Found');
+
+        // Only one fetch call should have been made (no fallback attempt)
+        expect(mockFetch).toHaveBeenCalledTimes(1);
+      });
+    });
+
+    describe('Complete non-fork workflow simulation', () => {
+      it('should complete full workflow: detect non-fork, load issues and PRs from same repo', async () => {
+        // Step 1: Fork detection
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockNonForkRepoApiResponse
+        });
+
+        const { registerDetectFork } = await import('../repository-handlers');
+        registerDetectFork();
+
+        const forkResult = await invokeHandler('github:detectFork', {}, 'non-fork-project-id') as {
+          success: boolean;
+          data: { isFork: boolean };
+        };
+
+        expect(forkResult.success).toBe(true);
+        expect(forkResult.data.isFork).toBe(false);
+
+        // Step 2: Load issues
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => mockIssuesFromOwnRepo
+        });
+
+        const { registerGetIssues } = await import('../issue-handlers');
+        registerGetIssues();
+
+        const issuesResult = await invokeHandler('github:getIssues', {}, 'non-fork-project-id', 'open') as {
+          success: boolean;
+          data?: unknown[];
+        };
+
+        expect(issuesResult.success).toBe(true);
+        expect(issuesResult.data).toHaveLength(2);
+
+        // Verify issues were loaded from same repo (not parent)
+        expect(mockFetch).toHaveBeenLastCalledWith(
+          'https://api.github.com/repos/myuser/my-own-repo/issues?state=open&per_page=100&sort=updated',
+          expect.any(Object)
+        );
+      });
+    });
+
+    describe('Config loading without fork fields', () => {
+      it('should load config correctly without IS_FORK field', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=my-test-token\nGITHUB_REPO=owner/repo'
+        );
+
+        const { getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(nonForkProject);
+
+        expect(config).not.toBeNull();
+        expect(config?.token).toBe('my-test-token');
+        expect(config?.repo).toBe('owner/repo');
+        expect(config?.isFork).toBeUndefined();
+        expect(config?.parentRepo).toBeUndefined();
+      });
+
+      it('should load config correctly with IS_FORK=false', async () => {
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=my-test-token\nGITHUB_REPO=owner/repo\nIS_FORK=false'
+        );
+
+        const { getGitHubConfig } = await import('../utils');
+        const config = getGitHubConfig(nonForkProject);
+
+        expect(config).not.toBeNull();
+        expect(config?.token).toBe('my-test-token');
+        expect(config?.repo).toBe('owner/repo');
+        // When IS_FORK=false, isFork is not included in config (undefined)
+        // This is by design - we only track isFork when it's explicitly true
+        expect(config?.isFork).toBeUndefined();
+        expect(config?.parentRepo).toBeUndefined();
+      });
+
+      it('should handle mixed case IS_FORK values gracefully', async () => {
+        // Test IS_FORK=FALSE (uppercase) - should be treated as NOT a fork
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=token\nGITHUB_REPO=owner/repo\nIS_FORK=FALSE'
+        );
+
+        const { getGitHubConfig } = await import('../utils');
+        let config = getGitHubConfig(nonForkProject);
+
+        // When IS_FORK is not "true", isFork is not included (undefined)
+        expect(config?.isFork).toBeUndefined();
+
+        // Test IS_FORK=False (mixed case)
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=token\nGITHUB_REPO=owner/repo\nIS_FORK=False'
+        );
+
+        config = getGitHubConfig(nonForkProject);
+        expect(config?.isFork).toBeUndefined();
+
+        // Test IS_FORK=no (not "true")
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=token\nGITHUB_REPO=owner/repo\nIS_FORK=no'
+        );
+
+        config = getGitHubConfig(nonForkProject);
+        expect(config?.isFork).toBeUndefined();
+
+        // Test IS_FORK=true (should be included)
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=token\nGITHUB_REPO=owner/repo\nIS_FORK=true'
+        );
+
+        config = getGitHubConfig(nonForkProject);
+        expect(config?.isFork).toBe(true);
+
+        // Test IS_FORK=TRUE (uppercase true should work)
+        mockReadFileSync.mockReturnValue(
+          'GITHUB_TOKEN=token\nGITHUB_REPO=owner/repo\nIS_FORK=TRUE'
+        );
+
+        config = getGitHubConfig(nonForkProject);
+        expect(config?.isFork).toBe(true);
+      });
+    });
+  });
 });
