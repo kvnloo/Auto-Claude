@@ -33,13 +33,13 @@ import { setupIpcHandlers as setupModularHandlers } from './ipc-handlers';
  * - changelog-handlers.ts: Changelog operations
  * - insights-handlers.ts: AI insights chat
  *
- * @param agentManager - The agent manager instance
+ * @param agentManager - The agent manager instance (null for secondary instances)
  * @param terminalManager - The terminal manager instance
  * @param getMainWindow - Function to get the main BrowserWindow
  * @param pythonEnvManager - The Python environment manager instance
  */
 export function setupIpcHandlers(
-  agentManager: AgentManager,
+  agentManager: AgentManager | null,
   terminalManager: TerminalManager,
   getMainWindow: () => BrowserWindow | null,
   pythonEnvManager: PythonEnvManager

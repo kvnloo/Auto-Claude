@@ -11,9 +11,16 @@ import { getUsageMonitor } from './claude-profile/usage-monitor';
 import { initializeUsageMonitorForwarding } from './ipc-handlers/terminal-handlers';
 import { initializeAppUpdater } from './app-updater';
 import { initializeApiServer, shutdownApiServer, isApiServerEnabled } from './api/startup';
+import { discoverExistingBackend } from './api/backend-discovery';
+import { initializeClientMode, shutdownClientMode, isClientModeActive } from './api/client-mode';
 import { DEFAULT_APP_SETTINGS } from '../shared/constants';
 import { readSettingsFile } from './settings-utils';
 import type { AppSettings } from '../shared/types';
+
+/**
+ * Track whether this instance is running in client mode (secondary instance)
+ */
+let isSecondaryInstance = false;
 
 /**
  * Load app settings synchronously (for use during startup).
@@ -115,10 +122,9 @@ const gotTheLock = app.requestSingleInstanceLock();
 
 if (!gotTheLock) {
   // Another instance is already running with the lock
-  // For now, we'll proceed normally but later subtasks will implement
-  // client mode that connects to the existing backend
-  // This log helps with debugging multi-instance behavior
-  console.warn('[main] Another instance is already running - will connect to existing backend');
+  // This instance will run in client mode and connect to the existing backend
+  isSecondaryInstance = true;
+  console.warn('[main] Secondary instance detected - will connect to existing backend');
 } else {
   // We are the primary instance - handle second-instance events
   app.on('second-instance', (_event, _commandLine, _workingDirectory) => {
@@ -133,29 +139,11 @@ if (!gotTheLock) {
   });
 }
 
-// Initialize the application
-app.whenReady().then(() => {
-  // Set app user model id for Windows
-  electronApp.setAppUserModelId('com.autoclaude.ui');
-
-  // Set dock icon on macOS
-  if (process.platform === 'darwin') {
-    const iconPath = getIconPath();
-    try {
-      const icon = nativeImage.createFromPath(iconPath);
-      if (!icon.isEmpty()) {
-        app.dock?.setIcon(icon);
-      }
-    } catch (e) {
-      console.warn('Could not set dock icon:', e);
-    }
-  }
-
-  // Default open or close DevTools by F12 in development
-  // and ignore CommandOrControl + R in production.
-  app.on('browser-window-created', (_, window) => {
-    optimizer.watchWindowShortcuts(window);
-  });
+/**
+ * Initialize the primary instance (runs the backend)
+ */
+async function initializePrimaryInstance(): Promise<void> {
+  console.warn('[main] Initializing as PRIMARY instance');
 
   // Initialize agent manager
   agentManager = new AgentManager();
@@ -209,9 +197,10 @@ app.whenReady().then(() => {
 
     // Initialize API server (optional - only starts if API_KEY is set)
     if (isApiServerEnabled()) {
-      initializeApiServer(agentManager, fileWatcher, {
-        debug: process.env.DEBUG === 'true',
-      }).then((result) => {
+      try {
+        const result = await initializeApiServer(agentManager, fileWatcher, {
+          debug: process.env.DEBUG === 'true',
+        });
         if (result.success && !result.skipped) {
           console.warn(`[main] API server started at ${result.address}`);
         } else if (result.skipped) {
@@ -219,9 +208,9 @@ app.whenReady().then(() => {
         } else if (!result.success) {
           console.warn(`[main] API server failed to start: ${result.error}`);
         }
-      }).catch((error) => {
+      } catch (error) {
         console.warn('[main] API server initialization failed:', error);
-      });
+      }
     } else {
       console.warn('[main] API server disabled (API_KEY not set)');
     }
@@ -256,6 +245,112 @@ app.whenReady().then(() => {
       console.warn('[main] ========================================');
     }
   }
+}
+
+/**
+ * Initialize the secondary instance (connects to existing backend)
+ */
+async function initializeSecondaryInstance(): Promise<void> {
+  console.warn('[main] Initializing as SECONDARY instance (client mode)');
+
+  // Try to discover the existing backend
+  const backendInfo = await discoverExistingBackend();
+
+  if (!backendInfo) {
+    // No backend found - this shouldn't happen if lock is held, but handle gracefully
+    console.warn('[main] Could not discover existing backend - starting in limited mode');
+    console.warn('[main] Tasks from other instances will not be visible');
+
+    // Still initialize terminal manager for local operations
+    terminalManager = new TerminalManager(() => mainWindow);
+
+    // Setup IPC handlers without AgentManager (limited functionality)
+    setupIpcHandlers(null, terminalManager, () => mainWindow, pythonEnvManager);
+
+    // Create window
+    createWindow();
+    return;
+  }
+
+  console.warn(`[main] Discovered existing backend at ${backendInfo.address}`);
+
+  // Initialize terminal manager (still useful for local operations)
+  terminalManager = new TerminalManager(() => mainWindow);
+
+  // Setup IPC handlers without AgentManager (secondary instance doesn't run agents)
+  // Pass null for agentManager - agent operations will be proxied through the API
+  setupIpcHandlers(null, terminalManager, () => mainWindow, pythonEnvManager);
+
+  // Create window
+  createWindow();
+
+  // Initialize client mode after window is created
+  if (mainWindow) {
+    const result = initializeClientMode(backendInfo, {
+      debug: process.env.DEBUG === 'true',
+      getMainWindow: () => mainWindow,
+    });
+
+    if (result.success) {
+      console.warn('[main] Client mode initialized - connected to primary backend');
+    } else {
+      console.warn(`[main] Client mode initialization failed: ${result.error}`);
+    }
+
+    // Log debug mode status
+    const isDebugMode = process.env.DEBUG === 'true';
+    if (isDebugMode) {
+      console.warn('[main] ========================================');
+      console.warn('[main] DEBUG MODE ENABLED (DEBUG=true)');
+      console.warn('[main] Running as SECONDARY instance');
+      console.warn('[main] ========================================');
+    }
+
+    // Initialize app auto-updater (only in production, or when DEBUG_UPDATER is set)
+    const forceUpdater = process.env.DEBUG_UPDATER === 'true';
+    if (app.isPackaged || forceUpdater) {
+      // Load settings to get beta updates preference
+      const settings = loadSettingsSync();
+      const betaUpdates = settings.betaUpdates ?? false;
+
+      initializeAppUpdater(mainWindow, betaUpdates);
+      console.warn('[main] App auto-updater initialized');
+    } else if (is.dev) {
+      console.warn('[main] App auto-updater DISABLED (development mode)');
+    }
+  }
+}
+
+// Initialize the application
+app.whenReady().then(async () => {
+  // Set app user model id for Windows
+  electronApp.setAppUserModelId('com.autoclaude.ui');
+
+  // Set dock icon on macOS
+  if (process.platform === 'darwin') {
+    const iconPath = getIconPath();
+    try {
+      const icon = nativeImage.createFromPath(iconPath);
+      if (!icon.isEmpty()) {
+        app.dock?.setIcon(icon);
+      }
+    } catch (e) {
+      console.warn('Could not set dock icon:', e);
+    }
+  }
+
+  // Default open or close DevTools by F12 in development
+  // and ignore CommandOrControl + R in production.
+  app.on('browser-window-created', (_, window) => {
+    optimizer.watchWindowShortcuts(window);
+  });
+
+  // Initialize based on whether this is primary or secondary instance
+  if (isSecondaryInstance) {
+    await initializeSecondaryInstance();
+  } else {
+    await initializePrimaryInstance();
+  }
 
   // macOS: re-create window when dock icon is clicked
   app.on('activate', () => {
@@ -274,28 +369,50 @@ app.on('window-all-closed', () => {
 
 // Cleanup before quit
 app.on('before-quit', async () => {
-  // Stop usage monitor
-  const usageMonitor = getUsageMonitor();
-  usageMonitor.stop();
-  console.warn('[main] Usage monitor stopped');
+  // Cleanup depends on whether we're primary or secondary instance
+  if (isSecondaryInstance) {
+    console.warn('[main] Shutting down secondary instance');
 
-  // Shutdown API server (if running)
-  try {
-    const result = await shutdownApiServer();
-    if (result.success) {
-      console.warn('[main] API server stopped');
-    } else if (result.error) {
-      console.warn('[main] API server shutdown error:', result.error);
+    // Shutdown client mode WebSocket connection
+    if (isClientModeActive()) {
+      try {
+        const result = shutdownClientMode();
+        if (result.success) {
+          console.warn(`[main] Client mode stopped (events received: ${result.eventsReceived}, uptime: ${result.uptimeMs}ms)`);
+        } else {
+          console.warn(`[main] Client mode shutdown error: ${result.error}`);
+        }
+      } catch (error) {
+        console.warn('[main] Client mode shutdown failed:', error);
+      }
     }
-  } catch (error) {
-    console.warn('[main] API server shutdown failed:', error);
+  } else {
+    console.warn('[main] Shutting down primary instance');
+
+    // Stop usage monitor (primary instance only)
+    const usageMonitor = getUsageMonitor();
+    usageMonitor.stop();
+    console.warn('[main] Usage monitor stopped');
+
+    // Shutdown API server (if running)
+    try {
+      const result = await shutdownApiServer();
+      if (result.success) {
+        console.warn('[main] API server stopped');
+      } else if (result.error) {
+        console.warn('[main] API server shutdown error:', result.error);
+      }
+    } catch (error) {
+      console.warn('[main] API server shutdown failed:', error);
+    }
+
+    // Kill all running agent processes
+    if (agentManager) {
+      await agentManager.killAll();
+    }
   }
 
-  // Kill all running agent processes
-  if (agentManager) {
-    await agentManager.killAll();
-  }
-  // Kill all terminal processes
+  // Kill all terminal processes (both primary and secondary)
   if (terminalManager) {
     await terminalManager.killAll();
   }

@@ -33,13 +33,13 @@ import { notificationService } from '../notification-service';
 /**
  * Setup all IPC handlers across all domains
  *
- * @param agentManager - The agent manager instance
+ * @param agentManager - The agent manager instance (null for secondary instances in multi-instance mode)
  * @param terminalManager - The terminal manager instance
  * @param getMainWindow - Function to get the main BrowserWindow
  * @param pythonEnvManager - The Python environment manager instance
  */
 export function setupIpcHandlers(
-  agentManager: AgentManager,
+  agentManager: AgentManager | null,
   terminalManager: TerminalManager,
   getMainWindow: () => BrowserWindow | null,
   pythonEnvManager: PythonEnvManager
@@ -47,58 +47,70 @@ export function setupIpcHandlers(
   // Initialize notification service
   notificationService.initialize(getMainWindow);
 
-  // Project handlers (including Python environment setup)
-  registerProjectHandlers(pythonEnvManager, agentManager, getMainWindow);
+  // Determine if we're running in primary mode (has AgentManager) or secondary mode (client mode)
+  const isPrimaryInstance = agentManager !== null;
 
-  // Task handlers
-  registerTaskHandlers(agentManager, pythonEnvManager, getMainWindow);
-
-  // Terminal and Claude profile handlers
-  registerTerminalHandlers(terminalManager, getMainWindow);
-
-  // Agent event handlers (event forwarding from agent manager to renderer)
-  registerAgenteventsHandlers(agentManager, getMainWindow);
-
-  // Settings and dialog handlers
-  registerSettingsHandlers(agentManager, getMainWindow);
-
-  // File explorer handlers
+  // File explorer handlers (work in both modes)
   registerFileHandlers();
 
-  // Roadmap handlers
-  registerRoadmapHandlers(agentManager, getMainWindow);
+  // Terminal and Claude profile handlers (work in both modes)
+  registerTerminalHandlers(terminalManager, getMainWindow);
 
-  // Context and memory handlers
+  // Context and memory handlers (work in both modes)
   registerContextHandlers(getMainWindow);
 
-  // Environment configuration handlers
+  // Environment configuration handlers (work in both modes)
   registerEnvHandlers(getMainWindow);
 
-  // Linear integration handlers
-  registerLinearHandlers(agentManager, getMainWindow);
-
-  // GitHub integration handlers
-  registerGithubHandlers(agentManager, getMainWindow);
-
-  // Auto-build source update handlers
-  registerAutobuildSourceHandlers(getMainWindow);
-
-  // Ideation handlers
-  registerIdeationHandlers(agentManager, getMainWindow);
-
-  // Changelog handlers
+  // Changelog handlers (work in both modes)
   registerChangelogHandlers(getMainWindow);
 
-  // Insights handlers
+  // Insights handlers (work in both modes)
   registerInsightsHandlers(getMainWindow);
 
-  // Memory & infrastructure handlers (for Graphiti/LadybugDB)
+  // Memory & infrastructure handlers (work in both modes)
   registerMemoryHandlers();
 
-  // App auto-update handlers
+  // App auto-update handlers (work in both modes)
   registerAppUpdateHandlers();
 
-  console.warn('[IPC] All handler modules registered successfully');
+  // Auto-build source update handlers (work in both modes)
+  registerAutobuildSourceHandlers(getMainWindow);
+
+  // Handlers that require AgentManager (primary instance only)
+  if (isPrimaryInstance) {
+    // Project handlers (including Python environment setup)
+    registerProjectHandlers(pythonEnvManager, agentManager, getMainWindow);
+
+    // Task handlers
+    registerTaskHandlers(agentManager, pythonEnvManager, getMainWindow);
+
+    // Agent event handlers (event forwarding from agent manager to renderer)
+    registerAgenteventsHandlers(agentManager, getMainWindow);
+
+    // Settings and dialog handlers
+    registerSettingsHandlers(agentManager, getMainWindow);
+
+    // Roadmap handlers
+    registerRoadmapHandlers(agentManager, getMainWindow);
+
+    // Linear integration handlers
+    registerLinearHandlers(agentManager, getMainWindow);
+
+    // GitHub integration handlers
+    registerGithubHandlers(agentManager, getMainWindow);
+
+    // Ideation handlers
+    registerIdeationHandlers(agentManager, getMainWindow);
+  } else {
+    // Secondary instance (client mode) - register limited handlers
+    // Note: In future subtasks, these handlers will proxy requests to the primary backend via API
+    console.warn('[IPC] Secondary instance: Agent-dependent handlers not registered');
+    console.warn('[IPC] Task updates will be received via WebSocket from primary backend');
+  }
+
+  const mode = isPrimaryInstance ? 'primary' : 'secondary (client mode)';
+  console.warn(`[IPC] Handler modules registered (${mode})`);
 }
 
 // Re-export all individual registration functions for potential custom usage
