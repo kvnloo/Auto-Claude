@@ -123,10 +123,17 @@ export function Sidebar({
       // Only handle shortcuts when a project is selected
       if (!selectedProjectId) return;
 
-      // Check for modifier keys - we want plain key presses only
-      if (e.metaKey || e.ctrlKey || e.altKey) return;
-
       const key = e.key.toUpperCase();
+
+      // Cmd+Shift+E (Mac) or Ctrl+Shift+E (Windows/Linux) for quick explorer access
+      if ((e.metaKey || e.ctrlKey) && e.shiftKey && key === 'E') {
+        e.preventDefault();
+        onViewChange?.('explorer');
+        return;
+      }
+
+      // Check for modifier keys - we want plain key presses only for other shortcuts
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       // Find matching nav item
       const allNavItems = [...projectNavItems, ...toolsNavItems];
