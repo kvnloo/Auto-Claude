@@ -473,22 +473,22 @@ describe('ProjectStore', () => {
       });
 
       const updatedProject = getProjectById(project.id);
-      expect(updatedProject?.stats.completedTasks).toBe(10);
-      expect(updatedProject?.stats.totalTasks).toBe(20);
+      expect(updatedProject?.stats?.completedTasks).toBe(10);
+      expect(updatedProject?.stats?.totalTasks).toBe(20);
     });
 
     it('should preserve other stats when partially updating', () => {
       const { projects, updateStats, getProjectById } =
         useProjectStore.getState();
       const project = projects[0];
-      const originalInProgress = project.stats.inProgressTasks;
+      const originalInProgress = project.stats?.inProgressTasks ?? 0;
 
       act(() => {
         updateStats(project.id, { completedTasks: 99 });
       });
 
       const updatedProject = getProjectById(project.id);
-      expect(updatedProject?.stats.inProgressTasks).toBe(originalInProgress);
+      expect(updatedProject?.stats?.inProgressTasks).toBe(originalInProgress);
     });
   });
 

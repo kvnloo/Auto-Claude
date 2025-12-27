@@ -99,6 +99,7 @@ describe('TaskStore', () => {
         category: 'chore',
         complexity: 1,
         impact: 1,
+        projectId: 'project-001',
       };
       const input2: TaskCreateInput = {
         title: 'Task 2',
@@ -107,6 +108,7 @@ describe('TaskStore', () => {
         category: 'bug',
         complexity: 2,
         impact: 2,
+        projectId: 'project-001',
       };
 
       let task1, task2;
@@ -131,6 +133,7 @@ describe('TaskStore', () => {
           category: 'test',
           complexity: 3,
           impact: 3,
+          projectId: 'project-001',
         });
       });
 
@@ -153,6 +156,7 @@ describe('TaskStore', () => {
           category: 'chore',
           complexity: 1,
           impact: 1,
+          projectId: 'project-001',
         });
       });
 
@@ -171,6 +175,7 @@ describe('TaskStore', () => {
           category: 'chore',
           complexity: 1,
           impact: 1,
+          projectId: 'project-001',
         });
       });
 
@@ -189,6 +194,7 @@ describe('TaskStore', () => {
           category: 'chore',
           complexity: 1,
           impact: 1,
+          projectId: 'project-001',
           labels: ['test', 'unit-test'],
         });
         taskWithoutLabels = addTask({
@@ -198,6 +204,7 @@ describe('TaskStore', () => {
           category: 'chore',
           complexity: 1,
           impact: 1,
+          projectId: 'project-001',
         });
       });
 
@@ -718,6 +725,7 @@ describe('TaskStore', () => {
           category: 'chore',
           complexity: 1,
           impact: 1,
+          projectId: 'project-001',
         });
         selectTask('task-001');
         setFilters({ status: ['backlog'] });

@@ -5,7 +5,7 @@
 
 import { act } from '@testing-library/react-native';
 import { useChatStore } from '../chatStore';
-import type { ChatSessionCreateInput, ToolCall } from '../../types';
+import type { ChatSessionCreateInput, ToolCall, ChatMessage } from '../../types';
 
 // Mock AsyncStorage
 jest.mock('@react-native-async-storage/async-storage', () => ({
@@ -364,7 +364,7 @@ describe('ChatStore', () => {
     it('should return the new message', () => {
       const { addMessage } = useChatStore.getState();
 
-      let newMessage;
+      let newMessage: ChatMessage | undefined;
       act(() => {
         newMessage = addMessage('Test message');
       });
@@ -377,7 +377,7 @@ describe('ChatStore', () => {
     it('should set message as complete by default', () => {
       const { addMessage } = useChatStore.getState();
 
-      let newMessage;
+      let newMessage: ChatMessage | undefined;
       act(() => {
         newMessage = addMessage('Test message');
       });
@@ -388,7 +388,7 @@ describe('ChatStore', () => {
     it('should set timestamps on new message', () => {
       const { addMessage } = useChatStore.getState();
 
-      let newMessage;
+      let newMessage: ChatMessage | undefined;
       act(() => {
         newMessage = addMessage('Test message');
       });
@@ -423,7 +423,7 @@ describe('ChatStore', () => {
     it('should support assistant role', () => {
       const { addMessage } = useChatStore.getState();
 
-      let newMessage;
+      let newMessage: ChatMessage | undefined;
       act(() => {
         newMessage = addMessage('I am Claude!', 'assistant');
       });
@@ -484,7 +484,7 @@ describe('ChatStore', () => {
     it('should start streaming response', () => {
       const { startStreamingResponse } = useChatStore.getState();
 
-      let streamingMessage;
+      let streamingMessage: ChatMessage | undefined;
       act(() => {
         streamingMessage = startStreamingResponse();
       });
@@ -797,7 +797,7 @@ describe('ChatStore', () => {
     it('should handle empty message content', () => {
       const { addMessage } = useChatStore.getState();
 
-      let message;
+      let message: ChatMessage | undefined;
       act(() => {
         message = addMessage('');
       });
