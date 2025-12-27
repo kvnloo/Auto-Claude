@@ -551,7 +551,7 @@ describe('Navigation Integration Tests', () => {
     });
 
     it('should handle undefined ID parameter', () => {
-      mockUseLocalSearchParams.mockReturnValue({});
+      mockUseLocalSearchParams.mockReturnValue({ id: undefined as unknown as string });
 
       const params = mockUseLocalSearchParams();
 

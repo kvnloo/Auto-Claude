@@ -132,6 +132,7 @@ describe('Store Integration Tests', () => {
           category: 'feature',
           complexity: 5,
           impact: 5,
+          projectId: 'project-001',
         });
       });
 
@@ -188,7 +189,7 @@ describe('Store Integration Tests', () => {
 
       // Create a session
       await act(async () => {
-        useChatStore.getState().createSession('Test Session');
+        useChatStore.getState().createSession({ name: 'Test Session' });
       });
 
       rerender(<TestComponent />);
@@ -285,6 +286,7 @@ describe('Store Integration Tests', () => {
           category: 'feature',
           complexity: 7,
           impact: 8,
+          projectId: 'project-001',
         });
       });
 
@@ -401,6 +403,7 @@ describe('Store Integration Tests', () => {
           category: 'test',
           complexity: 5,
           impact: 5,
+          projectId: 'project-001',
         });
       });
 
@@ -435,6 +438,7 @@ describe('Store Integration Tests', () => {
               category: 'chore',
               complexity: 1,
               impact: 1,
+              projectId: 'project-001',
             })
           )
         );
@@ -475,6 +479,7 @@ describe('Store Integration Tests', () => {
           category: 'feature',
           complexity: 5,
           impact: 5,
+          projectId: 'project-001',
         });
       });
 
@@ -571,6 +576,7 @@ describe('Store Integration Tests', () => {
           category: 'chore',
           complexity: 1,
           impact: 1,
+          projectId: 'project-001',
         });
       });
 
