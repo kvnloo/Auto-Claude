@@ -2,6 +2,7 @@ import { ipcMain } from 'electron';
 import type { BrowserWindow } from 'electron';
 import type { IPCResult, GraphData, SelectedNodeInfo } from '../../shared/types';
 import { projectStore } from '../project-store';
+import { explorerService } from '../explorer/explorer-service';
 
 // IPC Channel names for explorer operations
 // TODO: Move to shared/constants/ipc.ts in subtask-3-5
@@ -40,10 +41,8 @@ export function registerExplorerHandlers(
       }
 
       try {
-        // TODO: Wire up to explorerService.getGraph() in phase 4
-        // For now, return null to indicate no cached graph
-        // The frontend will show the empty state prompting user to parse
-        return { success: true, data: null };
+        const graph = await explorerService.getProjectGraph(projectId, project.path);
+        return { success: true, data: graph };
       } catch (error) {
         return {
           success: false,
@@ -66,24 +65,40 @@ export function registerExplorerHandlers(
       }
 
       try {
-        // Emit progress updates to renderer
         const mainWindow = getMainWindow();
 
-        // TODO: Wire up to explorerService.parseProject() in phase 4
-        // The service will emit progress events during parsing
-        if (mainWindow) {
-          mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_PROGRESS, projectId, {
-            phase: 'scanning-files',
-            progress: 0,
-            message: 'Scanning project files...'
-          });
-        }
-
-        // Placeholder: Return error until explorer service is implemented
-        return {
-          success: false,
-          error: 'Explorer parsing not yet implemented. Tree-sitter service will be added in phase 4.'
+        // Set up event listeners to forward status updates to renderer
+        const statusHandler = (eventProjectId: string, status: unknown) => {
+          if (eventProjectId === projectId && mainWindow) {
+            mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_PROGRESS, projectId, status);
+          }
         };
+
+        const completeHandler = (eventProjectId: string, graph: GraphData) => {
+          if (eventProjectId === projectId && mainWindow) {
+            mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_COMPLETE, projectId, graph);
+          }
+        };
+
+        const errorHandler = (eventProjectId: string, error: unknown) => {
+          if (eventProjectId === projectId && mainWindow) {
+            mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_ERROR, projectId, error);
+          }
+        };
+
+        explorerService.on('status', statusHandler);
+        explorerService.on('parse-complete', completeHandler);
+        explorerService.on('parse-error', errorHandler);
+
+        try {
+          const result = await explorerService.parseProject(projectId, project.path);
+          return { success: true, data: result.graph };
+        } finally {
+          // Clean up event listeners
+          explorerService.off('status', statusHandler);
+          explorerService.off('parse-complete', completeHandler);
+          explorerService.off('parse-error', errorHandler);
+        }
       } catch (error) {
         const mainWindow = getMainWindow();
         if (mainWindow) {
@@ -113,21 +128,38 @@ export function registerExplorerHandlers(
       try {
         const mainWindow = getMainWindow();
 
-        // TODO: Wire up to explorerService.refreshGraph() in phase 4
-        // This will invalidate cache and re-parse all files
-        if (mainWindow) {
-          mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_PROGRESS, projectId, {
-            phase: 'scanning-files',
-            progress: 0,
-            message: 'Re-scanning project files...'
-          });
-        }
-
-        // Placeholder: Return error until explorer service is implemented
-        return {
-          success: false,
-          error: 'Explorer refresh not yet implemented. Tree-sitter service will be added in phase 4.'
+        // Set up event listeners to forward status updates to renderer
+        const statusHandler = (eventProjectId: string, status: unknown) => {
+          if (eventProjectId === projectId && mainWindow) {
+            mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_PROGRESS, projectId, status);
+          }
         };
+
+        const completeHandler = (eventProjectId: string, graph: GraphData) => {
+          if (eventProjectId === projectId && mainWindow) {
+            mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_COMPLETE, projectId, graph);
+          }
+        };
+
+        const errorHandler = (eventProjectId: string, error: unknown) => {
+          if (eventProjectId === projectId && mainWindow) {
+            mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_ERROR, projectId, error);
+          }
+        };
+
+        explorerService.on('status', statusHandler);
+        explorerService.on('parse-complete', completeHandler);
+        explorerService.on('parse-error', errorHandler);
+
+        try {
+          const graph = await explorerService.refreshGraph(projectId, project.path);
+          return { success: true, data: graph };
+        } finally {
+          // Clean up event listeners
+          explorerService.off('status', statusHandler);
+          explorerService.off('parse-complete', completeHandler);
+          explorerService.off('parse-error', errorHandler);
+        }
       } catch (error) {
         const mainWindow = getMainWindow();
         if (mainWindow) {
@@ -159,9 +191,8 @@ export function registerExplorerHandlers(
       }
 
       try {
-        // TODO: Wire up to explorerService.getNodeInfo() in phase 4
-        // This will look up the node in the cached graph and compute relationships
-        return { success: true, data: null };
+        const nodeInfo = explorerService.getNodeInfo(projectId, nodeId);
+        return { success: true, data: nodeInfo };
       } catch (error) {
         return {
           success: false,
