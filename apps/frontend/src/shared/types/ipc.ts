@@ -597,6 +597,9 @@ export interface ElectronAPI {
 
   // GitHub API (nested for organized access)
   github: import('../../preload/api/modules/github-api').GitHubAPI;
+
+  // Autonomous Mode API (nested for organized access)
+  autonomous: import('../../preload/api/modules/autonomous-api').AutonomousAPI;
 }
 
 declare global {

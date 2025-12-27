@@ -170,6 +170,100 @@ const browserMockAPI: ElectronAPI = {
     onAnalyzePreviewProgress: () => () => {},
     onAnalyzePreviewComplete: () => () => {},
     onAnalyzePreviewError: () => () => {}
+  },
+
+  // Autonomous Mode API
+  autonomous: {
+    start: async () => ({
+      success: true,
+      data: {
+        state: 'running' as const,
+        pendingCount: 0,
+        inProgressCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        totalCount: 0,
+        consecutiveFailures: 0,
+        lastUpdated: new Date()
+      }
+    }),
+    stop: async () => ({
+      success: true,
+      data: {
+        sessionStartedAt: new Date(),
+        elapsedTimeMs: 0,
+        timeLimitMs: 0,
+        remainingTimeMs: 0,
+        tasksCompleted: 0,
+        tasksFailed: 0,
+        tasksInProgress: 0,
+        tasksSkipped: 0,
+        totalTasksProcessed: 0,
+        pullRequestsCreated: 0,
+        tokensUsed: 0,
+        avgTaskDurationMs: 0,
+        successRate: 0,
+        rateLimitHits: 0
+      }
+    }),
+    pause: async () => ({
+      success: true,
+      data: {
+        state: 'paused' as const,
+        pauseReason: 'user_requested' as const,
+        pendingCount: 0,
+        inProgressCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        totalCount: 0,
+        consecutiveFailures: 0,
+        lastUpdated: new Date()
+      }
+    }),
+    resume: async () => ({
+      success: true,
+      data: {
+        state: 'running' as const,
+        pendingCount: 0,
+        inProgressCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        totalCount: 0,
+        consecutiveFailures: 0,
+        lastUpdated: new Date()
+      }
+    }),
+    getStatus: async () => ({
+      success: true,
+      data: {
+        state: 'idle' as const,
+        pendingCount: 0,
+        inProgressCount: 0,
+        completedCount: 0,
+        failedCount: 0,
+        totalCount: 0,
+        consecutiveFailures: 0,
+        lastUpdated: new Date()
+      }
+    }),
+    getQueue: async () => ({ success: true, data: [] }),
+    addTask: async (task: any) => ({ success: true, data: task }),
+    removeTask: async () => ({ success: true, data: true }),
+    getSettings: async () => ({
+      success: true,
+      data: {
+        enabled: false,
+        maxConcurrentTasks: 1,
+        maxConsecutiveFailures: 3,
+        sessionTimeLimitMinutes: 240,
+        pollIntervalSeconds: 60
+      }
+    }),
+    saveSettings: async () => ({ success: true, data: true }),
+    onProgress: () => () => {},
+    onTaskComplete: () => () => {},
+    onTaskFailed: () => () => {},
+    onError: () => () => {}
   }
 };
 
