@@ -17,7 +17,8 @@ import {
   FileText,
   Sparkles,
   GitBranch,
-  HelpCircle
+  HelpCircle,
+  Bot
 } from 'lucide-react';
 import { Button } from './ui/button';
 import { ScrollArea } from './ui/scroll-area';
@@ -45,12 +46,13 @@ import {
   updateProjectAutoBuild
 } from '../stores/project-store';
 import { useSettingsStore } from '../stores/settings-store';
+import { useIsQueueRunning } from '../stores/autonomous-store';
 import { AddProjectModal } from './AddProjectModal';
 import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
 import type { Project, AutoBuildVersionInfo, GitStatus } from '../../shared/types';
 
-export type SidebarView = 'kanban' | 'terminals' | 'roadmap' | 'context' | 'ideation' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools';
+export type SidebarView = 'kanban' | 'terminals' | 'roadmap' | 'context' | 'ideation' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'autonomous';
 
 interface SidebarProps {
   onSettingsClick: () => void;
@@ -77,6 +79,7 @@ const projectNavItems: NavItem[] = [
 ];
 
 const toolsNavItems: NavItem[] = [
+  { id: 'autonomous', labelKey: 'navigation:items.autonomous', icon: Bot, shortcut: 'U' },
   { id: 'github-issues', labelKey: 'navigation:items.githubIssues', icon: Github, shortcut: 'G' },
   { id: 'github-prs', labelKey: 'navigation:items.githubPRs', icon: GitPullRequest, shortcut: 'P' },
   { id: 'worktrees', labelKey: 'navigation:items.worktrees', icon: GitBranch, shortcut: 'W' }
@@ -93,6 +96,7 @@ export function Sidebar({
   const selectedProjectId = useProjectStore((state) => state.selectedProjectId);
   const selectProject = useProjectStore((state) => state.selectProject);
   const settings = useSettingsStore((state) => state.settings);
+  const isAutonomousRunning = useIsQueueRunning();
 
   const [showAddProjectModal, setShowAddProjectModal] = useState(false);
   const [showInitDialog, setShowInitDialog] = useState(false);
@@ -259,6 +263,7 @@ export function Sidebar({
   const renderNavItem = (item: NavItem) => {
     const isActive = activeView === item.id;
     const Icon = item.icon;
+    const showRunningIndicator = item.id === 'autonomous' && isAutonomousRunning;
 
     return (
       <button
@@ -272,9 +277,19 @@ export function Sidebar({
           isActive && 'bg-accent text-accent-foreground'
         )}
       >
-        <Icon className="h-4 w-4 shrink-0" />
+        <div className="relative">
+          <Icon className={cn('h-4 w-4 shrink-0', showRunningIndicator && 'text-primary')} />
+          {showRunningIndicator && (
+            <span className="absolute -top-0.5 -right-0.5 h-2 w-2 rounded-full bg-green-500 animate-pulse" />
+          )}
+        </div>
         <span className="flex-1 text-left">{t(item.labelKey)}</span>
-        {item.shortcut && (
+        {showRunningIndicator && (
+          <span className="text-xs text-green-600 dark:text-green-400 font-medium">
+            Running
+          </span>
+        )}
+        {!showRunningIndicator && item.shortcut && (
           <kbd className="pointer-events-none hidden h-5 select-none items-center gap-1 rounded-md border border-border bg-secondary px-1.5 font-mono text-[10px] font-medium text-muted-foreground sm:flex">
             {item.shortcut}
           </kbd>

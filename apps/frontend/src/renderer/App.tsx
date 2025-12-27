@@ -44,6 +44,7 @@ import { GitHubIssues } from './components/GitHubIssues';
 import { GitHubPRs } from './components/github-prs';
 import { Changelog } from './components/Changelog';
 import { Worktrees } from './components/Worktrees';
+import { AutonomousDashboard } from './components/autonomous';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { RateLimitModal } from './components/RateLimitModal';
 import { SDKRateLimitModal } from './components/SDKRateLimitModal';
@@ -686,6 +687,9 @@ export function App() {
                 )}
                 {activeView === 'worktrees' && (activeProjectId || selectedProjectId) && (
                   <Worktrees projectId={activeProjectId || selectedProjectId!} />
+                )}
+                {activeView === 'autonomous' && (activeProjectId || selectedProjectId) && (
+                  <AutonomousDashboard projectId={activeProjectId ?? selectedProjectId ?? undefined} />
                 )}
                 {activeView === 'agent-tools' && (
                   <div className="flex h-full items-center justify-center">
