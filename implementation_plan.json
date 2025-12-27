@@ -1,0 +1,17 @@
+{
+  "feature": "Add File Attachment with Drag-and-Drop to Insights",
+  "status": "qa_fix_applied",
+  "qa_signoff": {
+    "status": "fixes_applied",
+    "timestamp": "2025-12-26T23:57:00Z",
+    "fix_session": 1,
+    "issues_fixed": [
+      {
+        "title": "AI cannot view attached files - exit code 2",
+        "fix_commit": "b2e213c",
+        "fix_description": "Convert absolute file paths to relative paths so the SDK sandbox allows the Read tool to access them"
+      }
+    ],
+    "ready_for_qa_revalidation": true
+  }
+}

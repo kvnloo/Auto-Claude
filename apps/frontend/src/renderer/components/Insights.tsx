@@ -839,24 +839,24 @@ export function Insights({ projectId }: InsightsProps) {
               </div>
             )}
           </div>
-          <div className="flex flex-col justify-end gap-1">
+          <div className="flex items-end gap-2">
             <Button
               variant="outline"
-              size="icon"
+              size="sm"
               disabled={isLoading || isProcessingFiles}
               title={isProcessingFiles ? 'Processing files...' : attachedFiles.length > 0 ? `${attachedFiles.length} file(s) attached` : 'Attach files'}
               onClick={handlePaperclipClick}
-              className="relative"
             >
               {isProcessingFiles ? (
-                <Loader2 className="h-4 w-4 animate-spin" />
+                <Loader2 className="mr-2 h-4 w-4 animate-spin" />
               ) : (
-                <Paperclip className="h-4 w-4" />
+                <Paperclip className="mr-2 h-4 w-4" />
               )}
+              Attach
               {attachedFiles.length > 0 && !isProcessingFiles && (
-                <span className="absolute -right-1 -top-1 flex h-4 w-4 items-center justify-center rounded-full bg-primary text-[10px] font-medium text-primary-foreground">
+                <Badge variant="secondary" className="ml-2">
                   {attachedFiles.length > 9 ? '9+' : attachedFiles.length}
-                </span>
+                </Badge>
               )}
             </Button>
             <Button
