@@ -1,10 +1,10 @@
 /**
  * Onboarding Screen
  * Multi-step wizard for first-time setup
- * Includes QR code scanner placeholder, server discovery, and skip option
+ * Includes QR code scanner (using expo-camera), server discovery, API key input, and skip option
  */
 
-import { useState, useCallback, useRef } from 'react';
+import { useState, useCallback, useRef, useEffect } from 'react';
 import {
   View,
   StyleSheet,
@@ -12,6 +12,8 @@ import {
   ScrollView,
   Animated,
   Platform,
+  Alert,
+  Linking,
 } from 'react-native';
 import {
   Text,
@@ -21,12 +23,22 @@ import {
   ProgressBar,
   IconButton,
 } from 'react-native-paper';
+import { CameraView, useCameraPermissions, BarcodeScanningResult } from 'expo-camera';
 import { router } from 'expo-router';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import MaterialCommunityIcons from 'react-native-vector-icons/MaterialCommunityIcons';
+import { useSettingsStore } from '../stores/settingsStore';
 import { colors, spacing, borderRadius } from '../theme';
 
 const { width: SCREEN_WIDTH } = Dimensions.get('window');
+
+/**
+ * QR Code data format expected from AutoClaude desktop app
+ */
+interface QRCodeData {
+  serverUrl?: string;
+  apiKey?: string;
+}
 
 /**
  * Onboarding steps configuration
@@ -51,6 +63,12 @@ const STEPS = [
     icon: 'server-network',
   },
   {
+    id: 'api-key',
+    title: 'Enter API Key',
+    description: 'Enter your API key to authenticate with the server',
+    icon: 'key-variant',
+  },
+  {
     id: 'complete',
     title: 'All Set!',
     description: 'You\'re ready to start managing your AI development workflow',
@@ -68,15 +86,39 @@ export default function OnboardingScreen() {
   const insets = useSafeAreaInsets();
   const [currentStep, setCurrentStep] = useState(0);
   const [serverUrl, setServerUrl] = useState('');
+  const [apiKey, setApiKey] = useState('');
+  const [showApiKey, setShowApiKey] = useState(false);
   const [isScanning, setIsScanning] = useState(false);
   const [isDiscovering, setIsDiscovering] = useState(false);
+  const [isSavingApiKey, setIsSavingApiKey] = useState(false);
   const [discoveredServers, setDiscoveredServers] = useState<string[]>([]);
+  const [scanError, setScanError] = useState<string | null>(null);
   const fadeAnim = useRef(new Animated.Value(1)).current;
+  const hasScannedRef = useRef(false);
+
+  // Camera permissions
+  const [permission, requestPermission] = useCameraPermissions();
+
+  // Settings store
+  const updateConnectionSettings = useSettingsStore((state) => state.updateConnectionSettings);
+  const saveApiKeyToStore = useSettingsStore((state) => state.saveApiKey);
+  const completeOnboarding = useSettingsStore((state) => state.completeOnboarding);
 
   const step = STEPS[currentStep];
   const progress = (currentStep + 1) / STEPS.length;
   const isFirstStep = currentStep === 0;
   const isLastStep = currentStep === STEPS.length - 1;
+
+  /**
+   * Reset scan state when leaving QR scanner step
+   */
+  useEffect(() => {
+    if (step.id !== 'qr-scanner') {
+      setIsScanning(false);
+      hasScannedRef.current = false;
+      setScanError(null);
+    }
+  }, [step.id]);
 
   /**
    * Animate transition between steps
@@ -123,38 +165,173 @@ export default function OnboardingScreen() {
   }, [animateTransition]);
 
   /**
+   * Skip to specific step
+   */
+  const skipToStep = useCallback((stepId: StepId) => {
+    const stepIndex = STEPS.findIndex(s => s.id === stepId);
+    if (stepIndex !== -1 && stepIndex !== currentStep) {
+      Animated.sequence([
+        Animated.timing(fadeAnim, {
+          toValue: 0,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+        Animated.timing(fadeAnim, {
+          toValue: 1,
+          duration: 150,
+          useNativeDriver: true,
+        }),
+      ]).start();
+
+      setTimeout(() => {
+        setCurrentStep(stepIndex);
+      }, 150);
+    }
+  }, [currentStep, fadeAnim]);
+
+  /**
    * Skip onboarding and go to main app
    */
   const handleSkip = useCallback(() => {
+    completeOnboarding();
     router.replace('/(tabs)');
-  }, []);
+  }, [completeOnboarding]);
 
   /**
    * Complete onboarding and navigate to main app
    */
-  const handleComplete = useCallback(() => {
-    // In Phase 5.9, this will store the first-launch flag
+  const handleComplete = useCallback(async () => {
+    // Save API key if provided
+    if (apiKey.trim()) {
+      setIsSavingApiKey(true);
+      const success = await saveApiKeyToStore(apiKey.trim());
+      setIsSavingApiKey(false);
+
+      if (!success) {
+        Alert.alert('Error', 'Failed to save API key. Please try again.');
+        return;
+      }
+    }
+
+    // Save server URL if provided
+    if (serverUrl.trim()) {
+      updateConnectionSettings({
+        serverUrl: serverUrl.trim(),
+        isConfigured: !!apiKey.trim(),
+      });
+    }
+
+    // Mark onboarding as complete and store first-launch timestamp
+    completeOnboarding();
+
     router.replace('/(tabs)');
+  }, [apiKey, serverUrl, saveApiKeyToStore, updateConnectionSettings, completeOnboarding]);
+
+  /**
+   * Parse QR code data
+   */
+  const parseQRCodeData = useCallback((data: string): QRCodeData | null => {
+    try {
+      // Try to parse as JSON first (expected format from AutoClaude)
+      const parsed = JSON.parse(data);
+      if (parsed.serverUrl || parsed.apiKey) {
+        return {
+          serverUrl: parsed.serverUrl,
+          apiKey: parsed.apiKey,
+        };
+      }
+    } catch {
+      // Not JSON - try to parse as URL
+      try {
+        const url = new URL(data);
+        // Check if it's a valid HTTP(S) URL
+        if (url.protocol === 'http:' || url.protocol === 'https:') {
+          return { serverUrl: data };
+        }
+      } catch {
+        // Not a valid URL either
+      }
+    }
+    return null;
   }, []);
 
   /**
-   * Simulate QR code scanning
-   * Placeholder - will use expo-camera in Phase 5.9
+   * Handle QR code scan result
    */
-  const handleScanQR = useCallback(() => {
-    setIsScanning(true);
-    // Simulate scanning delay
-    setTimeout(() => {
+  const handleBarcodeScanned = useCallback((result: BarcodeScanningResult) => {
+    // Prevent multiple scans
+    if (hasScannedRef.current) return;
+    hasScannedRef.current = true;
+
+    const { data } = result;
+    const parsed = parseQRCodeData(data);
+
+    if (parsed) {
+      setScanError(null);
+
+      if (parsed.serverUrl) {
+        setServerUrl(parsed.serverUrl);
+      }
+
+      if (parsed.apiKey) {
+        setApiKey(parsed.apiKey);
+        // If we got both server URL and API key, skip to completion
+        if (parsed.serverUrl) {
+          skipToStep('complete');
+        } else {
+          skipToStep('server-discovery');
+        }
+      } else if (parsed.serverUrl) {
+        // Just server URL, go to API key step
+        skipToStep('api-key');
+      }
+
       setIsScanning(false);
-      // Simulate successful scan with mock data
-      setServerUrl('http://192.168.1.100:8000');
-      handleNext();
-    }, 2000);
-  }, [handleNext]);
+    } else {
+      setScanError('Invalid QR code format. Please scan a valid AutoClaude QR code.');
+      // Allow retry after error
+      setTimeout(() => {
+        hasScannedRef.current = false;
+      }, 2000);
+    }
+  }, [parseQRCodeData, skipToStep]);
+
+  /**
+   * Start QR code scanning
+   */
+  const handleStartScan = useCallback(async () => {
+    if (!permission?.granted) {
+      const result = await requestPermission();
+      if (!result.granted) {
+        Alert.alert(
+          'Camera Permission Required',
+          'Please enable camera access in your device settings to scan QR codes.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Open Settings', onPress: () => Linking.openSettings() },
+          ]
+        );
+        return;
+      }
+    }
+
+    hasScannedRef.current = false;
+    setScanError(null);
+    setIsScanning(true);
+  }, [permission, requestPermission]);
+
+  /**
+   * Stop QR code scanning
+   */
+  const handleStopScan = useCallback(() => {
+    setIsScanning(false);
+    hasScannedRef.current = false;
+    setScanError(null);
+  }, []);
 
   /**
    * Simulate server discovery
-   * Placeholder - will implement mDNS/network discovery in Phase 5.9
+   * Note: Real mDNS/network discovery would require native module integration
    */
   const handleDiscoverServers = useCallback(() => {
     setIsDiscovering(true);
@@ -174,8 +351,18 @@ export default function OnboardingScreen() {
    */
   const handleSelectServer = useCallback((server: string) => {
     setServerUrl(server);
-    handleNext();
-  }, [handleNext]);
+    // Go to API key step
+    skipToStep('api-key');
+  }, [skipToStep]);
+
+  /**
+   * Handle manual server URL submission
+   */
+  const handleManualServerSubmit = useCallback(() => {
+    if (serverUrl.trim()) {
+      skipToStep('api-key');
+    }
+  }, [serverUrl, skipToStep]);
 
   /**
    * Render step indicator dots
@@ -197,6 +384,7 @@ export default function OnboardingScreen() {
       ))}
     </View>
   );
+
 
   /**
    * Render welcome step content
@@ -274,19 +462,33 @@ export default function OnboardingScreen() {
    */
   const renderQRScannerStep = () => (
     <View style={styles.stepContent}>
-      <Surface style={styles.scannerPlaceholder} elevation={2}>
-        {isScanning ? (
-          <View style={styles.scanningContainer}>
-            <MaterialCommunityIcons
-              name="qrcode-scan"
-              size={80}
-              color={colors.accent.primary}
+      <Surface style={styles.scannerContainer} elevation={2}>
+        {isScanning && permission?.granted ? (
+          <View style={styles.cameraContainer}>
+            <CameraView
+              style={styles.camera}
+              facing="back"
+              barcodeScannerSettings={{
+                barcodeTypes: ['qr'],
+              }}
+              onBarcodeScanned={handleBarcodeScanned}
             />
-            <Text style={styles.scanningText}>Scanning...</Text>
-            <ProgressBar
-              indeterminate
-              color={colors.accent.primary}
-              style={styles.scanningProgress}
+            <View style={styles.scanOverlay}>
+              <View style={styles.qrFrame}>
+                <View style={[styles.qrCorner, styles.qrCornerTL]} />
+                <View style={[styles.qrCorner, styles.qrCornerTR]} />
+                <View style={[styles.qrCorner, styles.qrCornerBL]} />
+                <View style={[styles.qrCorner, styles.qrCornerBR]} />
+              </View>
+            </View>
+            <IconButton
+              icon="close"
+              iconColor={colors.text.primary}
+              containerColor={colors.background.elevated}
+              size={24}
+              style={styles.closeScanButton}
+              onPress={handleStopScan}
+              accessibilityLabel="Stop scanning"
             />
           </View>
         ) : (
@@ -303,23 +505,34 @@ export default function OnboardingScreen() {
               />
             </View>
             <Text style={styles.placeholderText}>
-              Camera will appear here when scanning
+              {permission?.granted
+                ? 'Tap button below to start scanning'
+                : 'Camera permission required to scan QR codes'}
             </Text>
           </View>
         )}
       </Surface>
 
+      {scanError && (
+        <Surface style={styles.errorCard} elevation={1}>
+          <MaterialCommunityIcons
+            name="alert-circle"
+            size={20}
+            color={colors.status.error}
+          />
+          <Text style={styles.errorText}>{scanError}</Text>
+        </Surface>
+      )}
+
       <Button
         mode="contained"
-        onPress={handleScanQR}
+        onPress={isScanning ? handleStopScan : handleStartScan}
         style={styles.actionButton}
-        icon="qrcode-scan"
-        loading={isScanning}
-        disabled={isScanning}
-        accessibilityLabel="Start QR code scan"
+        icon={isScanning ? 'stop' : 'qrcode-scan'}
+        accessibilityLabel={isScanning ? 'Stop scanning' : 'Start QR code scan'}
         accessibilityHint="Opens camera to scan QR code from desktop app"
       >
-        {isScanning ? 'Scanning...' : 'Start Scanning'}
+        {isScanning ? 'Stop Scanning' : 'Start Scanning'}
       </Button>
 
       <Text style={styles.orText}>or enter manually</Text>
@@ -340,6 +553,15 @@ export default function OnboardingScreen() {
         keyboardType="url"
         accessibilityLabel="Server URL input"
         accessibilityHint="Enter the AutoClaude server URL manually"
+        right={
+          serverUrl.trim() ? (
+            <TextInput.Icon
+              icon="arrow-right"
+              onPress={handleManualServerSubmit}
+              accessibilityLabel="Submit server URL"
+            />
+          ) : undefined
+        }
       />
     </View>
   );
@@ -410,6 +632,35 @@ export default function OnboardingScreen() {
         {isDiscovering ? 'Searching...' : 'Discover Servers'}
       </Button>
 
+      <Text style={styles.orText}>or enter manually</Text>
+
+      <TextInput
+        mode="outlined"
+        label="Server URL"
+        value={serverUrl}
+        onChangeText={setServerUrl}
+        placeholder="http://192.168.1.100:8000"
+        style={styles.input}
+        outlineColor={colors.surface.border}
+        activeOutlineColor={colors.accent.primary}
+        textColor={colors.text.primary}
+        placeholderTextColor={colors.text.muted}
+        autoCapitalize="none"
+        autoCorrect={false}
+        keyboardType="url"
+        accessibilityLabel="Server URL input"
+        accessibilityHint="Enter the AutoClaude server URL manually"
+        right={
+          serverUrl.trim() ? (
+            <TextInput.Icon
+              icon="arrow-right"
+              onPress={handleManualServerSubmit}
+              accessibilityLabel="Submit server URL"
+            />
+          ) : undefined
+        }
+      />
+
       {serverUrl && (
         <Surface style={styles.selectedServer} elevation={1}>
           <MaterialCommunityIcons
@@ -421,6 +672,92 @@ export default function OnboardingScreen() {
             Selected: {serverUrl}
           </Text>
         </Surface>
+      )}
+    </View>
+  );
+
+  /**
+   * Render API key input step content
+   */
+  const renderApiKeyStep = () => (
+    <View style={styles.stepContent}>
+      {serverUrl && (
+        <Surface style={styles.serverInfoCard} elevation={1}>
+          <MaterialCommunityIcons
+            name="server"
+            size={20}
+            color={colors.accent.primary}
+          />
+          <View style={styles.serverInfoTextContainer}>
+            <Text style={styles.serverInfoLabel}>Server</Text>
+            <Text style={styles.serverInfoValue} numberOfLines={1}>
+              {serverUrl}
+            </Text>
+          </View>
+        </Surface>
+      )}
+
+      <Surface style={styles.apiKeyCard} elevation={2}>
+        <MaterialCommunityIcons
+          name="key-variant"
+          size={48}
+          color={colors.accent.primary}
+        />
+        <Text style={styles.apiKeyCardTitle}>Enter Your API Key</Text>
+        <Text style={styles.apiKeyCardDescription}>
+          Your API key is stored securely on your device using encrypted storage.
+        </Text>
+      </Surface>
+
+      <View style={styles.apiKeyInputContainer}>
+        <TextInput
+          mode="outlined"
+          label="API Key"
+          value={apiKey}
+          onChangeText={setApiKey}
+          placeholder="sk-ant-..."
+          style={styles.input}
+          outlineColor={colors.surface.border}
+          activeOutlineColor={colors.accent.primary}
+          textColor={colors.text.primary}
+          placeholderTextColor={colors.text.muted}
+          autoCapitalize="none"
+          autoCorrect={false}
+          secureTextEntry={!showApiKey}
+          accessibilityLabel="API key input"
+          accessibilityHint="Enter your AutoClaude API key"
+          right={
+            <TextInput.Icon
+              icon={showApiKey ? 'eye-off' : 'eye'}
+              onPress={() => setShowApiKey(!showApiKey)}
+              accessibilityLabel={showApiKey ? 'Hide API key' : 'Show API key'}
+            />
+          }
+        />
+      </View>
+
+      <Surface style={styles.securityNote} elevation={1}>
+        <MaterialCommunityIcons
+          name="shield-lock"
+          size={20}
+          color={colors.status.success}
+        />
+        <Text style={styles.securityNoteText}>
+          Your API key is encrypted and stored locally. It is never sent to any server other than your configured AutoClaude instance.
+        </Text>
+      </Surface>
+
+      {!apiKey.trim() && (
+        <Button
+          mode="text"
+          onPress={handleNext}
+          style={styles.skipButton}
+          textColor={colors.text.muted}
+          accessibilityLabel="Skip API key setup"
+          accessibilityHint="Continue without entering an API key"
+        >
+          Skip for now
+        </Button>
       )}
     </View>
   );
@@ -440,6 +777,7 @@ export default function OnboardingScreen() {
 
       <Surface style={styles.summaryCard} elevation={2}>
         <Text style={styles.summaryTitle}>Setup Complete</Text>
+
         {serverUrl ? (
           <View style={styles.summaryRow}>
             <MaterialCommunityIcons
@@ -448,7 +786,7 @@ export default function OnboardingScreen() {
               color={colors.accent.primary}
             />
             <Text style={styles.summaryText}>
-              Connected to: {serverUrl}
+              Server: {serverUrl}
             </Text>
           </View>
         ) : (
@@ -459,7 +797,31 @@ export default function OnboardingScreen() {
               color={colors.text.muted}
             />
             <Text style={styles.summaryTextMuted}>
-              No server configured yet. You can set this up in Settings.
+              No server configured yet
+            </Text>
+          </View>
+        )}
+
+        {apiKey ? (
+          <View style={styles.summaryRow}>
+            <MaterialCommunityIcons
+              name="key"
+              size={20}
+              color={colors.status.success}
+            />
+            <Text style={styles.summaryText}>
+              API key configured
+            </Text>
+          </View>
+        ) : (
+          <View style={styles.summaryRow}>
+            <MaterialCommunityIcons
+              name="key-outline"
+              size={20}
+              color={colors.text.muted}
+            />
+            <Text style={styles.summaryTextMuted}>
+              No API key configured
             </Text>
           </View>
         )}
@@ -482,11 +844,37 @@ export default function OnboardingScreen() {
         return renderQRScannerStep();
       case 'server-discovery':
         return renderServerDiscoveryStep();
+      case 'api-key':
+        return renderApiKeyStep();
       case 'complete':
         return renderCompleteStep();
       default:
         return null;
     }
+  };
+
+  /**
+   * Get the appropriate button label for current step
+   */
+  const getButtonLabel = (): string => {
+    if (isLastStep) {
+      return isSavingApiKey ? 'Saving...' : 'Get Started';
+    }
+    return 'Continue';
+  };
+
+  /**
+   * Check if continue button should be disabled
+   */
+  const isContinueDisabled = (): boolean => {
+    if (isSavingApiKey) return true;
+
+    // On API key step, we allow skipping but show different button
+    if (step.id === 'api-key') {
+      return false;
+    }
+
+    return false;
   };
 
   return (
@@ -540,6 +928,7 @@ export default function OnboardingScreen() {
         style={styles.scrollView}
         contentContainerStyle={styles.scrollContent}
         showsVerticalScrollIndicator={false}
+        keyboardShouldPersistTaps="handled"
       >
         <Animated.View style={[styles.animatedContent, { opacity: fadeAnim }]}>
           {/* Step icon */}
@@ -577,9 +966,11 @@ export default function OnboardingScreen() {
           style={styles.nextButton}
           contentStyle={styles.nextButtonContent}
           labelStyle={styles.nextButtonLabel}
+          loading={isSavingApiKey}
+          disabled={isContinueDisabled()}
           accessibilityLabel={isLastStep ? 'Get started' : 'Continue to next step'}
         >
-          {isLastStep ? 'Get Started' : 'Continue'}
+          {getButtonLabel()}
         </Button>
       </View>
     </View>
@@ -692,7 +1083,7 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
   // QR Scanner step styles
-  scannerPlaceholder: {
+  scannerContainer: {
     width: '100%',
     aspectRatio: 1,
     maxWidth: 280,
@@ -702,6 +1093,26 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     marginBottom: spacing.lg,
     overflow: 'hidden',
+  },
+  cameraContainer: {
+    width: '100%',
+    height: '100%',
+    position: 'relative',
+  },
+  camera: {
+    width: '100%',
+    height: '100%',
+  },
+  scanOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    justifyContent: 'center',
+    alignItems: 'center',
+    backgroundColor: 'transparent',
+  },
+  closeScanButton: {
+    position: 'absolute',
+    top: spacing.sm,
+    right: spacing.sm,
   },
   scannerContent: {
     alignItems: 'center',
@@ -748,25 +1159,25 @@ const styles = StyleSheet.create({
     borderRightWidth: 3,
     borderBottomRightRadius: 8,
   },
-  scanningContainer: {
-    alignItems: 'center',
-    padding: spacing.lg,
-  },
-  scanningText: {
-    color: colors.text.primary,
-    marginTop: spacing.md,
-    fontSize: 16,
-  },
-  scanningProgress: {
-    width: 200,
-    marginTop: spacing.md,
-    height: 4,
-    borderRadius: 2,
-  },
   placeholderText: {
     color: colors.text.muted,
     marginTop: spacing.md,
     textAlign: 'center',
+  },
+  errorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.status.error + '20',
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    width: '100%',
+    gap: spacing.sm,
+  },
+  errorText: {
+    color: colors.status.error,
+    flex: 1,
+    fontSize: 14,
   },
   actionButton: {
     width: '100%',
@@ -847,6 +1258,71 @@ const styles = StyleSheet.create({
     marginLeft: spacing.sm,
     fontSize: 14,
     flex: 1,
+  },
+  // API key step styles
+  serverInfoCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.background.tertiary,
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    width: '100%',
+  },
+  serverInfoTextContainer: {
+    marginLeft: spacing.sm,
+    flex: 1,
+  },
+  serverInfoLabel: {
+    color: colors.text.muted,
+    fontSize: 12,
+  },
+  serverInfoValue: {
+    color: colors.text.primary,
+    fontSize: 14,
+    fontWeight: '500',
+  },
+  apiKeyCard: {
+    width: '100%',
+    backgroundColor: colors.background.secondary,
+    borderRadius: borderRadius.lg,
+    padding: spacing.xl,
+    alignItems: 'center',
+    marginBottom: spacing.lg,
+  },
+  apiKeyCardTitle: {
+    color: colors.text.primary,
+    fontSize: 18,
+    fontWeight: '600',
+    marginTop: spacing.md,
+  },
+  apiKeyCardDescription: {
+    color: colors.text.secondary,
+    fontSize: 14,
+    textAlign: 'center',
+    marginTop: spacing.sm,
+  },
+  apiKeyInputContainer: {
+    width: '100%',
+    marginBottom: spacing.md,
+  },
+  securityNote: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: colors.status.success + '15',
+    borderRadius: borderRadius.md,
+    padding: spacing.md,
+    width: '100%',
+    gap: spacing.sm,
+  },
+  securityNoteText: {
+    color: colors.text.secondary,
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  skipButton: {
+    marginTop: spacing.md,
   },
   // Complete step styles
   completionBadge: {
