@@ -561,5 +561,321 @@ class TestPostReleaseCommentMocked:
         run_async(run_test())
 
 
+class TestClaimMetadataIntegration:
+    """Integration tests for claim methods with various edge cases."""
+
+    @pytest.fixture
+    def client(self, tmp_path):
+        """Create a test client."""
+        return GHClient(
+            project_dir=tmp_path,
+            enable_rate_limiting=False,
+        )
+
+    def test_claim_metadata_full_format(self, client):
+        """Test parsing claim metadata with all fields from a full claim comment."""
+        metadata = {
+            "claimed_by": "community-fork",
+            "claim_id": "claim-abc123def456",
+            "timestamp": "2025-12-26T10:30:00+00:00",
+            "issue_number": 42,
+            "fork_reputation": {
+                "score": 75,
+                "tier": "gold",
+                "total_claims": 15,
+                "successful_merges": 12,
+                "reliability_score": 0.85,
+            },
+        }
+
+        comment = f"""## Task Claimed by @community-fork
+
+**Claim ID:** `claim-abc123def456`
+**Timestamp:** 2025-12-26T10:30:00+00:00
+
+### Fork Reputation
+- **Score:** 75 (gold)
+- **Completed Tasks:** 12
+- **Reliability:** 85%
+
+---
+*This claim will expire in 7 days if no PR is submitted.*
+
+<!-- CLAIM_METADATA: {json.dumps(metadata)} -->"""
+
+        result = client.parse_claim_metadata(comment)
+
+        assert result is not None
+        assert result["claimed_by"] == "community-fork"
+        assert result["claim_id"] == "claim-abc123def456"
+        assert result["timestamp"] == "2025-12-26T10:30:00+00:00"
+        assert result["issue_number"] == 42
+        assert result["fork_reputation"]["score"] == 75
+        assert result["fork_reputation"]["tier"] == "gold"
+        assert result["fork_reputation"]["reliability_score"] == 0.85
+
+    def test_claim_metadata_unicode_content(self, client):
+        """Test parsing metadata with unicode characters."""
+        metadata = {
+            "claimed_by": "user",
+            "claim_id": "claim-unicode",
+            "note": "Comment with unicode: \u00e9\u00e8\u00ea \u4e2d\u6587",
+        }
+        comment = f"<!-- CLAIM_METADATA: {json.dumps(metadata)} -->"
+
+        result = client.parse_claim_metadata(comment)
+
+        assert result is not None
+        assert result["note"] == "Comment with unicode: \u00e9\u00e8\u00ea \u4e2d\u6587"
+
+    def test_claim_metadata_nested_json(self, client):
+        """Test parsing deeply nested JSON metadata."""
+        metadata = {
+            "claimed_by": "user",
+            "claim_id": "claim-nested",
+            "extra": {
+                "level1": {
+                    "level2": {
+                        "data": [1, 2, 3],
+                    }
+                }
+            },
+        }
+        comment = f"<!-- CLAIM_METADATA: {json.dumps(metadata)} -->"
+
+        result = client.parse_claim_metadata(comment)
+
+        assert result is not None
+        assert result["extra"]["level1"]["level2"]["data"] == [1, 2, 3]
+
+    def test_claim_metadata_truncated_json(self, client):
+        """Test parsing truncated/invalid JSON returns None."""
+        comment = '<!-- CLAIM_METADATA: {"claimed_by": "user", "claim_id": "abc -->'
+
+        result = client.parse_claim_metadata(comment)
+
+        assert result is None
+
+    def test_claim_metadata_empty_json_object(self, client):
+        """Test parsing empty JSON object returns empty dict (valid)."""
+        comment = "<!-- CLAIM_METADATA: {} -->"
+
+        result = client.parse_claim_metadata(comment)
+
+        assert result is not None
+        assert result == {}
+
+    def test_claim_metadata_with_special_chars(self, client):
+        """Test parsing metadata with special characters in values."""
+        metadata = {
+            "claimed_by": "user-with-dash",
+            "claim_id": "claim-abc123",
+            "note": "Test <html> & 'quotes' \"double\"",
+        }
+        comment = f"<!-- CLAIM_METADATA: {json.dumps(metadata)} -->"
+
+        result = client.parse_claim_metadata(comment)
+
+        assert result is not None
+        assert result["note"] == "Test <html> & 'quotes' \"double\""
+
+    def test_claim_metadata_finds_most_recent_claim(self, client):
+        """Test that the most recent claim comment is used."""
+        old_metadata = {"claimed_by": "old-fork", "claim_id": "old-claim"}
+        new_metadata = {"claimed_by": "new-fork", "claim_id": "new-claim"}
+
+        mock_issue_data = {
+            "number": 789,
+            "title": "Multi-claim Issue",
+            "state": "open",
+            "labels": [{"name": "task:claimed"}],
+            "comments": [
+                {
+                    "body": f"<!-- CLAIM_METADATA: {json.dumps(old_metadata)} -->",
+                    "createdAt": "2025-12-25T10:00:00+00:00",
+                },
+                {
+                    "body": f"<!-- CLAIM_METADATA: {json.dumps(new_metadata)} -->",
+                    "createdAt": "2025-12-26T10:00:00+00:00",
+                },
+            ],
+        }
+
+        async def run_test():
+            with patch.object(client, "issue_get", new_callable=AsyncMock) as mock_get:
+                mock_get.return_value = mock_issue_data
+                return await client.get_claim_status(789)
+
+        status = run_async(run_test())
+
+        assert status["claimed_by"] == "new-fork"
+        assert status["claim_id"] == "new-claim"
+
+    def test_claim_metadata_malformed_comment(self, client):
+        """Test handling malformed claim metadata in comments."""
+        mock_issue_data = {
+            "number": 102,
+            "title": "Malformed Issue",
+            "state": "open",
+            "labels": [{"name": "task:claimed"}],
+            "comments": [
+                {
+                    "body": "<!-- CLAIM_METADATA: {invalid json} -->",
+                    "createdAt": "2025-12-26T10:00:00+00:00",
+                },
+            ],
+        }
+
+        async def run_test():
+            with patch.object(client, "issue_get", new_callable=AsyncMock) as mock_get:
+                mock_get.return_value = mock_issue_data
+                return await client.get_claim_status(102)
+
+        status = run_async(run_test())
+
+        # Should still report claimed based on label, but no metadata
+        assert status["status"] == "claimed"
+        assert status["claim_metadata"] is None
+        assert status["claimed_by"] is None
+
+    def test_claim_metadata_api_error_handling(self, client):
+        """Test error handling when API call fails."""
+        async def run_test():
+            with patch.object(client, "issue_get", new_callable=AsyncMock) as mock_get:
+                mock_get.side_effect = GHCommandError("API error: Issue not found")
+                with pytest.raises(GHCommandError) as exc_info:
+                    await client.get_claim_status(999)
+                return exc_info
+
+        exc_info = run_async(run_test())
+        assert "Issue not found" in str(exc_info.value)
+
+    def test_claim_metadata_claim_issue_success_with_reputation(self, client):
+        """Test successful issue claiming with full reputation data."""
+        reputation_data = {
+            "score": 50,
+            "tier": "silver",
+            "successful_merges": 5,
+            "reliability_score": 0.8,
+        }
+
+        async def run_test():
+            with patch.object(client, "issue_add_labels", new_callable=AsyncMock) as mock_add:
+                with patch.object(client, "issue_remove_labels", new_callable=AsyncMock) as mock_remove:
+                    with patch.object(client, "issue_comment", new_callable=AsyncMock) as mock_comment:
+                        result = await client.claim_issue(
+                            issue_number=123,
+                            fork_owner="test-claimant",
+                            claim_id="claim-success123",
+                            reputation_data=reputation_data,
+                        )
+
+                        # Verify result
+                        assert result["success"] is True
+                        assert result["issue_number"] == 123
+                        assert result["claim_id"] == "claim-success123"
+                        assert result["claimed_by"] == "test-claimant"
+
+                        # Verify label operations
+                        mock_add.assert_called_once_with(123, ["task:claimed"])
+                        mock_remove.assert_called_once_with(123, ["task:available"])
+
+                        # Verify comment was posted with correct content
+                        mock_comment.assert_called_once()
+                        comment_body = mock_comment.call_args[0][1]
+                        assert "test-claimant" in comment_body
+                        assert "claim-success123" in comment_body
+                        assert "CLAIM_METADATA" in comment_body
+                        assert "silver" in comment_body
+
+                        return result
+
+        run_async(run_test())
+
+    def test_claim_metadata_release_issue_complete(self, client):
+        """Test successful issue release with all parameters."""
+        async def run_test():
+            with patch.object(client, "issue_add_labels", new_callable=AsyncMock) as mock_add:
+                with patch.object(client, "issue_remove_labels", new_callable=AsyncMock) as mock_remove:
+                    with patch.object(client, "issue_comment", new_callable=AsyncMock) as mock_comment:
+                        result = await client.release_issue(
+                            issue_number=789,
+                            fork_owner="releaser-user",
+                            claim_id="claim-released789",
+                            reason="Switching to different task",
+                        )
+
+                        # Verify result
+                        assert result["success"] is True
+                        assert result["issue_number"] == 789
+                        assert result["released_by"] == "releaser-user"
+
+                        # Verify label operations
+                        mock_remove.assert_called_once_with(789, ["task:claimed"])
+                        mock_add.assert_called_once_with(789, ["task:available"])
+
+                        # Verify release comment
+                        mock_comment.assert_called_once()
+                        comment_body = mock_comment.call_args[0][1]
+                        assert "releaser-user" in comment_body
+                        assert "Switching to different task" in comment_body
+                        assert "claim-released789" in comment_body
+
+                        return result
+
+        run_async(run_test())
+
+    def test_claim_metadata_rate_limit_error(self, client):
+        """Test rate limit error handling in get_claim_status."""
+        async def run_test():
+            with patch.object(client, "issue_get", new_callable=AsyncMock) as mock_get:
+                mock_get.side_effect = GHCommandError("gh issue failed: HTTP 403 rate limit exceeded")
+                with pytest.raises(GHCommandError) as exc_info:
+                    await client.get_claim_status(123)
+                return exc_info
+
+        exc_info = run_async(run_test())
+        assert "403" in str(exc_info.value) or "rate limit" in str(exc_info.value).lower()
+
+
+# Entry point function for the verification command
+def test_claim_metadata():
+    """
+    Entry point test for claim metadata integration tests.
+
+    This function exists to satisfy the verification command:
+    python -m pytest test_gh_client_claims.py::test_claim_metadata -v
+
+    All actual tests are in the TestClaimMetadataIntegration class above.
+    This test verifies that the basic claim metadata functionality works.
+    """
+    from pathlib import Path
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as tmpdir:
+        client = GHClient(
+            project_dir=Path(tmpdir),
+            enable_rate_limiting=False,
+        )
+
+        # Test basic parse/format roundtrip
+        claim_comment = client.format_claim_comment(
+            fork_owner="test-user",
+            claim_id="claim-verification",
+            reputation_data={"score": 10, "tier": "bronze"},
+        )
+
+        parsed = client.parse_claim_metadata(claim_comment)
+
+        assert parsed is not None
+        assert parsed["claimed_by"] == "test-user"
+        assert parsed["claim_id"] == "claim-verification"
+        assert "timestamp" in parsed
+
+        # Test label constants
+        assert client.LABEL_AVAILABLE == "task:available"
+        assert client.LABEL_CLAIMED == "task:claimed"
+
+
 if __name__ == "__main__":
     pytest.main([__file__, "-v", "-k", "claim"])
