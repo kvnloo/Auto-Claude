@@ -19,6 +19,7 @@ import {
   Badge,
   Menu,
   Divider,
+  Snackbar,
 } from 'react-native-paper';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { useRouter } from 'expo-router';
@@ -100,6 +101,8 @@ export default function ProjectsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ProjectStatus | 'all'>('all');
   const [sortMenuVisible, setSortMenuVisible] = useState(false);
+  const [snackbarVisible, setSnackbarVisible] = useState(false);
+  const [snackbarMessage, setSnackbarMessage] = useState('');
 
   // Get filtered projects
   const filteredProjects = useMemo(() => {
@@ -170,8 +173,15 @@ export default function ProjectsScreen() {
 
   // Handle create project
   const handleCreateProject = useCallback(() => {
-    // Create project form navigation (placeholder)
-    // In Phase 5.6+, this could navigate to a project creation screen
+    // Show feedback - project creation will be implemented via desktop app
+    // Mobile app is for monitoring and control, not full project creation
+    setSnackbarMessage('Project creation is available via the desktop app');
+    setSnackbarVisible(true);
+  }, []);
+
+  // Handle snackbar dismiss
+  const handleDismissSnackbar = useCallback(() => {
+    setSnackbarVisible(false);
   }, []);
 
   // Render project item
@@ -331,6 +341,20 @@ export default function ProjectsScreen() {
         accessibilityLabel="Create new project"
         accessibilityHint="Opens project creation form"
       />
+
+      {/* Snackbar for feedback */}
+      <Snackbar
+        visible={snackbarVisible}
+        onDismiss={handleDismissSnackbar}
+        duration={3000}
+        style={styles.snackbar}
+        action={{
+          label: 'OK',
+          onPress: handleDismissSnackbar,
+        }}
+      >
+        {snackbarMessage}
+      </Snackbar>
     </View>
   );
 }
@@ -437,5 +461,9 @@ const styles = StyleSheet.create({
     right: spacing.md,
     backgroundColor: colors.accent.primary,
     ...shadows.medium,
+  },
+  // Snackbar
+  snackbar: {
+    backgroundColor: colors.background.elevated,
   },
 });

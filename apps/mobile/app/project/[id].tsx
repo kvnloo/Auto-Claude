@@ -31,7 +31,7 @@ import { colors, spacing, borderRadius, shadows } from '../../theme';
 import { useProjectStore, useCurrentProject } from '../../stores/projectStore';
 import { useTaskStore } from '../../stores/taskStore';
 import { TaskCard, EmptyState } from '../../components';
-import type { Project, Task, TaskStatus, ProjectStatus } from '../../types';
+import type { Project, Task, TaskStatus, ProjectStatus, RoadmapFeature } from '../../types';
 
 /**
  * Task status columns for displaying task counts
@@ -185,6 +185,44 @@ export default function ProjectDetailScreen() {
       .sort((a, b) => new Date(b.updatedAt).getTime() - new Date(a.updatedAt).getTime())
       .slice(0, 5);
   }, [projectTasks]);
+
+  // Generate mock roadmap items based on project
+  const roadmapItems = useMemo((): RoadmapFeature[] => {
+    if (!project) return [];
+
+    // Generate project-specific roadmap based on project name and status
+    const baseItems: RoadmapFeature[] = [
+      {
+        id: `${project.id}-roadmap-1`,
+        title: 'Core Infrastructure',
+        description: 'Set up project foundation and architecture',
+        status: 'completed',
+        priority: 'high',
+        progress: 100,
+        completedDate: project.createdAt,
+      },
+      {
+        id: `${project.id}-roadmap-2`,
+        title: project.name.includes('Mobile') ? 'Mobile UI Components' : 'Feature Implementation',
+        description: project.name.includes('Mobile')
+          ? 'Build reusable mobile components'
+          : 'Implement core features',
+        status: progress >= 0.5 ? 'completed' : 'in_progress',
+        priority: 'high',
+        progress: Math.min(Math.round(progress * 150), 100),
+      },
+      {
+        id: `${project.id}-roadmap-3`,
+        title: project.name.includes('API') ? 'API Integration' : 'Integration & Testing',
+        description: 'Connect components and ensure quality',
+        status: progress >= 0.8 ? 'in_progress' : 'planned',
+        priority: 'medium',
+        progress: progress >= 0.8 ? Math.round((progress - 0.8) * 500) : 0,
+      },
+    ];
+
+    return baseItems.slice(0, 3);
+  }, [project, progress]);
 
   // Local state
   const [refreshing, setRefreshing] = useState(false);
@@ -502,30 +540,34 @@ export default function ProjectDetailScreen() {
             action={{ label: 'Full Roadmap', onPress: handleViewRoadmap }}
           />
           <View style={styles.roadmapPreview}>
-            {/* Placeholder roadmap items */}
-            <View style={styles.roadmapItem}>
-              <View style={[styles.roadmapDot, { backgroundColor: colors.status.success }]} />
-              <View style={styles.roadmapItemContent}>
-                <Text variant="bodyMedium" style={styles.roadmapItemTitle}>Authentication System</Text>
-                <Text variant="labelSmall" style={styles.roadmapItemStatus}>Completed</Text>
-              </View>
-              <Icon name="check-circle" size={18} color={colors.status.success} />
-            </View>
-            <View style={styles.roadmapItem}>
-              <View style={[styles.roadmapDot, { backgroundColor: colors.status.info }]} />
-              <View style={styles.roadmapItemContent}>
-                <Text variant="bodyMedium" style={styles.roadmapItemTitle}>Kanban Board</Text>
-                <Text variant="labelSmall" style={styles.roadmapItemStatus}>In Progress</Text>
-              </View>
-              <Badge style={styles.roadmapBadge}>75%</Badge>
-            </View>
-            <View style={styles.roadmapItem}>
-              <View style={[styles.roadmapDot, { backgroundColor: colors.text.muted }]} />
-              <View style={styles.roadmapItemContent}>
-                <Text variant="bodyMedium" style={styles.roadmapItemTitle}>Real-time Updates</Text>
-                <Text variant="labelSmall" style={styles.roadmapItemStatus}>Planned</Text>
-              </View>
-            </View>
+            {roadmapItems.map((item) => {
+              const statusConfig = {
+                completed: { color: colors.status.success, icon: 'check-circle', label: 'Completed' },
+                in_progress: { color: colors.status.info, icon: 'progress-clock', label: 'In Progress' },
+                planned: { color: colors.text.muted, icon: 'clock-outline', label: 'Planned' },
+                cancelled: { color: colors.status.error, icon: 'close-circle', label: 'Cancelled' },
+              };
+              const config = statusConfig[item.status];
+
+              return (
+                <View
+                  key={item.id}
+                  style={styles.roadmapItem}
+                  accessibilityLabel={`${item.title}: ${config.label}, ${item.progress}% complete`}
+                >
+                  <View style={[styles.roadmapDot, { backgroundColor: config.color }]} />
+                  <View style={styles.roadmapItemContent}>
+                    <Text variant="bodyMedium" style={styles.roadmapItemTitle}>{item.title}</Text>
+                    <Text variant="labelSmall" style={styles.roadmapItemStatus}>{config.label}</Text>
+                  </View>
+                  {item.status === 'completed' ? (
+                    <Icon name={config.icon} size={18} color={config.color} />
+                  ) : item.progress > 0 ? (
+                    <Badge style={styles.roadmapBadge}>{`${item.progress}%`}</Badge>
+                  ) : null}
+                </View>
+              );
+            })}
           </View>
         </Surface>
 
