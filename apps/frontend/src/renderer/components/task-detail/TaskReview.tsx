@@ -8,7 +8,8 @@ import {
   ConflictDetailsDialog,
   LoadingMessage,
   NoWorkspaceMessage,
-  StagedInProjectMessage
+  StagedInProjectMessage,
+  ReviewChatWindow
 } from './task-review';
 
 interface TaskReviewProps {
@@ -125,6 +126,16 @@ export function TaskReview({
         />
       ) : (
         <NoWorkspaceMessage task={task} onClose={onClose} />
+      )}
+
+      {/* Review Chat Window - Ask questions about changes */}
+      {worktreeStatus?.exists && !stagedSuccess && (
+        <ReviewChatWindow
+          projectId={task.projectId}
+          task={task}
+          worktreeDiff={worktreeDiff}
+          worktreeStatus={worktreeStatus}
+        />
       )}
 
       {/* QA Feedback Section */}
