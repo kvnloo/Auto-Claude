@@ -1,0 +1,320 @@
+name: Task Release
+
+on:
+  # Trigger when a fork wants to release a claimed issue
+  workflow_dispatch:
+    inputs:
+      issue_number:
+        description: 'Issue number to release'
+        required: true
+        type: number
+      reason:
+        description: 'Reason for releasing (optional)'
+        required: false
+        type: string
+        default: 'Unable to complete'
+
+# Cancel in-progress runs for the same issue
+concurrency:
+  group: task-release-${{ github.event.inputs.issue_number || 'none' }}
+  cancel-in-progress: false
+
+permissions:
+  issues: write
+  contents: read
+
+jobs:
+  release-task:
+    name: Release Task
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Release Issue
+        uses: actions/github-script@v7
+        with:
+          retries: 3
+          retry-exempt-status-codes: 400,401,403,404,422
+          script: |
+            const { owner, repo } = context.repo;
+            const actor = context.actor;
+
+            // ═══════════════════════════════════════════════════════════════
+            // CONFIGURATION
+            // ═══════════════════════════════════════════════════════════════
+            const LABEL_AVAILABLE = 'task:available';
+            const LABEL_CLAIMED = 'task:claimed';
+
+            // ═══════════════════════════════════════════════════════════════
+            // DETERMINE ISSUE NUMBER AND REASON
+            // ═══════════════════════════════════════════════════════════════
+            let issueNumber;
+            let releaseReason;
+
+            if (context.eventName === 'workflow_dispatch') {
+              issueNumber = parseInt(context.payload.inputs.issue_number, 10);
+              releaseReason = context.payload.inputs.reason || 'Unable to complete';
+              console.log(`::group::Release via workflow_dispatch`);
+              console.log(`Issue: #${issueNumber}`);
+              console.log(`Actor: @${actor}`);
+              console.log(`Reason: ${releaseReason}`);
+            } else {
+              core.setFailed('This workflow only supports workflow_dispatch trigger');
+              return;
+            }
+
+            if (!issueNumber || isNaN(issueNumber)) {
+              core.setFailed('Invalid issue number provided');
+              return;
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // VALIDATE ACTOR (Fork Identity)
+            // ═══════════════════════════════════════════════════════════════
+            // Validate GitHub username format (alphanumeric and hyphens, 1-39 chars)
+            const usernamePattern = /^[a-zA-Z0-9](?:[a-zA-Z0-9-]{0,37}[a-zA-Z0-9])?$/;
+            if (!usernamePattern.test(actor)) {
+              core.setFailed(`Invalid GitHub username format: ${actor}`);
+              return;
+            }
+            console.log(`Actor validated: @${actor}`);
+
+            // ═══════════════════════════════════════════════════════════════
+            // FETCH ISSUE AND CHECK STATE
+            // ═══════════════════════════════════════════════════════════════
+            console.log('::endgroup::');
+            console.log(`::group::Checking issue #${issueNumber} state`);
+
+            let issue;
+            try {
+              const { data } = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: issueNumber
+              });
+              issue = data;
+            } catch (error) {
+              if (error.status === 404) {
+                core.setFailed(`Issue #${issueNumber} not found`);
+              } else {
+                core.setFailed(`Failed to fetch issue: ${error.message}`);
+              }
+              return;
+            }
+
+            console.log(`Issue state: ${issue.state}`);
+            console.log(`Issue title: ${issue.title}`);
+
+            // Extract current labels
+            const currentLabels = issue.labels.map(l => typeof l === 'string' ? l : l.name);
+            console.log(`Current labels: ${currentLabels.join(', ') || 'none'}`);
+
+            const hasAvailable = currentLabels.includes(LABEL_AVAILABLE);
+            const hasClaimed = currentLabels.includes(LABEL_CLAIMED);
+
+            // ═══════════════════════════════════════════════════════════════
+            // VALIDATE RELEASE ELIGIBILITY
+            // ═══════════════════════════════════════════════════════════════
+            if (!hasClaimed) {
+              core.setFailed(
+                `Issue #${issueNumber} is not claimed (missing '${LABEL_CLAIMED}' label). ` +
+                `Nothing to release.`
+              );
+              return;
+            }
+
+            if (hasAvailable && hasClaimed) {
+              // Conflicting labels - issue is in inconsistent state
+              console.log('Warning: Issue has both available and claimed labels (inconsistent state)');
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // FIND AND VALIDATE CLAIM OWNERSHIP
+            // ═══════════════════════════════════════════════════════════════
+            console.log('Fetching claim comments...');
+
+            const { data: comments } = await github.rest.issues.listComments({
+              owner,
+              repo,
+              issue_number: issueNumber,
+              per_page: 100
+            });
+
+            // Find most recent claim comment
+            const claimPattern = /<!--\s*CLAIM_METADATA:\s*(\{.*?\})\s*-->/s;
+            let existingClaim = null;
+            let claimComment = null;
+
+            for (const comment of [...comments].reverse()) {
+              const match = comment.body?.match(claimPattern);
+              if (match) {
+                try {
+                  existingClaim = JSON.parse(match[1]);
+                  claimComment = comment;
+                  break;
+                } catch (e) {
+                  console.log(`Failed to parse claim metadata: ${e.message}`);
+                }
+              }
+            }
+
+            if (!existingClaim) {
+              // Has claimed label but no claim comment - inconsistent state
+              console.log('Issue has task:claimed label but no claim comment found');
+              console.log('::endgroup::');
+
+              // Allow maintainers or the original claimant to release orphaned claims
+              // For safety, we'll post a warning and still allow the release
+              console.log('Warning: Releasing orphaned claim (no claim metadata found)');
+              console.log('Proceeding with release as recovery operation...');
+            } else {
+              console.log(`Claim found: @${existingClaim.claimed_by} (claim_id: ${existingClaim.claim_id})`);
+
+              // Validate ownership - only the claimant can release their own claim
+              if (existingClaim.claimed_by !== actor) {
+                console.log(`Claim owner: @${existingClaim.claimed_by}`);
+                console.log(`Release requester: @${actor}`);
+                console.log('::endgroup::');
+                core.setFailed(
+                  `Issue #${issueNumber} was claimed by @${existingClaim.claimed_by}. ` +
+                  `Only the original claimant can release their claim. ` +
+                  `If you believe this is an error, please contact a maintainer.`
+                );
+                return;
+              }
+
+              console.log('Claim ownership verified');
+            }
+
+            console.log('::endgroup::');
+
+            // ═══════════════════════════════════════════════════════════════
+            // PERFORM RELEASE (Add available first, then remove claimed)
+            // Order matters for atomicity
+            // ═══════════════════════════════════════════════════════════════
+            console.log(`::group::Releasing issue #${issueNumber}`);
+
+            // Step 1: Add task:available label
+            try {
+              await github.rest.issues.addLabels({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                labels: [LABEL_AVAILABLE]
+              });
+              console.log(`Added label: ${LABEL_AVAILABLE}`);
+            } catch (error) {
+              core.setFailed(`Failed to add available label: ${error.message}`);
+              return;
+            }
+
+            // Step 2: Remove task:claimed label
+            try {
+              await github.rest.issues.removeLabel({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                name: LABEL_CLAIMED
+              });
+              console.log(`Removed label: ${LABEL_CLAIMED}`);
+            } catch (error) {
+              // Label might already be removed - that's okay
+              if (error.status !== 404) {
+                console.log(`Warning: Could not remove claimed label: ${error.message}`);
+              }
+            }
+
+            // Step 3: Post release comment
+            const releaseTimestamp = new Date().toISOString();
+            const releaseMetadata = {
+              released_by: actor,
+              release_timestamp: releaseTimestamp,
+              issue_number: issueNumber,
+              reason: releaseReason,
+              original_claim_id: existingClaim?.claim_id || 'unknown',
+              original_claimant: existingClaim?.claimed_by || 'unknown'
+            };
+
+            const commentBody = `## Task Released by @${actor}
+
+**Timestamp:** ${releaseTimestamp}
+**Reason:** ${releaseReason}
+
+${existingClaim ? `*Original claim by @${existingClaim.claimed_by} (claim_id: \`${existingClaim.claim_id}\`) has been released.*` : '*Orphaned claim released (no original claim metadata found).*'}
+
+---
+*This task is now available for claiming by other contributors.*
+
+<!-- RELEASE_METADATA: ${JSON.stringify(releaseMetadata)} -->`;
+
+            try {
+              await github.rest.issues.createComment({
+                owner,
+                repo,
+                issue_number: issueNumber,
+                body: commentBody
+              });
+              console.log('Posted release comment');
+            } catch (error) {
+              // Comment failed - but labels are already updated
+              // Don't try to rollback, just warn
+              console.log(`Warning: Failed to post release comment: ${error.message}`);
+              console.log('Labels have been updated but comment was not posted');
+            }
+
+            // ═══════════════════════════════════════════════════════════════
+            // VERIFY RELEASE (Check final state)
+            // ═══════════════════════════════════════════════════════════════
+            console.log('::endgroup::');
+            console.log(`::group::Verifying release`);
+
+            try {
+              const { data: updatedIssue } = await github.rest.issues.get({
+                owner,
+                repo,
+                issue_number: issueNumber
+              });
+
+              const finalLabels = updatedIssue.labels.map(l => typeof l === 'string' ? l : l.name);
+              const finalHasClaimed = finalLabels.includes(LABEL_CLAIMED);
+              const finalHasAvailable = finalLabels.includes(LABEL_AVAILABLE);
+
+              console.log(`Final labels: ${finalLabels.join(', ')}`);
+
+              if (finalHasClaimed) {
+                console.log('Warning: task:claimed label still present after release');
+              }
+
+              if (!finalHasAvailable) {
+                console.log('Warning: task:available label not present after release');
+              }
+
+              if (!finalHasClaimed && finalHasAvailable) {
+                console.log('Release verified successfully');
+              }
+            } catch (error) {
+              console.log(`Warning: Could not verify release state: ${error.message}`);
+            }
+
+            console.log('::endgroup::');
+
+            // ═══════════════════════════════════════════════════════════════
+            // SUCCESS
+            // ═══════════════════════════════════════════════════════════════
+            console.log(`Successfully released issue #${issueNumber}`);
+            console.log(`Released by: @${actor}`);
+            console.log(`Reason: ${releaseReason}`);
+
+            // Write job summary
+            core.summary
+              .addHeading(`Task Released: Issue #${issueNumber}`, 2)
+              .addTable([
+                [{data: 'Field', header: true}, {data: 'Value', header: true}],
+                ['Issue', `#${issueNumber}`],
+                ['Released By', `@${actor}`],
+                ['Timestamp', releaseTimestamp],
+                ['Reason', releaseReason],
+                ['Original Claimant', existingClaim?.claimed_by || 'Unknown'],
+                ['Original Claim ID', existingClaim?.claim_id || 'Unknown']
+              ])
+              .addRaw('\n**Status:** This task is now available for other contributors to claim.\n');
+            await core.summary.write();
