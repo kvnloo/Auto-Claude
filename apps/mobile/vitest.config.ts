@@ -12,20 +12,23 @@ import { resolve } from 'path';
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'node',
+    // Use jsdom for React hook testing (renderHook from @testing-library/react)
+    environment: 'jsdom',
     include: ['__tests__/**/*.test.ts', '__tests__/**/*.spec.ts'],
     exclude: ['node_modules', 'dist', '.expo'],
     root: resolve(__dirname),
     coverage: {
       provider: 'v8',
       reporter: ['text', 'json', 'html'],
-      include: ['utils/**/*.ts', 'types/**/*.ts'],
+      include: ['utils/**/*.ts', 'types/**/*.ts', 'hooks/**/*.ts', 'api/**/*.ts'],
       exclude: ['**/*.test.ts', '**/*.spec.ts', '**/*.d.ts'],
     },
     deps: {
       // Inline dependencies that need mocking to avoid parsing issues
       inline: ['react-native'],
     },
+    // Setup files run before each test file
+    setupFiles: [],
   },
   resolve: {
     alias: {
