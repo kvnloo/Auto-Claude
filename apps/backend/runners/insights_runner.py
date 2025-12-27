@@ -203,6 +203,52 @@ def cleanup_attachments_workspace(workspace_dir: str) -> None:
         debug_error("insights_runner", f"Failed to cleanup attachments workspace: {e}")
 
 
+def create_sdk_settings_file(project_dir: str) -> Path:
+    """
+    Create a security settings file for the Claude SDK.
+
+    The SDK requires explicit permissions to access files within the sandbox.
+    Without this file, the SDK will reject file operations and exit with code 2.
+
+    Returns:
+        Path to the created settings file
+    """
+    settings = {
+        "sandbox": {"enabled": True, "autoAllowBashIfSandboxed": True},
+        "permissions": {
+            "defaultMode": "acceptEdits",
+            "allow": [
+                # Allow read operations within the project directory
+                "Read(./**)",
+                "Glob(./**)",
+                "Grep(./**)",
+            ],
+        },
+    }
+
+    settings_file = Path(project_dir) / ".claude_insights_settings.json"
+    with open(settings_file, "w") as f:
+        json.dump(settings, f, indent=2)
+
+    debug(
+        "insights_runner",
+        "Created SDK settings file",
+        path=str(settings_file),
+    )
+
+    return settings_file
+
+
+def cleanup_sdk_settings_file(settings_file: Path) -> None:
+    """Clean up the SDK settings file."""
+    if settings_file and settings_file.exists():
+        try:
+            settings_file.unlink()
+            debug("insights_runner", "Cleaned up SDK settings file", path=str(settings_file))
+        except Exception as e:
+            debug_error("insights_runner", f"Failed to cleanup SDK settings file: {e}")
+
+
 def format_attachment_context(attachments: list, file_paths: list[str], project_dir: str) -> str:
     """Format file attachments as context for the AI, with paths to actual files.
 
@@ -421,6 +467,11 @@ Current question: {full_prompt}"""
         thinking_level=thinking_level,
     )
 
+    # Create security settings file for SDK permissions
+    # This is REQUIRED for the SDK to allow file operations within the sandbox.
+    # Without it, the SDK will reject Read/Glob/Grep operations and exit with code 2.
+    settings_file = create_sdk_settings_file(project_dir)
+
     try:
         # Create Claude SDK client with appropriate settings for insights
         client = ClaudeSDKClient(
@@ -434,6 +485,7 @@ Current question: {full_prompt}"""
                 ],
                 max_turns=30,  # Allow sufficient turns for codebase exploration
                 cwd=str(project_path),
+                settings=str(settings_file.resolve()),  # Required for sandbox permissions
             )
         )
 
@@ -509,12 +561,14 @@ Current question: {full_prompt}"""
                 response_length=len(response_text),
             )
 
-        # Cleanup attachments workspace after successful completion
+        # Cleanup after successful completion
         cleanup_attachments_workspace(workspace_dir)
+        cleanup_sdk_settings_file(settings_file)
 
     except Exception as e:
-        # Cleanup attachments workspace on error too
+        # Cleanup on error too
         cleanup_attachments_workspace(workspace_dir)
+        cleanup_sdk_settings_file(settings_file)
 
         print(f"Error using Claude SDK: {e}", file=sys.stderr)
         import traceback
