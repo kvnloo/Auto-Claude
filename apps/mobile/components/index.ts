@@ -8,3 +8,11 @@ export {
   type ConnectionGuardProps,
   type OverlayRenderProps,
 } from './ConnectionGuard';
+
+export {
+  ReconnectBanner,
+  CompactReconnectBanner,
+  type ReconnectBannerProps,
+  type CompactReconnectBannerProps,
+  type BannerRenderProps,
+} from './ReconnectBanner';
