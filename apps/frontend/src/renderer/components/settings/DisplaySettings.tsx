@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { Monitor, ZoomIn, ZoomOut, RotateCcw } from 'lucide-react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../../lib/utils';
@@ -30,6 +31,12 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
 
   const currentScale = settings.uiScale ?? UI_SCALE_DEFAULT;
 
+  // Local state for slider during drag - prevents view reload on every slider movement
+  const [sliderValue, setSliderValue] = useState<number | null>(null);
+
+  // Display value: use local slider value during drag, otherwise use current scale
+  const displayScale = sliderValue ?? currentScale;
+
   const handleScaleChange = (newScale: number) => {
     // Clamp to valid range
     const clampedScale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, newScale));
@@ -39,6 +46,31 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
 
     // Apply immediately to store for live preview (triggers App.tsx useEffect)
     updateStoreSettings({ uiScale: clampedScale });
+  };
+
+  // Handle slider drag - only update local state and settings display, not the store
+  const handleSliderChange = (newScale: number) => {
+    const clampedScale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, newScale));
+    setSliderValue(clampedScale);
+    // Update settings for display but don't trigger store update (no view reload)
+    onSettingsChange({ ...settings, uiScale: clampedScale });
+  };
+
+  // Handle slider release - apply final value to store (triggers view reload)
+  const handleSliderRelease = () => {
+    if (sliderValue !== null) {
+      updateStoreSettings({ uiScale: sliderValue });
+      setSliderValue(null);
+    }
+  };
+
+  // Handle zoom button clicks - increment/decrement by step
+  const handleZoomOut = () => {
+    handleScaleChange(currentScale - UI_SCALE_STEP);
+  };
+
+  const handleZoomIn = () => {
+    handleScaleChange(currentScale + UI_SCALE_STEP);
   };
 
   const handleReset = () => {
@@ -89,9 +121,9 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
             <Label className="text-sm font-medium text-foreground">{t('scale.fineTune')}</Label>
             <div className="flex items-center gap-2">
               <span className="text-sm font-mono text-muted-foreground">
-                {currentScale}%
+                {displayScale}%
               </span>
-              {currentScale !== UI_SCALE_DEFAULT && (
+              {displayScale !== UI_SCALE_DEFAULT && (
                 <button
                   onClick={handleReset}
                   className={cn(
@@ -110,16 +142,30 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
             {t('scale.fineTuneDescription')}
           </p>
 
-          {/* Slider with icons */}
+          {/* Slider with zoom buttons */}
           <div className="flex items-center gap-3 pt-1">
-            <ZoomOut className="h-4 w-4 text-muted-foreground shrink-0" />
+            <button
+              onClick={handleZoomOut}
+              disabled={displayScale <= UI_SCALE_MIN}
+              className={cn(
+                'p-1 rounded-md transition-colors shrink-0',
+                'hover:bg-accent text-muted-foreground hover:text-foreground',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent'
+              )}
+              title={`Decrease scale by ${UI_SCALE_STEP}%`}
+            >
+              <ZoomOut className="h-4 w-4" />
+            </button>
             <input
               type="range"
               min={UI_SCALE_MIN}
               max={UI_SCALE_MAX}
               step={UI_SCALE_STEP}
-              value={currentScale}
-              onChange={(e) => handleScaleChange(parseInt(e.target.value, 10))}
+              value={displayScale}
+              onChange={(e) => handleSliderChange(parseInt(e.target.value, 10))}
+              onPointerUp={handleSliderRelease}
+              onMouseUp={handleSliderRelease}
               className={cn(
                 'flex-1 h-2 bg-muted rounded-lg appearance-none cursor-pointer',
                 'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2',
@@ -143,7 +189,19 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
                 '[&::-moz-range-thumb]:hover:scale-110'
               )}
             />
-            <ZoomIn className="h-4 w-4 text-muted-foreground shrink-0" />
+            <button
+              onClick={handleZoomIn}
+              disabled={displayScale >= UI_SCALE_MAX}
+              className={cn(
+                'p-1 rounded-md transition-colors shrink-0',
+                'hover:bg-accent text-muted-foreground hover:text-foreground',
+                'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring',
+                'disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent'
+              )}
+              title={`Increase scale by ${UI_SCALE_STEP}%`}
+            >
+              <ZoomIn className="h-4 w-4" />
+            </button>
           </div>
 
           {/* Scale markers */}
