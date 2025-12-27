@@ -75,6 +75,9 @@ export function createMockIpcHandler(app: ElectronApplication): {
   mockProjectList: (projects: unknown[]) => Promise<void>;
   mockTaskCreate: (response: unknown) => Promise<void>;
   mockTaskList: (tasks: unknown[]) => Promise<void>;
+  mockAutonomousSettings: (settings: unknown) => Promise<void>;
+  mockAutonomousQueueStatus: (status: unknown) => Promise<void>;
+  mockAutonomousQueue: (tasks: unknown[]) => Promise<void>;
 } {
   return {
     async mockProjectAdd(response: unknown) {
@@ -111,6 +114,42 @@ export function createMockIpcHandler(app: ElectronApplication): {
       await app.evaluate(
         ({ ipcMain }, tasks) => {
           ipcMain.handle('task:list', () => ({
+            success: true,
+            data: tasks
+          }));
+        },
+        tasks
+      );
+    },
+
+    async mockAutonomousSettings(settings: unknown) {
+      await app.evaluate(
+        ({ ipcMain }, settings) => {
+          ipcMain.handle('autonomous:settings:get', () => ({
+            success: true,
+            data: settings
+          }));
+        },
+        settings
+      );
+    },
+
+    async mockAutonomousQueueStatus(status: unknown) {
+      await app.evaluate(
+        ({ ipcMain }, status) => {
+          ipcMain.handle('autonomous:get-status', () => ({
+            success: true,
+            data: status
+          }));
+        },
+        status
+      );
+    },
+
+    async mockAutonomousQueue(tasks: unknown[]) {
+      await app.evaluate(
+        ({ ipcMain }, tasks) => {
+          ipcMain.handle('autonomous:get-queue', () => ({
             success: true,
             data: tasks
           }));
