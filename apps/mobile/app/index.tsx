@@ -1,12 +1,31 @@
-import { View, Text, StyleSheet } from 'react-native';
+/**
+ * Index Screen
+ * Placeholder screen shown while navigation initializes
+ * This will be replaced by tabs navigation once set up in Phase 2
+ */
 
-export default function HomeScreen() {
+import { View, StyleSheet } from 'react-native';
+import { Text, ActivityIndicator } from 'react-native-paper';
+import { colors } from '../theme';
+
+/**
+ * Main index route - shows loading state during initialization
+ */
+export default function IndexScreen() {
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>AutoClaude Mobile</Text>
-      <Text style={styles.subtitle}>
+      <Text variant="headlineMedium" style={styles.title}>
+        AutoClaude Mobile
+      </Text>
+      <Text variant="bodyMedium" style={styles.subtitle}>
         Mobile companion app for AutoClaude
       </Text>
+      <ActivityIndicator
+        animating={true}
+        color={colors.accent.primary}
+        size="large"
+        style={styles.loader}
+      />
     </View>
   );
 }
@@ -14,20 +33,22 @@ export default function HomeScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: '#1a1a2e',
+    backgroundColor: colors.background.primary,
     alignItems: 'center',
     justifyContent: 'center',
     padding: 20,
   },
   title: {
-    fontSize: 28,
-    fontWeight: 'bold',
-    color: '#ffffff',
+    color: colors.text.primary,
     marginBottom: 10,
+    fontWeight: 'bold',
   },
   subtitle: {
-    fontSize: 16,
-    color: '#a0a0a0',
+    color: colors.text.secondary,
     textAlign: 'center',
+    marginBottom: 30,
+  },
+  loader: {
+    marginTop: 20,
   },
 });
