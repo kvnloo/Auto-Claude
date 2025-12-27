@@ -23,9 +23,11 @@ export default defineConfig({
       include: ['utils/**/*.ts', 'types/**/*.ts', 'hooks/**/*.ts', 'api/**/*.ts'],
       exclude: ['**/*.test.ts', '**/*.spec.ts', '**/*.d.ts'],
     },
-    deps: {
-      // Inline dependencies that need mocking to avoid parsing issues
-      inline: ['react-native'],
+    server: {
+      deps: {
+        // Inline dependencies that need mocking to avoid parsing issues
+        inline: ['react-native'],
+      },
     },
     // Setup files run before each test file
     setupFiles: [],

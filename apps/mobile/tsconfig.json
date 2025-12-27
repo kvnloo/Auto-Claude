@@ -15,6 +15,7 @@
     "outDir": "./dist",
     "rootDir": ".",
     "noEmit": true,
+    "jsx": "react-native",
     "types": ["vitest/globals"]
   },
   "include": [

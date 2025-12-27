@@ -26,7 +26,7 @@ const {
 } = vi.hoisted(() => {
   const mockSettingsState = {
     connection: {
-      tailscaleIp: '100.64.1.1',
+      tailscaleIp: '100.64.1.1' as string | null,
       apiPort: 3001,
       isConfigured: true,
     },
@@ -209,12 +209,18 @@ function createMockConnectionStatus(
   options: {
     isReachable?: boolean;
     error?: { type: string; message: string; timestamp: number } | null;
+    lastChecked?: number | null;
   } = {}
-) {
+): {
+  state: 'disconnected' | 'connecting' | 'connected' | 'error';
+  isReachable: boolean;
+  lastChecked: number | null;
+  error: { type: string; message: string; timestamp: number } | null;
+} {
   return {
     state,
     isReachable: options.isReachable ?? (state === 'connected'),
-    lastChecked: Date.now(),
+    lastChecked: options.lastChecked ?? Date.now(),
     error: options.error ?? null,
   };
 }
@@ -1130,7 +1136,7 @@ describe('checkConnection Method', () => {
 
     const { result } = renderHook(() => useTailscaleConnection({ autoConnect: false }));
 
-    let status: ReturnType<typeof createMockConnectionStatus> | undefined;
+    let status: Awaited<ReturnType<typeof result.current.checkConnection>> | undefined;
     await act(async () => {
       status = await result.current.checkConnection();
     });
@@ -1159,7 +1165,7 @@ describe('checkConnection Method', () => {
 
     const { result } = renderHook(() => useTailscaleConnection({ autoConnect: false }));
 
-    let status: ReturnType<typeof createMockConnectionStatus> | undefined;
+    let status: Awaited<ReturnType<typeof result.current.checkConnection>> | undefined;
     await act(async () => {
       status = await result.current.checkConnection();
     });

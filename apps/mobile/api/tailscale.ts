@@ -152,7 +152,8 @@ export function configureNetInfo(options: ConfigureNetInfoOptions): string | nul
   }
 
   // Configure NetInfo with custom reachability settings
-  const config: NetInfoConfiguration = {
+  // Only provide the properties we need - NetInfo.configure accepts partial config
+  const config: Partial<NetInfoConfiguration> = {
     reachabilityUrl,
     reachabilityTest: async (response: Response): Promise<boolean> => {
       return response.status === 200;
@@ -162,7 +163,7 @@ export function configureNetInfo(options: ConfigureNetInfoOptions): string | nul
     reachabilityRequestTimeout: NETINFO_TIMEOUTS.REQUEST,
   };
 
-  NetInfo.configure(config);
+  NetInfo.configure(config as NetInfoConfiguration);
 
   isNetInfoConfigured = true;
   currentReachabilityUrl = reachabilityUrl;
