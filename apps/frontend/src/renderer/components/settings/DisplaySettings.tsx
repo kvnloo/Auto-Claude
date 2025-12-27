@@ -34,11 +34,16 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
   // Local state for pending scale changes - prevents view reload until user applies
   const [pendingScale, setPendingScale] = useState<number | null>(null);
 
+  // Track the last scale that was committed to the store (triggers view reload)
+  // This is different from currentScale which updates on every onSettingsChange call
+  const [committedScale, setCommittedScale] = useState<number>(currentScale);
+
   // Display value: use pending scale if set, otherwise use current applied scale
   const displayScale = pendingScale ?? currentScale;
 
   // Check if there are pending changes to apply
-  const hasPendingChanges = pendingScale !== null && pendingScale !== currentScale;
+  // Compare against committedScale (store-applied value), not currentScale (display value)
+  const hasPendingChanges = pendingScale !== null && pendingScale !== committedScale;
 
   // Update pending scale (for slider and +/- buttons) - doesn't trigger view reload
   const updatePendingScale = (newScale: number) => {
@@ -52,6 +57,7 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
   const handleApplyChanges = () => {
     if (pendingScale !== null) {
       updateStoreSettings({ uiScale: pendingScale });
+      setCommittedScale(pendingScale);
       setPendingScale(null);
     }
   };
@@ -61,6 +67,7 @@ export function DisplaySettings({ settings, onSettingsChange }: DisplaySettingsP
     const clampedScale = Math.max(UI_SCALE_MIN, Math.min(UI_SCALE_MAX, newScale));
     onSettingsChange({ ...settings, uiScale: clampedScale });
     updateStoreSettings({ uiScale: clampedScale });
+    setCommittedScale(clampedScale);
     setPendingScale(null);
   };
 
