@@ -20,43 +20,114 @@ export {
   TAILSCALE_IP_PATTERN,
 } from './settings';
 
-// API types
+// API types - Health & Monitoring
 export type {
-  // Health check types
   HealthStatus,
   HealthCheckResponse,
-  // Version types
   VersionResponse,
-  // Error types
-  ApiErrorResponse,
-  ApiResponseWrapper,
-  // Status types
-  ComponentStatus,
+  SystemStatusResponse,
   ApiComponentStatus,
   ProjectStoreStatus,
+  ComponentStatus,
   MemoryUsage,
-  SystemStatusResponse,
-  // Connection types
+} from './api';
+
+// API types - Error Responses
+export type {
+  ApiErrorResponse,
+  ApiResponseWrapper,
+} from './api';
+
+// API types - Connection
+export type {
   ApiConnectionState,
   ConnectionStatus,
-  // Request/Response types
   HttpMethod,
   ApiEndpoint,
-  // Task types
+} from './api';
+
+// API types - Task Enums & Status
+export type {
   TaskStatus,
+  TaskReviewReason,
   SubtaskStatus,
   ExecutionPhase,
+  TaskCategory,
+  TaskComplexity,
+  TaskImpact,
+  TaskPriority,
+  TaskLocation,
+} from './api';
+
+// API types - Subtask & QA
+export type {
+  SubtaskVerification,
+  Subtask,
+  QAIssueSeverity,
+  QAReportStatus,
+  QAIssue,
+  QAReport,
+  ExecutionProgress,
+  TaskMetadata,
+} from './api';
+
+// API types - Task & Project
+export type {
   TaskSummary,
-  ListTasksResponse,
+  Task,
+  MemoryBackend,
+  NotificationSettings,
+  ProjectSettings,
   ProjectSummary,
-  ListProjectsResponse,
-  // Pagination types
+  Project,
+} from './api';
+
+// API types - Task Request/Response
+export type {
+  CreateTaskRequest,
+  CreateTaskResponse,
+  ListTasksQuery,
+  ListTasksResponse,
+  GetTaskResponse,
+  UpdateTaskRequest,
+  TaskStartOptions,
+  StartTaskRequest,
+  SubmitReviewRequest,
+  TaskActionResponse,
+} from './api';
+
+// API types - Project Request/Response
+export type {
+  AddProjectRequest,
+  AddProjectResponse,
+  GetProjectResponse,
+  UpdateProjectSettingsRequest,
+} from './api';
+
+// API types - WebSocket
+export type {
+  WebSocketMessageType,
+  WebSocketMessage,
+  ImplementationPlanPhase,
+  ImplementationPlan,
+  TaskProgressPayload,
+  TaskStatusChangePayload,
+  TaskLogPayload,
+  TaskErrorPayload,
+  TaskExecutionProgressPayload,
+  SubscribePayload,
+  UnsubscribePayload,
+  WebSocketErrorPayload,
+} from './api';
+
+// API types - Pagination
+export type {
   PaginationParams,
   PaginatedResponse,
 } from './api';
 
+// API type guards
 export {
-  // Type guards
   isApiErrorResponse,
   isHealthy,
   isDegraded,

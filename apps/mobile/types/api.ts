@@ -311,13 +311,18 @@ export type ApiEndpoint =
   | `/api/projects/${string}/settings`;
 
 // ============================================
-// Task API Types (for future use)
+// Task Status & Enum Types
 // ============================================
 
 /**
  * Task status enum values
  */
 export type TaskStatus = 'backlog' | 'in_progress' | 'ai_review' | 'human_review' | 'done';
+
+/**
+ * Task review reason
+ */
+export type TaskReviewReason = 'completed' | 'errors' | 'qa_rejected' | 'plan_review';
 
 /**
  * Subtask status enum values
@@ -328,6 +333,162 @@ export type SubtaskStatus = 'pending' | 'in_progress' | 'completed' | 'failed';
  * Execution phase enum values
  */
 export type ExecutionPhase = 'idle' | 'planning' | 'coding' | 'qa_review' | 'qa_fixing' | 'complete' | 'failed';
+
+/**
+ * Task category values
+ */
+export type TaskCategory =
+  | 'feature'
+  | 'bug_fix'
+  | 'refactoring'
+  | 'documentation'
+  | 'security'
+  | 'performance'
+  | 'ui_ux'
+  | 'infrastructure'
+  | 'testing';
+
+/**
+ * Task complexity values
+ */
+export type TaskComplexity = 'trivial' | 'small' | 'medium' | 'large' | 'complex';
+
+/**
+ * Task impact values
+ */
+export type TaskImpact = 'low' | 'medium' | 'high' | 'critical';
+
+/**
+ * Task priority values
+ */
+export type TaskPriority = 'low' | 'medium' | 'high' | 'urgent';
+
+/**
+ * Task location in repository
+ */
+export type TaskLocation = 'main' | 'worktree';
+
+// ============================================
+// Subtask Types
+// ============================================
+
+/**
+ * Subtask verification definition
+ */
+export interface SubtaskVerification {
+  type?: 'command' | 'browser';
+  run?: string;
+  scenario?: string;
+}
+
+/**
+ * Full subtask definition
+ */
+export interface Subtask {
+  id: string;
+  title: string;
+  description: string;
+  status: SubtaskStatus;
+  files: string[];
+  verification?: SubtaskVerification;
+}
+
+// ============================================
+// QA Types
+// ============================================
+
+/**
+ * QA issue severity
+ */
+export type QAIssueSeverity = 'critical' | 'major' | 'minor';
+
+/**
+ * QA report status
+ */
+export type QAReportStatus = 'passed' | 'failed' | 'pending';
+
+/**
+ * QA issue definition
+ */
+export interface QAIssue {
+  id: string;
+  severity: QAIssueSeverity;
+  description: string;
+  file?: string;
+  line?: number;
+}
+
+/**
+ * QA report definition
+ */
+export interface QAReport {
+  status: QAReportStatus;
+  issues: QAIssue[];
+  timestamp: string;
+}
+
+// ============================================
+// Execution Progress Types
+// ============================================
+
+/**
+ * Execution progress information
+ */
+export interface ExecutionProgress {
+  phase: ExecutionPhase;
+  phaseProgress: number;
+  overallProgress: number;
+  currentSubtask?: string;
+  message?: string;
+  startedAt?: string;
+}
+
+// ============================================
+// Task Metadata Types
+// ============================================
+
+/**
+ * Task metadata with all optional fields
+ */
+export interface TaskMetadata {
+  sourceType?: 'ideation' | 'manual' | 'imported' | 'insights' | 'roadmap' | 'linear' | 'github';
+  ideationType?: string;
+  ideaId?: string;
+  featureId?: string;
+  linearIssueId?: string;
+  linearIdentifier?: string;
+  linearUrl?: string;
+  githubIssueNumber?: number;
+  githubIssueNumbers?: number[];
+  githubUrl?: string;
+  githubBatchTheme?: string;
+  category?: TaskCategory;
+  complexity?: TaskComplexity;
+  impact?: TaskImpact;
+  priority?: TaskPriority;
+  rationale?: string;
+  problemSolved?: string;
+  targetAudience?: string;
+  affectedFiles?: string[];
+  dependencies?: string[];
+  acceptanceCriteria?: string[];
+  estimatedEffort?: TaskComplexity;
+  securitySeverity?: 'low' | 'medium' | 'high' | 'critical';
+  performanceCategory?: string;
+  uiuxCategory?: string;
+  codeQualitySeverity?: 'suggestion' | 'minor' | 'major' | 'critical';
+  requireReviewBeforeCoding?: boolean;
+  model?: 'haiku' | 'sonnet' | 'opus';
+  thinkingLevel?: 'none' | 'low' | 'medium' | 'high' | 'ultrathink';
+  isAutoProfile?: boolean;
+  baseBranch?: string;
+  archivedAt?: string;
+  archivedInVersion?: string;
+}
+
+// ============================================
+// Full Task Type
+// ============================================
 
 /**
  * Basic task representation for list views
@@ -343,14 +504,59 @@ export interface TaskSummary {
 }
 
 /**
- * List tasks response from GET /api/tasks
+ * Full task object from the API
+ * GET /api/tasks/:id
  */
-export interface ListTasksResponse {
-  tasks: TaskSummary[];
+export interface Task extends TaskSummary {
+  description: string;
+  reviewReason?: TaskReviewReason;
+  subtasks: Subtask[];
+  qaReport?: QAReport;
+  logs: string[];
+  metadata?: TaskMetadata;
+  executionProgress?: ExecutionProgress;
+  releasedInVersion?: string;
+  stagedInMainProject?: boolean;
+  stagedAt?: string;
+  location?: TaskLocation;
+  specsPath?: string;
+}
+
+// ============================================
+// Project Types
+// ============================================
+
+/**
+ * Memory backend type
+ */
+export type MemoryBackend = 'graphiti' | 'file';
+
+/**
+ * Notification settings
+ */
+export interface NotificationSettings {
+  onTaskComplete: boolean;
+  onTaskFailed: boolean;
+  onReviewNeeded: boolean;
+  sound: boolean;
 }
 
 /**
- * Basic project representation
+ * Project settings
+ */
+export interface ProjectSettings {
+  model: string;
+  memoryBackend: MemoryBackend;
+  linearSync: boolean;
+  linearTeamId?: string;
+  notifications: NotificationSettings;
+  graphitiMcpEnabled: boolean;
+  graphitiMcpUrl?: string;
+  mainBranch?: string;
+}
+
+/**
+ * Basic project representation for list views
  */
 export interface ProjectSummary {
   id: string;
@@ -361,10 +567,276 @@ export interface ProjectSummary {
 }
 
 /**
+ * Full project object from the API
+ * GET /api/projects/:id
+ */
+export interface Project extends ProjectSummary {
+  autoBuildPath: string;
+  settings: ProjectSettings;
+}
+
+// ============================================
+// Task API Request/Response Types
+// ============================================
+
+/**
+ * Create task request body
+ * POST /api/tasks
+ */
+export interface CreateTaskRequest {
+  projectId: string;
+  title: string;
+  description: string;
+  metadata?: TaskMetadata;
+}
+
+/**
+ * Create task response
+ */
+export interface CreateTaskResponse {
+  task: Task;
+}
+
+/**
+ * List tasks query parameters
+ * GET /api/tasks
+ */
+export interface ListTasksQuery {
+  projectId: string;
+  status?: TaskStatus;
+}
+
+/**
+ * List tasks response from GET /api/tasks
+ */
+export interface ListTasksResponse {
+  tasks: Task[];
+}
+
+/**
+ * Get task response
+ * GET /api/tasks/:id
+ */
+export interface GetTaskResponse {
+  task: Task;
+}
+
+/**
+ * Update task request body
+ * PATCH /api/tasks/:id
+ */
+export interface UpdateTaskRequest {
+  title?: string;
+  description?: string;
+}
+
+/**
+ * Task start options
+ */
+export interface TaskStartOptions {
+  parallel?: boolean;
+  workers?: number;
+  model?: string;
+  baseBranch?: string;
+}
+
+/**
+ * Start task request body
+ * POST /api/tasks/:id/start
+ */
+export interface StartTaskRequest {
+  options?: TaskStartOptions;
+}
+
+/**
+ * Submit review request body
+ * POST /api/tasks/:id/review
+ */
+export interface SubmitReviewRequest {
+  approved: boolean;
+  feedback?: string;
+}
+
+/**
+ * Task action response (start/stop/review)
+ */
+export interface TaskActionResponse {
+  message: string;
+  taskId?: string;
+}
+
+// ============================================
+// Project API Request/Response Types
+// ============================================
+
+/**
+ * Add project request body
+ * POST /api/projects
+ */
+export interface AddProjectRequest {
+  projectPath: string;
+}
+
+/**
+ * Add project response
+ */
+export interface AddProjectResponse {
+  project: Project;
+}
+
+/**
  * List projects response from GET /api/projects
  */
 export interface ListProjectsResponse {
-  projects: ProjectSummary[];
+  projects: Project[];
+}
+
+/**
+ * Get project response
+ * GET /api/projects/:id
+ */
+export interface GetProjectResponse {
+  project: Project;
+}
+
+/**
+ * Update project settings request body
+ * PATCH /api/projects/:id/settings
+ */
+export interface UpdateProjectSettingsRequest {
+  settings: Partial<ProjectSettings>;
+}
+
+// ============================================
+// WebSocket Message Types
+// ============================================
+
+/**
+ * WebSocket message types for real-time events
+ */
+export type WebSocketMessageType =
+  | 'task-progress'
+  | 'task-status-change'
+  | 'task-log'
+  | 'task-error'
+  | 'task-execution-progress'
+  | 'subscribe'
+  | 'unsubscribe'
+  | 'ping'
+  | 'pong'
+  | 'error';
+
+/**
+ * Base WebSocket message structure
+ */
+export interface WebSocketMessage<T = unknown> {
+  type: WebSocketMessageType;
+  payload?: T;
+  timestamp: string;
+}
+
+/**
+ * Implementation plan phase
+ */
+export interface ImplementationPlanPhase {
+  phase: number;
+  name: string;
+  type: string;
+  subtasks: {
+    id: string;
+    description: string;
+    status: SubtaskStatus;
+    verification?: SubtaskVerification;
+  }[];
+  depends_on?: number[];
+}
+
+/**
+ * Implementation plan from the task
+ */
+export interface ImplementationPlan {
+  feature?: string;
+  title?: string;
+  workflow_type: string;
+  services_involved?: string[];
+  phases: ImplementationPlanPhase[];
+  final_acceptance: string[];
+  created_at: string;
+  updated_at: string;
+  spec_file: string;
+  status?: TaskStatus;
+  planStatus?: string;
+  recoveryNote?: string;
+  description?: string;
+}
+
+/**
+ * Task progress WebSocket event payload
+ */
+export interface TaskProgressPayload {
+  taskId: string;
+  plan: ImplementationPlan;
+}
+
+/**
+ * Task status change WebSocket event payload
+ */
+export interface TaskStatusChangePayload {
+  taskId: string;
+  status: TaskStatus;
+  previousStatus?: TaskStatus;
+}
+
+/**
+ * Task log WebSocket event payload
+ */
+export interface TaskLogPayload {
+  taskId: string;
+  log: string;
+  timestamp: string;
+}
+
+/**
+ * Task error WebSocket event payload
+ */
+export interface TaskErrorPayload {
+  taskId: string;
+  error: string;
+  timestamp: string;
+}
+
+/**
+ * Task execution progress WebSocket event payload
+ */
+export interface TaskExecutionProgressPayload {
+  taskId: string;
+  progress: ExecutionProgress;
+}
+
+/**
+ * Subscribe message payload - client requests to subscribe to task events
+ */
+export interface SubscribePayload {
+  taskIds?: string[];
+  projectId?: string;
+  events?: WebSocketMessageType[];
+}
+
+/**
+ * Unsubscribe message payload - client requests to unsubscribe from events
+ */
+export interface UnsubscribePayload {
+  taskIds?: string[];
+  projectId?: string;
+  events?: WebSocketMessageType[];
+}
+
+/**
+ * WebSocket error payload
+ */
+export interface WebSocketErrorPayload {
+  code: string;
+  message: string;
 }
 
 // ============================================
