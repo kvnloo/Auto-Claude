@@ -142,7 +142,7 @@ vi.mock('electron', () => {
 // Mock the backend-discovery module
 const mockDiscoverExistingBackend = vi.fn();
 const mockCleanupPortFile = vi.fn(() => true);
-const mockWritePortFile = vi.fn(() => true);
+const mockWritePortFile = vi.fn((_port: number) => true);
 
 vi.mock('../api/backend-discovery', () => ({
   discoverExistingBackend: () => mockDiscoverExistingBackend(),
@@ -153,7 +153,9 @@ vi.mock('../api/backend-discovery', () => ({
 }));
 
 // Mock client-mode module
-const mockInitializeClientMode = vi.fn(() => ({ success: true }));
+const mockInitializeClientMode = vi.fn(
+  (_backendInfo: unknown, _options?: unknown) => ({ success: true } as { success: boolean; error?: string })
+);
 const mockShutdownClientMode = vi.fn(() => ({ success: true, eventsReceived: 0, uptimeMs: 0 }));
 const mockIsClientModeActive = vi.fn(() => false);
 const mockGetClientModeStatus = vi.fn(() => ({
@@ -166,7 +168,8 @@ const mockGetClientModeStatus = vi.fn(() => ({
 }));
 
 vi.mock('../api/client-mode', () => ({
-  initializeClientMode: (...args: unknown[]) => mockInitializeClientMode(...args),
+  initializeClientMode: (backendInfo: unknown, options?: unknown) =>
+    mockInitializeClientMode(backendInfo, options),
   shutdownClientMode: () => mockShutdownClientMode(),
   isClientModeActive: () => mockIsClientModeActive(),
   getClientModeStatus: () => mockGetClientModeStatus(),
@@ -175,12 +178,16 @@ vi.mock('../api/client-mode', () => ({
 }));
 
 // Mock startup module
-const mockInitializeApiServer = vi.fn(() => Promise.resolve({ success: true, skipped: false }));
+const mockInitializeApiServer = vi.fn(
+  (_agentManager?: unknown, _fileWatcher?: unknown, _options?: unknown) =>
+    Promise.resolve({ success: true, skipped: false })
+);
 const mockShutdownApiServer = vi.fn(() => Promise.resolve({ success: true }));
 const mockIsApiServerEnabled = vi.fn(() => false);
 
 vi.mock('../api/startup', () => ({
-  initializeApiServer: (...args: unknown[]) => mockInitializeApiServer(...args),
+  initializeApiServer: (agentManager?: unknown, fileWatcher?: unknown, options?: unknown) =>
+    mockInitializeApiServer(agentManager, fileWatcher, options),
   shutdownApiServer: () => mockShutdownApiServer(),
   isApiServerEnabled: () => mockIsApiServerEnabled(),
 }));
