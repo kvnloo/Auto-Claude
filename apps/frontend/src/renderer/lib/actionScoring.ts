@@ -191,7 +191,7 @@ export function countFilesChanged(action: TaskLogEntry): number {
   const combined = input + detail;
 
   // Count file path patterns (simplified heuristic)
-  const filePatterns = combined.match(/[\/\\][\w\-\.]+\.[a-z]{1,4}/gi) ?? [];
+  const filePatterns = combined.match(/[/\\][\w\-.]+\.[a-z]{1,4}/gi) ?? [];
 
   // Cap at 3 for scoring purposes (to prevent outliers)
   return Math.min(filePatterns.length, 3);
