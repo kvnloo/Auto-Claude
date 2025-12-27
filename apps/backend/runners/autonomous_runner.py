@@ -31,6 +31,10 @@ Events (JSON on stdout):
     {"event": "task_started", "task": {...}}
     {"event": "task_completed", "task": {...}, "spec_id": "...", "pr_url": "..."}
     {"event": "task_failed", "task": {...}, "error": "..."}
+    {"event": "status_synced", "task_id": "...", "source": "github_issue|roadmap_feature",
+        "from_status": "...", "to_status": "..."}
+    {"event": "status_sync_failed", "operation": "...", "error": "..."}
+    {"event": "status_sync_rate_limited", "operation": "...", "error": "..."}
     {"event": "guardrail_triggered", "reason": "max_failures", "details": {...}}
     {"event": "paused", "reason": "..."}
     {"event": "stopped", "stats": {...}}
@@ -460,8 +464,11 @@ class AutonomousRunner:
                 self.completed_task_ids.add(task.id)
                 self.stats.record_success()
 
-                # Update external status
+                # Update external status (bidirectional sync)
                 await self._update_task_status_completed(task, spec_id)
+
+                # Add completion comment to GitHub issue
+                await self._add_comment_on_completion(task, spec_id=spec_id, pr_url=pr_url)
 
                 emit_event(
                     "task_completed",
@@ -475,8 +482,11 @@ class AutonomousRunner:
                 task.mark_failed("Pipeline execution failed")
                 self.stats.record_failure()
 
-                # Update external status
+                # Update external status (bidirectional sync)
                 await self._update_task_status_failed(task)
+
+                # Add failure comment to GitHub issue
+                await self._add_comment_on_failure(task)
 
                 emit_event(
                     "task_failed",
@@ -490,8 +500,11 @@ class AutonomousRunner:
             task.mark_failed(str(e))
             self.stats.record_failure()
 
-            # Update external status
+            # Update external status (bidirectional sync)
             await self._update_task_status_failed(task)
+
+            # Add failure comment to GitHub issue
+            await self._add_comment_on_failure(task)
 
             emit_event(
                 "task_failed",
@@ -614,78 +627,378 @@ class AutonomousRunner:
     # Status Synchronization
     # =========================================================================
 
-    async def _update_task_status_in_progress(self, task: AutonomousTask) -> None:
+    async def _sync_status_with_retry(
+        self,
+        operation: str,
+        sync_func,
+        *args,
+        max_retries: int = 2,
+        retry_delay: float = 1.0,
+        **kwargs,
+    ) -> bool:
+        """
+        Execute a status sync operation with retry logic.
+
+        Args:
+            operation: Description of the operation for logging
+            sync_func: The sync function to call (can be async or sync)
+            *args: Positional arguments for sync_func
+            max_retries: Maximum retry attempts
+            retry_delay: Delay between retries in seconds
+            **kwargs: Keyword arguments for sync_func
+
+        Returns:
+            True if sync succeeded, False otherwise
+        """
+        last_error = None
+        for attempt in range(max_retries + 1):
+            try:
+                # Check if function is async or sync
+                import asyncio
+                if asyncio.iscoroutinefunction(sync_func):
+                    await sync_func(*args, **kwargs)
+                else:
+                    sync_func(*args, **kwargs)
+                return True
+            except RateLimitExceeded as e:
+                # Don't retry on rate limit - propagate up
+                logger.warning(f"Rate limit exceeded during {operation}: {e}")
+                emit_event(
+                    "status_sync_rate_limited",
+                    operation=operation,
+                    error=str(e),
+                )
+                raise
+            except Exception as e:
+                last_error = e
+                if attempt < max_retries:
+                    logger.debug(
+                        f"Retry {attempt + 1}/{max_retries} for {operation}: {e}"
+                    )
+                    await asyncio.sleep(retry_delay * (attempt + 1))  # Exponential backoff
+                else:
+                    logger.warning(f"Failed {operation} after {max_retries + 1} attempts: {e}")
+
+        # Emit failure event
+        emit_event(
+            "status_sync_failed",
+            operation=operation,
+            error=str(last_error) if last_error else "Unknown error",
+        )
+        return False
+
+    async def _update_task_status_in_progress(self, task: AutonomousTask) -> bool:
         """
         Update external status when task starts.
 
         For GitHub issues: Remove 'ready' label, add 'in-progress' label
         For Roadmap features: Update status to 'in_progress'
+
+        Returns:
+            True if sync succeeded, False otherwise
         """
-        try:
-            if task.source == TaskSource.GITHUB_ISSUE:
-                issue_number = int(task.external_id) if task.external_id else None
-                if issue_number:
-                    await self.issue_fetcher.mark_in_progress(issue_number)
-                    logger.info(f"Updated GitHub issue #{issue_number} to in-progress")
+        if task.source == TaskSource.GITHUB_ISSUE:
+            issue_number = int(task.external_id) if task.external_id else None
+            if not issue_number:
+                logger.warning(f"No issue number for task {task.id}, skipping status sync")
+                return False
 
-            elif task.source == TaskSource.ROADMAP_FEATURE:
-                feature_id = task.external_id
-                if feature_id:
-                    self.feature_fetcher.mark_in_progress(feature_id)
-                    logger.info(f"Updated roadmap feature '{feature_id}' to in_progress")
+            success = await self._sync_status_with_retry(
+                operation=f"mark GitHub issue #{issue_number} in-progress",
+                sync_func=self.issue_fetcher.mark_in_progress,
+                issue_number=issue_number,
+            )
 
-        except Exception as e:
-            logger.warning(f"Failed to update task status to in-progress: {e}")
+            if success:
+                logger.info(f"Updated GitHub issue #{issue_number}: ready -> in-progress")
+                emit_event(
+                    "status_synced",
+                    task_id=task.id,
+                    source="github_issue",
+                    external_id=str(issue_number),
+                    from_status="ready",
+                    to_status="in-progress",
+                )
+            return success
+
+        elif task.source == TaskSource.ROADMAP_FEATURE:
+            feature_id = task.external_id
+            if not feature_id:
+                logger.warning(f"No feature ID for task {task.id}, skipping status sync")
+                return False
+
+            success = await self._sync_status_with_retry(
+                operation=f"mark roadmap feature '{feature_id}' in_progress",
+                sync_func=self.feature_fetcher.mark_in_progress,
+                feature_id=feature_id,
+            )
+
+            if success:
+                logger.info(f"Updated roadmap feature '{feature_id}': planned -> in_progress")
+                emit_event(
+                    "status_synced",
+                    task_id=task.id,
+                    source="roadmap_feature",
+                    external_id=feature_id,
+                    from_status="planned",
+                    to_status="in_progress",
+                )
+            return success
+
+        return False
 
     async def _update_task_status_completed(
         self,
         task: AutonomousTask,
         spec_id: str | None = None,
-    ) -> None:
+    ) -> bool:
         """
         Update external status when task completes.
 
         For GitHub issues: Remove 'in-progress' label, add 'completed' label
         For Roadmap features: Update status to 'done'
+
+        Returns:
+            True if sync succeeded, False otherwise
         """
-        try:
-            if task.source == TaskSource.GITHUB_ISSUE:
-                issue_number = int(task.external_id) if task.external_id else None
-                if issue_number:
-                    await self.issue_fetcher.mark_completed(issue_number)
-                    logger.info(f"Updated GitHub issue #{issue_number} to completed")
+        if task.source == TaskSource.GITHUB_ISSUE:
+            issue_number = int(task.external_id) if task.external_id else None
+            if not issue_number:
+                logger.warning(f"No issue number for task {task.id}, skipping status sync")
+                return False
 
-            elif task.source == TaskSource.ROADMAP_FEATURE:
-                feature_id = task.external_id
-                if feature_id:
-                    self.feature_fetcher.mark_done(feature_id, linked_spec_id=spec_id)
-                    logger.info(f"Updated roadmap feature '{feature_id}' to done")
+            success = await self._sync_status_with_retry(
+                operation=f"mark GitHub issue #{issue_number} completed",
+                sync_func=self.issue_fetcher.mark_completed,
+                issue_number=issue_number,
+            )
 
-        except Exception as e:
-            logger.warning(f"Failed to update task status to completed: {e}")
+            if success:
+                logger.info(f"Updated GitHub issue #{issue_number}: in-progress -> completed")
+                emit_event(
+                    "status_synced",
+                    task_id=task.id,
+                    source="github_issue",
+                    external_id=str(issue_number),
+                    from_status="in-progress",
+                    to_status="completed",
+                    spec_id=spec_id,
+                )
+            return success
 
-    async def _update_task_status_failed(self, task: AutonomousTask) -> None:
+        elif task.source == TaskSource.ROADMAP_FEATURE:
+            feature_id = task.external_id
+            if not feature_id:
+                logger.warning(f"No feature ID for task {task.id}, skipping status sync")
+                return False
+
+            success = await self._sync_status_with_retry(
+                operation=f"mark roadmap feature '{feature_id}' done",
+                sync_func=self.feature_fetcher.mark_done,
+                feature_id=feature_id,
+                linked_spec_id=spec_id,
+            )
+
+            if success:
+                logger.info(f"Updated roadmap feature '{feature_id}': in_progress -> done")
+                emit_event(
+                    "status_synced",
+                    task_id=task.id,
+                    source="roadmap_feature",
+                    external_id=feature_id,
+                    from_status="in_progress",
+                    to_status="done",
+                    spec_id=spec_id,
+                )
+            return success
+
+        return False
+
+    async def _update_task_status_failed(self, task: AutonomousTask) -> bool:
         """
         Update external status when task fails.
 
         For GitHub issues: Remove 'in-progress' label, add 'failed' label
         For Roadmap features: Update status to 'under_review'
+
+        Returns:
+            True if sync succeeded, False otherwise
         """
+        if task.source == TaskSource.GITHUB_ISSUE:
+            issue_number = int(task.external_id) if task.external_id else None
+            if not issue_number:
+                logger.warning(f"No issue number for task {task.id}, skipping status sync")
+                return False
+
+            success = await self._sync_status_with_retry(
+                operation=f"mark GitHub issue #{issue_number} failed",
+                sync_func=self.issue_fetcher.mark_failed,
+                issue_number=issue_number,
+            )
+
+            if success:
+                logger.info(f"Updated GitHub issue #{issue_number}: in-progress -> failed")
+                emit_event(
+                    "status_synced",
+                    task_id=task.id,
+                    source="github_issue",
+                    external_id=str(issue_number),
+                    from_status="in-progress",
+                    to_status="failed",
+                    error=task.error_message,
+                )
+            return success
+
+        elif task.source == TaskSource.ROADMAP_FEATURE:
+            feature_id = task.external_id
+            if not feature_id:
+                logger.warning(f"No feature ID for task {task.id}, skipping status sync")
+                return False
+
+            success = await self._sync_status_with_retry(
+                operation=f"mark roadmap feature '{feature_id}' under_review",
+                sync_func=self.feature_fetcher.mark_under_review,
+                feature_id=feature_id,
+            )
+
+            if success:
+                logger.info(f"Updated roadmap feature '{feature_id}': in_progress -> under_review")
+                emit_event(
+                    "status_synced",
+                    task_id=task.id,
+                    source="roadmap_feature",
+                    external_id=feature_id,
+                    from_status="in_progress",
+                    to_status="under_review",
+                    error=task.error_message,
+                )
+            return success
+
+        return False
+
+    async def _add_comment_on_completion(
+        self,
+        task: AutonomousTask,
+        spec_id: str | None = None,
+        pr_url: str | None = None,
+    ) -> bool:
+        """
+        Add a completion comment to GitHub issue with details.
+
+        Args:
+            task: The completed task
+            spec_id: The generated spec ID
+            pr_url: The PR URL if created
+
+        Returns:
+            True if comment was added successfully
+        """
+        if task.source != TaskSource.GITHUB_ISSUE:
+            return False
+
+        issue_number = int(task.external_id) if task.external_id else None
+        if not issue_number:
+            return False
+
+        # Build comment body
+        lines = [
+            "## 🤖 Auto Claude - Task Completed",
+            "",
+            f"This issue has been automatically processed by Auto Claude.",
+            "",
+        ]
+
+        if spec_id:
+            lines.extend([
+                f"**Specification:** `{spec_id}`",
+                "",
+            ])
+
+        if pr_url:
+            lines.extend([
+                f"**Pull Request:** {pr_url}",
+                "",
+            ])
+
+        if task.get_duration_ms():
+            duration_mins = task.get_duration_ms() / 60000
+            lines.extend([
+                f"**Duration:** {duration_mins:.1f} minutes",
+                "",
+            ])
+
+        lines.extend([
+            "---",
+            "_Please review the changes and merge when ready._",
+        ])
+
+        comment_body = "\n".join(lines)
+
         try:
-            if task.source == TaskSource.GITHUB_ISSUE:
-                issue_number = int(task.external_id) if task.external_id else None
-                if issue_number:
-                    await self.issue_fetcher.mark_failed(issue_number)
-                    logger.info(f"Updated GitHub issue #{issue_number} to failed")
-
-            elif task.source == TaskSource.ROADMAP_FEATURE:
-                feature_id = task.external_id
-                if feature_id:
-                    self.feature_fetcher.mark_under_review(feature_id)
-                    logger.info(f"Updated roadmap feature '{feature_id}' to under_review")
-
+            await self.issue_fetcher.add_comment(issue_number, comment_body)
+            logger.info(f"Added completion comment to GitHub issue #{issue_number}")
+            return True
         except Exception as e:
-            logger.warning(f"Failed to update task status to failed: {e}")
+            logger.warning(f"Failed to add comment to issue #{issue_number}: {e}")
+            return False
+
+    async def _add_comment_on_failure(
+        self,
+        task: AutonomousTask,
+    ) -> bool:
+        """
+        Add a failure comment to GitHub issue with error details.
+
+        Args:
+            task: The failed task
+
+        Returns:
+            True if comment was added successfully
+        """
+        if task.source != TaskSource.GITHUB_ISSUE:
+            return False
+
+        issue_number = int(task.external_id) if task.external_id else None
+        if not issue_number:
+            return False
+
+        # Build comment body
+        lines = [
+            "## ⚠️ Auto Claude - Task Failed",
+            "",
+            "Auto Claude encountered an error while processing this issue.",
+            "",
+        ]
+
+        if task.error_message:
+            # Truncate error message if too long
+            error_msg = task.error_message[:500]
+            if len(task.error_message) > 500:
+                error_msg += "..."
+            lines.extend([
+                "**Error:**",
+                "```",
+                error_msg,
+                "```",
+                "",
+            ])
+
+        lines.extend([
+            f"**Retry Count:** {task.retry_count}/{task.max_retries}",
+            "",
+            "---",
+            "_This issue has been marked with `auto-claude-failed` for review._",
+        ])
+
+        comment_body = "\n".join(lines)
+
+        try:
+            await self.issue_fetcher.add_comment(issue_number, comment_body)
+            logger.info(f"Added failure comment to GitHub issue #{issue_number}")
+            return True
+        except Exception as e:
+            logger.warning(f"Failed to add comment to issue #{issue_number}: {e}")
+            return False
 
     # =========================================================================
     # PR Creation
