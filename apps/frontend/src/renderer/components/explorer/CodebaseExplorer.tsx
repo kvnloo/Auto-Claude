@@ -9,7 +9,14 @@ import {
   PanelRightClose,
   PanelRight,
   Search,
-  X
+  X,
+  FileX,
+  ShieldAlert,
+  FileCode,
+  HardDrive,
+  Info,
+  ChevronDown,
+  ChevronUp
 } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
@@ -310,7 +317,83 @@ export function CodebaseExplorer({ projectId }: CodebaseExplorerProps) {
 }
 
 /**
- * Error state component
+ * Structured error information from ExplorerError
+ */
+interface StructuredError {
+  type?: string;
+  title?: string;
+  description?: string;
+  suggestions?: string[];
+  technicalDetails?: string;
+}
+
+/**
+ * Parse error string into structured format if possible
+ */
+function parseErrorInfo(error: string): StructuredError {
+  // Try to parse as JSON (structured error from IPC)
+  try {
+    const parsed = JSON.parse(error);
+    if (parsed && typeof parsed === 'object' && 'type' in parsed) {
+      return parsed as StructuredError;
+    }
+  } catch {
+    // Not JSON, treat as simple string
+  }
+
+  // Return basic structure for plain string errors
+  return {
+    title: 'Failed to Load Graph',
+    description: error,
+    suggestions: [
+      'Try refreshing the graph',
+      'Check that the project directory is accessible'
+    ]
+  };
+}
+
+/**
+ * Get the appropriate icon for an error type
+ */
+function getErrorIcon(type?: string): React.ElementType {
+  switch (type) {
+    case 'initialization':
+      return FileCode;
+    case 'file-access':
+      return FileX;
+    case 'parse':
+      return FileCode;
+    case 'cache':
+      return HardDrive;
+    case 'cancelled':
+      return AlertCircle;
+    default:
+      return AlertCircle;
+  }
+}
+
+/**
+ * Get background color class for error type
+ */
+function getErrorColorClass(type?: string): string {
+  switch (type) {
+    case 'initialization':
+      return 'bg-orange-500/10 text-orange-500';
+    case 'file-access':
+      return 'bg-yellow-500/10 text-yellow-500';
+    case 'parse':
+      return 'bg-blue-500/10 text-blue-500';
+    case 'cache':
+      return 'bg-purple-500/10 text-purple-500';
+    case 'cancelled':
+      return 'bg-muted text-muted-foreground';
+    default:
+      return 'bg-destructive/10 text-destructive';
+  }
+}
+
+/**
+ * Error state component with user-friendly messages and suggestions
  */
 interface ExplorerErrorStateProps {
   error: string;
@@ -318,6 +401,11 @@ interface ExplorerErrorStateProps {
 }
 
 function ExplorerErrorState({ error, onRetry }: ExplorerErrorStateProps) {
+  const [showDetails, setShowDetails] = useState(false);
+  const errorInfo = parseErrorInfo(error);
+  const ErrorIcon = getErrorIcon(errorInfo.type);
+  const iconColorClass = getErrorColorClass(errorInfo.type);
+
   return (
     <div className="flex h-full flex-col">
       {/* Header */}
@@ -336,20 +424,75 @@ function ExplorerErrorState({ error, onRetry }: ExplorerErrorStateProps) {
       </div>
 
       {/* Error Content */}
-      <div className="flex flex-1 flex-col items-center justify-center">
-        <Card className="max-w-md border-destructive/50 bg-destructive/5">
-          <CardContent className="flex flex-col items-center p-6 text-center">
-            <div className="mb-4 flex h-12 w-12 items-center justify-center rounded-full bg-destructive/10">
-              <AlertCircle className="h-6 w-6 text-destructive" />
+      <div className="flex flex-1 flex-col items-center justify-center p-6">
+        <Card className="w-full max-w-lg border-destructive/30">
+          <CardContent className="p-6">
+            {/* Error Icon and Title */}
+            <div className="mb-4 flex items-start gap-4">
+              <div className={`flex h-12 w-12 shrink-0 items-center justify-center rounded-full ${iconColorClass}`}>
+                <ErrorIcon className="h-6 w-6" />
+              </div>
+              <div className="flex-1">
+                <h3 className="text-lg font-medium text-foreground">
+                  {errorInfo.title || 'Error Loading Graph'}
+                </h3>
+                <p className="mt-1 text-sm text-muted-foreground">
+                  {errorInfo.description}
+                </p>
+              </div>
             </div>
-            <h3 className="mb-2 text-lg font-medium text-foreground">
-              Failed to load graph
-            </h3>
-            <p className="mb-4 text-sm text-muted-foreground">{error}</p>
-            <Button onClick={onRetry} variant="outline">
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Try Again
-            </Button>
+
+            {/* Suggestions */}
+            {errorInfo.suggestions && errorInfo.suggestions.length > 0 && (
+              <div className="mb-4 rounded-lg bg-muted/50 p-4">
+                <div className="mb-2 flex items-center gap-2 text-sm font-medium text-foreground">
+                  <Info className="h-4 w-4 text-muted-foreground" />
+                  Suggestions
+                </div>
+                <ul className="space-y-1">
+                  {errorInfo.suggestions.map((suggestion, index) => (
+                    <li
+                      key={index}
+                      className="text-sm text-muted-foreground pl-6 relative before:absolute before:left-2 before:top-2 before:h-1 before:w-1 before:rounded-full before:bg-muted-foreground"
+                    >
+                      {suggestion}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
+            {/* Technical Details (collapsible) */}
+            {errorInfo.technicalDetails && (
+              <div className="mb-4">
+                <button
+                  onClick={() => setShowDetails(!showDetails)}
+                  className="flex w-full items-center justify-between rounded-lg bg-muted/30 px-3 py-2 text-left text-sm text-muted-foreground hover:bg-muted/50 transition-colors"
+                >
+                  <span>Technical Details</span>
+                  {showDetails ? (
+                    <ChevronUp className="h-4 w-4" />
+                  ) : (
+                    <ChevronDown className="h-4 w-4" />
+                  )}
+                </button>
+                {showDetails && (
+                  <div className="mt-2 rounded-lg bg-muted/20 p-3">
+                    <code className="block text-xs text-muted-foreground break-all whitespace-pre-wrap font-mono">
+                      {errorInfo.technicalDetails}
+                    </code>
+                  </div>
+                )}
+              </div>
+            )}
+
+            {/* Action Button */}
+            <div className="flex justify-center">
+              <Button onClick={onRetry} variant="outline" className="gap-2">
+                <RefreshCw className="h-4 w-4" />
+                Try Again
+              </Button>
+            </div>
           </CardContent>
         </Card>
       </div>

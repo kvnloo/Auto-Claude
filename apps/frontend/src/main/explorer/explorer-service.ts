@@ -11,6 +11,7 @@
  * - Graph caching to .auto-claude/explorer/graph.json
  * - Cancellation support for long-running parses
  * - Cache validation via file timestamps
+ * - User-friendly error messages for parse failures
  */
 
 import { EventEmitter } from 'events';
@@ -29,9 +30,277 @@ import {
   isParseableFile,
   getSupportedExtensions,
   clearParsers,
+  ParserError,
   type ParseResult
 } from './tree-sitter-parser';
 import { buildGraph, type GraphBuilderConfig } from './graph-builder';
+
+// ============================================
+// Error Types
+// ============================================
+
+/**
+ * Types of errors that can occur during exploration
+ */
+export type ExplorerErrorType =
+  | 'initialization'
+  | 'file-access'
+  | 'parse'
+  | 'cache'
+  | 'cancelled'
+  | 'unknown';
+
+/**
+ * Structured error for explorer operations with user-friendly messages
+ */
+export class ExplorerError extends Error {
+  /** Type of error for categorization */
+  readonly type: ExplorerErrorType;
+  /** User-friendly title for the error */
+  readonly title: string;
+  /** Detailed user-friendly description */
+  readonly description: string;
+  /** Suggested actions to resolve the issue */
+  readonly suggestions: string[];
+  /** Technical details for debugging */
+  readonly technicalDetails?: string;
+  /** Original error that caused this */
+  readonly cause?: Error;
+
+  constructor(options: {
+    type: ExplorerErrorType;
+    message: string;
+    title: string;
+    description: string;
+    suggestions?: string[];
+    technicalDetails?: string;
+    cause?: Error;
+  }) {
+    super(options.message);
+    this.name = 'ExplorerError';
+    this.type = options.type;
+    this.title = options.title;
+    this.description = options.description;
+    this.suggestions = options.suggestions ?? [];
+    this.technicalDetails = options.technicalDetails;
+    this.cause = options.cause;
+  }
+
+  /**
+   * Create an error from a raw error, inferring the type and providing
+   * appropriate user-friendly messages
+   */
+  static fromError(error: unknown, context?: string): ExplorerError {
+    if (error instanceof ExplorerError) {
+      return error;
+    }
+
+    const rawMessage = error instanceof Error ? error.message : String(error);
+    const cause = error instanceof Error ? error : undefined;
+
+    // Cancelled operation
+    if (rawMessage === 'Parse cancelled') {
+      return new ExplorerError({
+        type: 'cancelled',
+        message: rawMessage,
+        title: 'Operation Cancelled',
+        description: 'The parsing operation was cancelled.',
+        suggestions: ['Click "Refresh" to start parsing again'],
+        cause
+      });
+    }
+
+    // Parser initialization errors
+    if (error instanceof ParserError || rawMessage.includes('Tree-sitter')) {
+      return ExplorerError.createInitializationError(rawMessage, cause);
+    }
+
+    // File access errors
+    if (
+      rawMessage.includes('ENOENT') ||
+      rawMessage.includes('EACCES') ||
+      rawMessage.includes('EPERM') ||
+      rawMessage.includes('Failed to read')
+    ) {
+      return ExplorerError.createFileAccessError(rawMessage, context, cause);
+    }
+
+    // Parse-specific errors
+    if (
+      rawMessage.includes('parse') ||
+      rawMessage.includes('syntax') ||
+      rawMessage.includes('Unsupported file type')
+    ) {
+      return ExplorerError.createParseError(rawMessage, context, cause);
+    }
+
+    // Cache errors
+    if (rawMessage.includes('cache') || rawMessage.includes('JSON')) {
+      return ExplorerError.createCacheError(rawMessage, cause);
+    }
+
+    // Unknown/generic errors
+    return new ExplorerError({
+      type: 'unknown',
+      message: rawMessage,
+      title: 'Unexpected Error',
+      description:
+        'An unexpected error occurred while processing the codebase.',
+      suggestions: [
+        'Try refreshing the graph',
+        'Check that the project directory is accessible',
+        'If the problem persists, try restarting the application'
+      ],
+      technicalDetails: rawMessage,
+      cause
+    });
+  }
+
+  /**
+   * Create an initialization error with helpful guidance
+   */
+  private static createInitializationError(
+    message: string,
+    cause?: Error
+  ): ExplorerError {
+    const isWasmMissing = message.includes('WASM not found');
+
+    return new ExplorerError({
+      type: 'initialization',
+      message,
+      title: 'Parser Initialization Failed',
+      description: isWasmMissing
+        ? 'The code parser could not find required language files.'
+        : 'The code parser failed to initialize properly.',
+      suggestions: isWasmMissing
+        ? [
+            'Ensure Tree-sitter WASM files are installed',
+            'Try reinstalling the application',
+            'Check that resources/wasm directory exists'
+          ]
+        : [
+            'Try refreshing the graph',
+            'Restart the application',
+            'Check system memory availability'
+          ],
+      technicalDetails: message,
+      cause
+    });
+  }
+
+  /**
+   * Create a file access error with relevant suggestions
+   */
+  private static createFileAccessError(
+    message: string,
+    context?: string,
+    cause?: Error
+  ): ExplorerError {
+    const isPermission =
+      message.includes('EACCES') || message.includes('EPERM');
+
+    return new ExplorerError({
+      type: 'file-access',
+      message,
+      title: isPermission ? 'Permission Denied' : 'File Not Found',
+      description: isPermission
+        ? 'Cannot read some files due to permission restrictions.'
+        : `Unable to access file${context ? `: ${context}` : 's'}.`,
+      suggestions: isPermission
+        ? [
+            'Check file permissions in your project',
+            'Ensure the application has read access',
+            'Some files may be locked by other processes'
+          ]
+        : [
+            'Verify the project path is correct',
+            'Check that files have not been moved or deleted',
+            'Try refreshing the graph'
+          ],
+      technicalDetails: message,
+      cause
+    });
+  }
+
+  /**
+   * Create a parse error with language-specific guidance
+   */
+  private static createParseError(
+    message: string,
+    context?: string,
+    cause?: Error
+  ): ExplorerError {
+    const isUnsupportedType = message.includes('Unsupported file type');
+
+    return new ExplorerError({
+      type: 'parse',
+      message,
+      title: isUnsupportedType ? 'Unsupported File Type' : 'Parse Error',
+      description: isUnsupportedType
+        ? 'Some files use a language that is not currently supported.'
+        : `Failed to parse source code${context ? ` in ${context}` : ''}.`,
+      suggestions: isUnsupportedType
+        ? [
+            'Currently supported: TypeScript, JavaScript, Python',
+            'Unsupported files will be skipped',
+            'The graph will still include supported files'
+          ]
+        : [
+            'The file may contain syntax errors',
+            'Try fixing any syntax issues in the source code',
+            'Parsing will continue with other files'
+          ],
+      technicalDetails: message,
+      cause
+    });
+  }
+
+  /**
+   * Create a cache error
+   */
+  private static createCacheError(
+    message: string,
+    cause?: Error
+  ): ExplorerError {
+    return new ExplorerError({
+      type: 'cache',
+      message,
+      title: 'Cache Error',
+      description:
+        'There was a problem reading or writing the cached graph data.',
+      suggestions: [
+        'Try clicking "Refresh" to regenerate the graph',
+        'Clear the .auto-claude/explorer folder if issues persist',
+        'Check available disk space'
+      ],
+      technicalDetails: message,
+      cause
+    });
+  }
+
+  /**
+   * Serialize error for IPC transport
+   */
+  toJSON(): Record<string, unknown> {
+    return {
+      name: this.name,
+      type: this.type,
+      message: this.message,
+      title: this.title,
+      description: this.description,
+      suggestions: this.suggestions,
+      technicalDetails: this.technicalDetails
+    };
+  }
+}
+
+/**
+ * Get a user-friendly error message from any error
+ */
+export function getUserFriendlyErrorMessage(error: unknown): string {
+  const explorerError = ExplorerError.fromError(error);
+  return explorerError.description;
+}
 
 // ============================================
 // Constants
@@ -281,19 +550,22 @@ export class ExplorerService extends EventEmitter {
 
       return { graph, fromCache: false };
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
+      // Convert to ExplorerError for user-friendly messages
+      const explorerError = ExplorerError.fromError(error);
 
-      if (message !== 'Parse cancelled') {
+      // Don't emit error status for cancellations
+      if (explorerError.type !== 'cancelled') {
         this.emitStatus(projectId, {
           phase: 'error',
           progress: 0,
-          message: 'Parse failed',
-          error: message
+          message: explorerError.title,
+          error: explorerError.description
         });
-        this.emit('parse-error', projectId, message);
+        // Emit structured error for IPC handlers
+        this.emit('parse-error', projectId, explorerError.toJSON());
       }
 
-      throw error;
+      throw explorerError;
     } finally {
       this.activeParses.delete(projectId);
     }
