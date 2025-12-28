@@ -73,8 +73,11 @@ export async function parseFile(filePath: string): Promise<UnifiedParseResult> {
   const loc = sourceText.split('\n').length;
 
   // Parse with OXC
-  const sourceType = language === 'typescript' ? 'ts' : 'js';
-  const parseResult = parseSync(sourceText, { sourceFilename: filePath, sourceType });
+  const lang = language === 'typescript'
+    ? (filePath.endsWith('.tsx') ? 'tsx' : 'ts')
+    : (filePath.endsWith('.jsx') ? 'jsx' : 'js');
+
+  const parseResult = parseSync(filePath, sourceText, { lang });
 
   if (parseResult.errors.length > 0) {
     const errorMessages = parseResult.errors.map((e) => e.message).join(', ');
