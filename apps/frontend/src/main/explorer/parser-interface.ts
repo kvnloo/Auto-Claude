@@ -17,8 +17,8 @@ import type {
   ParserLanguage,
   ParserBackend,
 } from './types';
-import fs from 'fs/promises';
-import path from 'path';
+import * as fs from 'fs/promises';
+import * as path from 'path';
 
 // ============================================
 // Parser Interface
