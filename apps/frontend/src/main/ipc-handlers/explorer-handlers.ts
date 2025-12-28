@@ -120,10 +120,13 @@ export function registerExplorerHandlers(
   ipcMain.handle(
     EXPLORER_CHANNELS.REFRESH_GRAPH,
     async (_, projectId: string): Promise<IPCResult<GraphData>> => {
+      console.warn('[Explorer] refreshGraph called for projectId:', projectId);
       const project = projectStore.getProject(projectId);
       if (!project) {
+        console.warn('[Explorer] Project not found:', projectId);
         return { success: false, error: 'Project not found' };
       }
+      console.warn('[Explorer] Found project:', project.name, 'path:', project.path);
 
       try {
         const mainWindow = getMainWindow();
@@ -152,7 +155,9 @@ export function registerExplorerHandlers(
         explorerService.on('parse-error', errorHandler);
 
         try {
+          console.warn('[Explorer] Starting refreshGraph...');
           const graph = await explorerService.refreshGraph(projectId, project.path);
+          console.warn('[Explorer] Graph generated:', graph ? `${graph.nodes.length} nodes, ${graph.edges.length} edges` : 'null');
           return { success: true, data: graph };
         } finally {
           // Clean up event listeners

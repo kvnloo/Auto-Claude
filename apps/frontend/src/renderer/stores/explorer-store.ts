@@ -140,14 +140,16 @@ export async function loadProjectGraph(projectId: string): Promise<void> {
 
   try {
     const result = await window.electronAPI.explorer.getGraph(projectId);
-    if (result.success && result.data) {
+    if (result.success) {
+      // data can be null if no cached graph exists - this is not an error
       store.setGraph(result.data);
       store.setLoadingStatus({
-        phase: 'complete',
-        progress: 100,
-        message: 'Graph loaded'
+        phase: result.data ? 'complete' : 'idle',
+        progress: result.data ? 100 : 0,
+        message: result.data ? 'Graph loaded' : 'No cached graph available'
       });
     } else {
+      // Actual error from the IPC call
       store.setGraphError(result.error || 'Failed to load project graph');
       store.setLoadingStatus({
         phase: 'error',
@@ -174,6 +176,7 @@ export async function loadProjectGraph(projectId: string): Promise<void> {
  * Refresh project graph by re-parsing all files
  */
 export async function refreshProjectGraph(projectId: string): Promise<void> {
+  console.warn('[Explorer Store] refreshProjectGraph called for:', projectId);
   const store = useExplorerStore.getState();
   store.setIsLoading(true);
   store.setGraphError(null);
@@ -184,7 +187,9 @@ export async function refreshProjectGraph(projectId: string): Promise<void> {
   });
 
   try {
+    console.warn('[Explorer Store] Calling IPC refreshGraph...');
     const result = await window.electronAPI.explorer.refreshGraph(projectId);
+    console.warn('[Explorer Store] IPC result:', result.success, result.data ? `${result.data.nodes?.length} nodes` : 'no data', result.error);
     if (result.success && result.data) {
       store.setGraph(result.data);
       store.setLoadingStatus({

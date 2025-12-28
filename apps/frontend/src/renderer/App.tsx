@@ -296,6 +296,27 @@ export function App() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [activeView, openProjectTab]);
 
+  // Handle adding a new project via directory selection
+  const handleAddProject = async () => {
+    try {
+      const path = await window.electronAPI.selectDirectory();
+      if (path) {
+        const project = await addProject(path);
+        if (project) {
+          openProjectTab(project.id);
+          if (!project.autoBuildPath) {
+            setPendingProject(project);
+            setInitError(null);
+            setInitSuccess(false);
+            setShowInitDialog(true);
+          }
+        }
+      }
+    } catch (error) {
+      console.error('Failed to add project:', error);
+    }
+  };
+
   // Load tasks when project changes
   useEffect(() => {
     const currentProjectId = activeProjectId || selectedProjectId;
@@ -385,11 +406,11 @@ export function App() {
               <div className="flex items-center justify-between">
                 <div className="flex-1">
                   <ProjectTabBar
-                    tabs={projectTabs}
-                    activeTabId={activeProjectId || selectedProjectId}
-                    onTabClick={setActiveProject}
-                    onTabClose={closeProjectTab}
-                    onReorder={handleTabReorder}
+                    projects={projectTabs}
+                    activeProjectId={activeProjectId || selectedProjectId}
+                    onProjectSelect={setActiveProject}
+                    onProjectClose={closeProjectTab}
+                    onAddProject={handleAddProject}
                   />
                 </div>
                 {/* Top right controls */}
@@ -429,10 +450,8 @@ export function App() {
                   <Sidebar
                     activeView={activeView}
                     onViewChange={setActiveView}
-                    selectedTask={selectedTask}
-                    onTaskSelect={setSelectedTask}
                     onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
-                    onOpenProjectSettings={() => {
+                    onSettingsClick={() => {
                       setSettingsInitialProjectSection('settings');
                       setIsSettingsDialogOpen(true);
                     }}
@@ -443,19 +462,33 @@ export function App() {
               {/* Right content area */}
               <div className="flex-1 overflow-auto">
                 {!selectedProject ? (
-                  <WelcomeScreen />
+                  <WelcomeScreen
+                    projects={projects}
+                    onNewProject={handleAddProject}
+                    onOpenProject={handleAddProject}
+                    onSelectProject={(projectId) => {
+                      openProjectTab(projectId);
+                      setActiveProject(projectId);
+                    }}
+                  />
                 ) : (
                   <>
-                    {activeView === 'kanban' && <KanbanBoard />}
-                    {activeView === 'roadmap' && <Roadmap />}
-                    {activeView === 'context' && <Context />}
-                    {activeView === 'ideation' && <Ideation />}
-                    {activeView === 'insights' && <Insights />}
+                    {activeView === 'kanban' && (
+                      <KanbanBoard
+                        tasks={tasks}
+                        onTaskClick={setSelectedTask}
+                        onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+                      />
+                    )}
+                    {activeView === 'roadmap' && <Roadmap projectId={selectedProject.id} />}
+                    {activeView === 'context' && <Context projectId={selectedProject.id} />}
+                    {activeView === 'ideation' && <Ideation projectId={selectedProject.id} />}
+                    {activeView === 'insights' && <Insights projectId={selectedProject.id} />}
                     {activeView === 'github-issues' && <GitHubIssues />}
                     {activeView === 'github-prs' && <GitHubPRs />}
                     {activeView === 'changelog' && <Changelog />}
-                    {activeView === 'worktrees' && <Worktrees />}
-                    {activeView === 'explorer' && <CodebaseExplorer />}
+                    {activeView === 'worktrees' && <Worktrees projectId={selectedProject.id} />}
+                    {activeView === 'explorer' && <CodebaseExplorer projectId={selectedProject.id} />}
                     {activeView === 'terminals' && <TerminalGrid />}
                   </>
                 )}
@@ -466,7 +499,13 @@ export function App() {
           {/* Modals and Dialogs */}
           <TaskDetailModal open={!!selectedTask} task={selectedTask} onOpenChange={(open) => !open && setSelectedTask(null)} />
 
-          <TaskCreationWizard open={isNewTaskDialogOpen} onOpenChange={setIsNewTaskDialogOpen} />
+          {selectedProject && (
+            <TaskCreationWizard
+              projectId={selectedProject.id}
+              open={isNewTaskDialogOpen}
+              onOpenChange={setIsNewTaskDialogOpen}
+            />
+          )}
 
           {/* Settings Dialog */}
           <AppSettingsDialog open={isSettingsDialogOpen} onOpenChange={setIsSettingsDialogOpen} initialSection={settingsInitialSection} initialProjectSection={settingsInitialProjectSection} />
@@ -558,7 +597,11 @@ export function App() {
         </div>
 
         <DragOverlay>
-          {activeDragProject ? <ProjectTabBar.DragOverlay project={activeDragProject} /> : null}
+          {activeDragProject ? (
+            <div className="flex items-center gap-2 px-4 py-2.5 text-sm bg-background border border-border rounded shadow-lg">
+              <span className="truncate font-medium">{activeDragProject.name}</span>
+            </div>
+          ) : null}
         </DragOverlay>
       </TooltipProvider>
     </DndContext>

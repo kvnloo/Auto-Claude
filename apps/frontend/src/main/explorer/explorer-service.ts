@@ -442,8 +442,17 @@ export class ExplorerService extends EventEmitter {
           progress: 5,
           message: 'Initializing parser...'
         });
-        await initTreeSitter();
-        this.initialized = true;
+        console.warn('[ExplorerService] Initializing Tree-sitter...');
+        try {
+          await initTreeSitter();
+          this.initialized = true;
+          console.warn('[ExplorerService] Tree-sitter initialized successfully');
+        } catch (error) {
+          console.warn('[ExplorerService] Tree-sitter initialization failed:', error);
+          throw error;
+        }
+      } else {
+        console.warn('[ExplorerService] Tree-sitter already initialized');
       }
 
       // Check for abort
@@ -458,7 +467,14 @@ export class ExplorerService extends EventEmitter {
         message: 'Scanning for source files...'
       });
 
+      console.warn('[ExplorerService] Discovering files in:', projectPath);
       const files = await this.discoverFiles(projectPath);
+      console.warn('[ExplorerService] Discovered files:', files.length);
+      if (files.length > 0 && files.length <= 20) {
+        console.warn('[ExplorerService] Files found:', files);
+      } else if (files.length > 20) {
+        console.warn('[ExplorerService] First 10 files:', files.slice(0, 10));
+      }
 
       if (files.length === 0) {
         const emptyGraph: GraphData = {
@@ -613,7 +629,14 @@ export class ExplorerService extends EventEmitter {
     projectId: string,
     projectPath: string
   ): Promise<GraphData> {
+    console.warn('[ExplorerService] refreshGraph called:', { projectId, projectPath });
     const result = await this.parseProject(projectId, projectPath, { force: true });
+    console.warn('[ExplorerService] refreshGraph result:', {
+      fromCache: result.fromCache,
+      nodes: result.graph.nodes.length,
+      edges: result.graph.edges.length,
+      filesParsed: result.graph.stats.filesParsed
+    });
     return result.graph;
   }
 

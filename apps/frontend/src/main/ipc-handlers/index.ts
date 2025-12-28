@@ -6,6 +6,7 @@
  */
 
 import type { BrowserWindow } from 'electron';
+import { ipcMain } from 'electron';
 import { AgentManager } from '../agent';
 import { TerminalManager } from '../terminal-manager';
 import { PythonEnvManager } from '../python-env-manager';
@@ -101,6 +102,13 @@ export function setupIpcHandlers(
 
   // App auto-update handlers
   registerAppUpdateHandlers();
+
+  // Console bridge: Forward renderer console errors to main process stdout
+  // This allows Claude Code to see React errors in the terminal output
+  ipcMain.on('renderer-console', (_event, { level, message }) => {
+    const prefix = level === 'error' ? '[RENDERER ERROR]' : '[RENDERER WARN]';
+    console.warn(`${prefix} ${message}`);
+  });
 
   console.warn('[IPC] All handler modules registered successfully');
 }

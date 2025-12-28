@@ -41,15 +41,13 @@ import { cn } from '../lib/utils';
 import {
   useProjectStore,
   removeProject,
-  initializeProject,
-  checkProjectVersion,
-  updateProjectAutoBuild
+  initializeProject
 } from '../stores/project-store';
 import { useSettingsStore } from '../stores/settings-store';
 import { AddProjectModal } from './AddProjectModal';
 import { GitSetupModal } from './GitSetupModal';
 import { RateLimitIndicator } from './RateLimitIndicator';
-import type { Project, AutoBuildVersionInfo, GitStatus } from '../../shared/types';
+import type { Project, GitStatus } from '../../shared/types';
 
 export type SidebarView = 'kanban' | 'terminals' | 'roadmap' | 'context' | 'ideation' | 'github-issues' | 'github-prs' | 'changelog' | 'insights' | 'worktrees' | 'agent-tools' | 'explorer';
 
@@ -98,11 +96,9 @@ export function Sidebar({
 
   const [showAddProjectModal, setShowAddProjectModal] = useState(false);
   const [showInitDialog, setShowInitDialog] = useState(false);
-  const [showUpdateDialog, setShowUpdateDialog] = useState(false);
   const [showGitSetupModal, setShowGitSetupModal] = useState(false);
   const [gitStatus, setGitStatus] = useState<GitStatus | null>(null);
   const [pendingProject, setPendingProject] = useState<Project | null>(null);
-  const [_versionInfo, setVersionInfo] = useState<AutoBuildVersionInfo | null>(null);
   const [isInitializing, setIsInitializing] = useState(false);
 
   const selectedProject = projects.find((p) => p.id === selectedProjectId);
@@ -151,19 +147,6 @@ export function Sidebar({
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [selectedProjectId, onViewChange]);
 
-  // Check for updates when project changes
-  useEffect(() => {
-    const checkUpdates = async () => {
-      if (selectedProjectId && settings.autoUpdateAutoBuild) {
-        const info = await checkProjectVersion(selectedProjectId);
-        if (info?.updateAvailable) {
-          setVersionInfo(info);
-          setShowUpdateDialog(true);
-        }
-      }
-    };
-    checkUpdates();
-  }, [selectedProjectId, settings.autoUpdateAutoBuild]);
 
   // Check git status when project changes
   useEffect(() => {
@@ -220,26 +203,6 @@ export function Sidebar({
   const handleSkipInit = () => {
     setShowInitDialog(false);
     setPendingProject(null);
-  };
-
-  const _handleUpdate = async () => {
-    if (!selectedProjectId) return;
-
-    setIsInitializing(true);
-    try {
-      const result = await updateProjectAutoBuild(selectedProjectId);
-      if (result?.success) {
-        setShowUpdateDialog(false);
-        setVersionInfo(null);
-      }
-    } finally {
-      setIsInitializing(false);
-    }
-  };
-
-  const _handleSkipUpdate = () => {
-    setShowUpdateDialog(false);
-    setVersionInfo(null);
   };
 
   const handleGitInitialized = async () => {
@@ -450,48 +413,6 @@ export function Sidebar({
         </DialogContent>
       </Dialog>
 
-      {/* Update Auto Claude Dialog */}
-      <Dialog open={showUpdateDialog} onOpenChange={setShowUpdateDialog}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle className="flex items-center gap-2">
-              <RefreshCw className="h-5 w-5" />
-              {t('dialogs:update.title')}
-            </DialogTitle>
-            <DialogDescription>
-              {t('dialogs:update.description')}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="py-4">
-            <div className="rounded-lg bg-muted p-4 text-sm">
-              <p className="font-medium mb-2">{t('dialogs:update.willDo')}</p>
-              <ul className="list-disc list-inside space-y-1 text-muted-foreground">
-                <li>{t('dialogs:update.downloadLatest')}</li>
-                <li>{t('dialogs:update.backupCurrent')}</li>
-                <li>{t('dialogs:update.runSetupSpecs')}</li>
-              </ul>
-            </div>
-          </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={_handleSkipUpdate} disabled={isInitializing}>
-              {t('common:buttons.skip')}
-            </Button>
-            <Button onClick={_handleUpdate} disabled={isInitializing}>
-              {isInitializing ? (
-                <>
-                  <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-                  {t('common:labels.updating')}
-                </>
-              ) : (
-                <>
-                  <Download className="mr-2 h-4 w-4" />
-                  {t('common:buttons.update')}
-                </>
-              )}
-            </Button>
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
 
       {/* Add Project Modal */}
       <AddProjectModal

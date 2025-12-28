@@ -96,14 +96,14 @@ export function CodebaseExplorer({ projectId }: CodebaseExplorerProps) {
     return (
       <ExplorerErrorState
         error={graphError}
-        onRetry={() => loadGraph()}
+        onRetry={() => refreshGraph()}
       />
     );
   }
 
   // Empty state - no graph data yet
   if (!hasGraph) {
-    return <ExplorerEmptyState projectId={projectId} onParse={() => loadGraph()} />;
+    return <ExplorerEmptyState projectId={projectId} onParse={() => refreshGraph()} />;
   }
 
   // Main explorer view with graph
