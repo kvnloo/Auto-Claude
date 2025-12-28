@@ -164,6 +164,128 @@ export function buildGraph(
 }
 
 /**
+ * Build graph and collect comprehensive statistics
+ *
+ * This is an enhanced version of buildGraph that returns detailed statistics
+ * about the graph building process, including parser metrics and timing breakdowns.
+ *
+ * @param parseResults - Array of parse results from unified parser interface
+ * @param config - Graph builder configuration
+ * @returns Object containing the graph and comprehensive statistics
+ */
+export async function buildGraphWithStats(
+  parseResults: UnifiedParseResult[],
+  config: GraphBuilderConfig
+): Promise<{ graph: GraphData; stats: GraphBuildStats }> {
+  const totalStartTime = Date.now();
+
+  // Convert unified results to extraction format (includes parse time tracking)
+  const extractions: FileExtractionResult[] = [];
+  const parseErrors: ParseError[] = [];
+
+  for (const result of parseResults) {
+    try {
+      const extraction = convertToExtraction(result, config.projectRoot);
+      extractions.push(extraction);
+
+      // Record metrics for this parse operation
+      parserMetrics.record({
+        filePath: result.filePath,
+        parser: result.parser,
+        language: result.language,
+        parseTimeMs: result.parseTimeMs,
+        symbolCount: result.symbols.length,
+        importCount: result.imports.length,
+        loc: result.loc,
+        timestamp: Date.now()
+      });
+    } catch (error) {
+      parseErrors.push({
+        filePath: result.filePath,
+        error: error instanceof Error ? error.message : String(error),
+        language: result.language
+      });
+    }
+  }
+
+  // Track graph building time separately
+  const graphBuildStartTime = Date.now();
+
+  // Build nodes from extractions
+  const nodes = extractNodes(extractions, config);
+
+  // Build edges from extractions and nodes
+  const edges = extractEdges(extractions, nodes, config);
+
+  const graphBuildTimeMs = Date.now() - graphBuildStartTime;
+  const totalTimeMs = Date.now() - totalStartTime;
+
+  // Calculate parse time from parser metrics
+  const parserStats = parserMetrics.getStats();
+  const parseTimeMs = parserStats.totalTimeMs;
+
+  // Count nodes and edges by type
+  const nodesByType: Record<NodeType, number> = {
+    directory: 0,
+    file: 0,
+    class: 0,
+    function: 0,
+    symbol: 0
+  };
+
+  const edgesByType: Record<EdgeType, number> = {
+    imports: 0,
+    calls: 0,
+    inherits: 0,
+    contains: 0
+  };
+
+  for (const node of nodes) {
+    nodesByType[node.type]++;
+  }
+
+  for (const edge of edges) {
+    edgesByType[edge.type]++;
+  }
+
+  // Count parser backend usage
+  const parserUsage = {
+    oxc: extractions.filter(e => e.parser === 'oxc').length,
+    treeSitter: extractions.filter(e => e.parser === 'tree-sitter').length
+  };
+
+  // Build comprehensive stats
+  const buildStats: GraphBuildStats = {
+    parserStats,
+    totalNodes: nodes.length,
+    totalEdges: edges.length,
+    nodesByType,
+    edgesByType,
+    filesParsed: extractions.length,
+    filesWithErrors: parseErrors.length,
+    parseTimeMs,
+    graphBuildTimeMs,
+    totalTimeMs,
+    parserUsage
+  };
+
+  // Build the graph object (using existing GraphStats format for compatibility)
+  const graphStats = calculateStats(nodes, edges, extractions, parseTimeMs);
+  
+  const graph: GraphData = {
+    nodes,
+    edges,
+    generatedAt: new Date(),
+    projectId: config.projectId,
+    rootPath: config.projectRoot,
+    stats: graphStats,
+    parseErrors: parseErrors.length > 0 ? parseErrors : undefined
+  };
+
+  return { graph, stats: buildStats };
+}
+
+/**
  * Convert UnifiedParseResult to FileExtractionResult
  *
  * This is a simple transformation that adds relative path calculation
@@ -697,16 +819,6 @@ export function extractEdges(
   const edgeIds = new Set<string>();
   const nodeMap = new Map(nodes.map(n => [n.id, n]));
 
-  // Build a map of file paths to node IDs
-  const fileToNodeId = new Map<string, string>();
-  for (const node of nodes) {
-    if (node.type === 'file') {
-      const baseName = node.filePath.replace(/\.[^.]+$/, '');
-      fileToNodeId.set(node.filePath, node.id);
-      fileToNodeId.set(baseName, node.id);
-    }
-  }
-
   // Build containment edges (directory contains file, file contains class, etc.)
   for (const node of nodes) {
     const containsEdge = createContainsEdge(node, nodes);
@@ -781,44 +893,144 @@ function createContainsEdge(
 }
 
 /**
- * Resolve an import statement to a target node ID
+ * Build dependency edges from imports
+ *
+ * @param parseResults - Array of file extraction results
+ * @param nodeMap - Map of node IDs to GraphNode objects
+ * @param projectPath - Absolute path to the project root
+ * @returns Array of dependency edges
  */
-function resolveImportTarget(
-  imp: ExtractedImport,
-  extraction: FileExtractionResult,
-  fileToNodeId: Map<string, string>,
-  projectRoot: string
-): string | null {
-  if (!imp.isRelative) {
-    // External package - we don't track these
-    return null;
+function buildImportEdges(
+  parseResults: FileExtractionResult[],
+  nodeMap: Map<string, GraphNode>,
+  projectPath: string
+): GraphEdge[] {
+  const edges: GraphEdge[] = [];
+  const edgeIds = new Set<string>();
+
+  for (const extraction of parseResults) {
+    const sourceNodeId = `file:${extraction.relativePath}`;
+    const sourceNode = nodeMap.get(sourceNodeId);
+    if (!sourceNode) continue;
+
+    for (const importInfo of extraction.imports) {
+      // Skip external (non-relative) imports
+      if (!importInfo.isRelative) {
+        continue;
+      }
+
+      // Resolve import path to actual file
+      const targetFilePath = resolveImportPath(
+        importInfo.source,
+        extraction.relativePath,
+        projectPath
+      );
+
+      if (!targetFilePath) continue;
+
+      // Try to find the target node with various extensions
+      let targetNode: GraphNode | undefined;
+
+      // Try exact match first
+      targetNode = nodeMap.get(`file:${targetFilePath}`);
+
+      // Try with common extensions
+      if (!targetNode) {
+        for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.py']) {
+          targetNode = nodeMap.get(`file:${targetFilePath}${ext}`);
+          if (targetNode) break;
+        }
+      }
+
+      // Try index files
+      if (!targetNode) {
+        for (const indexFile of ['/index.ts', '/index.tsx', '/index.js', '/index.jsx']) {
+          targetNode = nodeMap.get(`file:${targetFilePath}${indexFile}`);
+          if (targetNode) break;
+        }
+      }
+
+      if (targetNode) {
+        const edge = createDependencyEdge(sourceNode, targetNode, importInfo);
+        if (!edgeIds.has(edge.id)) {
+          edges.push(edge);
+          edgeIds.add(edge.id);
+        }
+      }
+    }
   }
 
-  // Resolve relative import path
-  const sourceDir = path.dirname(extraction.relativePath);
-  let targetPath = path.normalize(path.join(sourceDir, imp.source));
+  return edges;
+}
+
+/**
+ * Resolve import path to actual file
+ *
+ * Handles:
+ * - Relative imports (./foo, ../bar)
+ * - Index file resolution (./dir → ./dir/index)
+ * - Extension resolution (.ts, .tsx, .js, etc.)
+ *
+ * @param importSource - The import source string (e.g., "./utils", "../components/Button")
+ * @param fromFilePath - The relative path of the file containing the import
+ * @param projectPath - The absolute project root path
+ * @returns Relative path to the resolved file, or null if not found
+ */
+function resolveImportPath(
+  importSource: string,
+  fromFilePath: string,
+  projectPath: string
+): string | null {
+  // Get the directory containing the source file
+  const sourceDir = path.dirname(fromFilePath);
+
+  // Resolve the import path relative to the source file
+  let resolvedPath = path.normalize(path.join(sourceDir, importSource));
 
   // Remove leading ./ if present
-  if (targetPath.startsWith('./')) {
-    targetPath = targetPath.substring(2);
+  if (resolvedPath.startsWith('./')) {
+    resolvedPath = resolvedPath.substring(2);
   }
 
-  // Try to find the target file
-  // First, try exact match
-  let targetId = fileToNodeId.get(targetPath);
-  if (targetId) return targetId;
+  // Return the normalized path - the caller will check if it exists in nodeMap
+  // with various extensions and index file patterns
+  return resolvedPath;
+}
 
-  // Try with common extensions
-  for (const ext of ['.ts', '.tsx', '.js', '.jsx', '.py', '/index.ts', '/index.js']) {
-    targetId = fileToNodeId.get(targetPath + ext);
-    if (targetId) return targetId;
+/**
+ * Create edge between source and target nodes
+ *
+ * @param sourceNode - The node that contains the import statement
+ * @param targetNode - The node being imported
+ * @param importInfo - Information about the import
+ * @returns A GraphEdge representing the dependency
+ */
+function createDependencyEdge(
+  sourceNode: GraphNode,
+  targetNode: GraphNode,
+  importInfo: ExtractedImport
+): GraphEdge {
+  // Create a descriptive label based on what's being imported
+  let label: string;
+
+  if (importInfo.items.includes('*')) {
+    // Namespace import or wildcard import
+    label = importInfo.isDefault ? 'default' : '*';
+  } else if (importInfo.items.length > 3) {
+    // Truncate long import lists
+    label = `${importInfo.items.slice(0, 3).join(', ')}, ...`;
+  } else {
+    // Show all imported items
+    label = importInfo.items.join(', ');
   }
 
-  // Try resolving as a directory with index file
-  targetId = fileToNodeId.get(`${targetPath}/index`);
-  if (targetId) return targetId;
-
-  return null;
+  return {
+    id: `edge:imports:${sourceNode.id}:${targetNode.id}`,
+    source: sourceNode.id,
+    target: targetNode.id,
+    type: 'imports',
+    label,
+  };
 }
 
 /**

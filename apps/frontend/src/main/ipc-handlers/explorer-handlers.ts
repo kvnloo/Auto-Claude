@@ -104,7 +104,7 @@ export function registerExplorerHandlers(
         return { success: true, data: graph };
       } catch (error) {
         console.error('[Explorer] Failed to get graph:', error);
-        return createErrorResponse(error, project.path);
+        return createErrorResponse<GraphData | null>(error, project.path);
       }
     }
   );
@@ -186,7 +186,7 @@ export function registerExplorerHandlers(
         const mainWindow = getMainWindow();
 
         // Forward structured error to renderer
-        const errorResponse = createErrorResponse(error, project.path);
+        const errorResponse = createErrorResponse<GraphData>(error, project.path);
         if (mainWindow && errorResponse.errorDetails) {
           mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_ERROR, projectId, errorResponse.errorDetails);
         }
@@ -279,7 +279,7 @@ export function registerExplorerHandlers(
         const mainWindow = getMainWindow();
 
         // Forward structured error to renderer
-        const errorResponse = createErrorResponse(error, project.path);
+        const errorResponse = createErrorResponse<GraphData>(error, project.path);
         if (mainWindow && errorResponse.errorDetails) {
           mainWindow.webContents.send(EXPLORER_CHANNELS.PARSE_ERROR, projectId, errorResponse.errorDetails);
         }
@@ -349,7 +349,7 @@ export function registerExplorerHandlers(
         return { success: true, data: nodeInfo };
       } catch (error) {
         console.error('[Explorer] Failed to get node info:', error);
-        return createErrorResponse(error, `node ${nodeId} in project ${project.path}`);
+        return createErrorResponse<SelectedNodeInfo | null>(error, `node ${nodeId} in project ${project.path}`);
       }
     }
   );
