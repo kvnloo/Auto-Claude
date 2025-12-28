@@ -1,9 +1,9 @@
 /**
  * Graph Builder for Codebase Explorer
  *
- * Converts parsed AST trees from Tree-sitter into a knowledge graph
- * with nodes (directories, files, classes, functions, symbols) and
- * edges (imports, calls, inherits, contains).
+ * Converts parsed results from unified parser interface (OXC or Tree-sitter)
+ * into a knowledge graph with nodes (directories, files, classes, functions, symbols)
+ * and edges (imports, calls, inherits, contains).
  */
 
 import * as path from 'path';
@@ -20,7 +20,9 @@ import type {
   ParserLanguage,
   ParseError
 } from '../../shared/types';
-import type { TreeSitterNode, TreeSitterTree, ParseResult } from './tree-sitter-parser';
+import type { UnifiedParseResult, ExtractedSymbol, ExtractedImport, ParserBackend } from './types';
+import { parserMetrics, type ParserStats } from './parser-metrics';
+import { graphCache } from './graph-cache';
 
 // ============================================
 // Types
@@ -39,40 +41,50 @@ export interface GraphBuilderConfig {
   /** Maximum depth for class/function nesting */
   maxNestingDepth?: number;
 }
-
 /**
- * Intermediate representation of an extracted symbol
+ * Comprehensive statistics about graph building operation
  */
-interface ExtractedSymbol {
-  name: string;
-  type: NodeType;
-  startLine: number;
-  endLine: number;
-  docstring?: string;
-  signature?: string;
-  parameters?: string[];
-  returnType?: string;
-  parentClass?: string;
-  exports: boolean;
-  children: ExtractedSymbol[];
-}
+export interface GraphBuildStats {
+  // Parser stats
+  /** Parser performance metrics */
+  parserStats: ParserStats;
 
-/**
- * Intermediate representation of an import statement
- */
-interface ExtractedImport {
-  /** Module/file being imported from */
-  source: string;
-  /** Specific items imported (or ['*'] for star imports) */
-  items: string[];
-  /** Whether it's a default import */
-  isDefault?: boolean;
-  /** Whether it's a relative import */
-  isRelative?: boolean;
+  // Graph stats
+  /** Total number of nodes in graph */
+  totalNodes: number;
+  /** Total number of edges in graph */
+  totalEdges: number;
+  /** Node counts by type */
+  nodesByType: Record<NodeType, number>;
+  /** Edge counts by type */
+  edgesByType: Record<EdgeType, number>;
+
+  // Files stats
+  /** Number of files parsed */
+  filesParsed: number;
+  /** Number of files that had errors */
+  filesWithErrors: number;
+
+  // Timing
+  /** Time spent parsing files in milliseconds */
+  parseTimeMs: number;
+  /** Time spent building graph structure in milliseconds */
+  graphBuildTimeMs: number;
+  /** Total operation time in milliseconds */
+  totalTimeMs: number;
+
+  // Parser backend usage
+  /** Number of files parsed with each backend */
+  parserUsage: {
+    oxc: number;
+    treeSitter: number;
+  };
 }
 
 /**
  * Result from extracting a single file
+ *
+ * This is now a thin wrapper around UnifiedParseResult with relative path calculation
  */
 interface FileExtractionResult {
   filePath: string;
@@ -81,98 +93,41 @@ interface FileExtractionResult {
   symbols: ExtractedSymbol[];
   imports: ExtractedImport[];
   loc: number;
+  parser: ParserBackend;
+  parseTimeMs: number;
 }
 
-// ============================================
-// Node Type Mappings by Language
-// ============================================
-
-/**
- * AST node types that represent classes in each language
- */
-const CLASS_NODE_TYPES: Record<ParserLanguage, string[]> = {
-  typescript: ['class_declaration', 'class', 'abstract_class_declaration'],
-  javascript: ['class_declaration', 'class'],
-  python: ['class_definition']
-};
-
-/**
- * AST node types that represent functions in each language
- */
-const FUNCTION_NODE_TYPES: Record<ParserLanguage, string[]> = {
-  typescript: [
-    'function_declaration',
-    'method_definition',
-    'arrow_function',
-    'function',
-    'function_expression',
-    'method_signature'
-  ],
-  javascript: [
-    'function_declaration',
-    'method_definition',
-    'arrow_function',
-    'function',
-    'function_expression'
-  ],
-  python: ['function_definition']
-};
-
-/**
- * AST node types that represent importable symbols (depth 5)
- */
-const SYMBOL_NODE_TYPES: Record<ParserLanguage, string[]> = {
-  typescript: [
-    'variable_declaration',
-    'lexical_declaration',
-    'type_alias_declaration',
-    'interface_declaration',
-    'enum_declaration',
-    'const_declaration'
-  ],
-  javascript: [
-    'variable_declaration',
-    'lexical_declaration'
-  ],
-  python: [
-    'assignment',
-    'expression_statement'
-  ]
-};
-
-/**
- * AST node types that represent import statements
- */
-const IMPORT_NODE_TYPES: Record<ParserLanguage, string[]> = {
-  typescript: ['import_statement', 'import_declaration', 'import'],
-  javascript: ['import_statement', 'import_declaration', 'import'],
-  python: ['import_statement', 'import_from_statement']
-};
 
 // ============================================
 // Main Graph Building Functions
 // ============================================
 
 /**
- * Build a complete knowledge graph from parsed AST results
+ * Build a complete knowledge graph from unified parser results
  *
- * @param parseResults - Array of parse results from tree-sitter-parser
+ * @param parseResults - Array of parse results from unified parser interface (OXC or Tree-sitter)
  * @param config - Graph builder configuration
  * @returns Complete graph data structure
  */
 export function buildGraph(
-  parseResults: ParseResult[],
+  parseResults: UnifiedParseResult[],
   config: GraphBuilderConfig
 ): GraphData {
+  // Check cache first for complete graph
+  const cachedGraph = graphCache.getGraph(config.projectId);
+  if (cachedGraph) {
+    return cachedGraph;
+  }
+
   const startTime = Date.now();
 
-  // Extract all file data first
+  // Convert unified results to extraction format
   const extractions: FileExtractionResult[] = [];
   const parseErrors: ParseError[] = [];
 
   for (const result of parseResults) {
     try {
-      const extraction = extractFileData(result, config.projectRoot);
+      const extraction = convertToExtraction(result, config.projectRoot);
       extractions.push(extraction);
     } catch (error) {
       parseErrors.push({
@@ -192,7 +147,7 @@ export function buildGraph(
   // Calculate statistics
   const stats = calculateStats(nodes, edges, extractions, Date.now() - startTime);
 
-  return {
+  const graph: GraphData = {
     nodes,
     edges,
     generatedAt: new Date(),
@@ -201,26 +156,25 @@ export function buildGraph(
     stats,
     parseErrors: parseErrors.length > 0 ? parseErrors : undefined
   };
+
+  // Cache the built graph
+  graphCache.setGraph(config.projectId, graph);
+
+  return graph;
 }
 
 /**
- * Extract all data from a single parsed file
+ * Convert UnifiedParseResult to FileExtractionResult
+ *
+ * This is a simple transformation that adds relative path calculation
+ * and preserves all the extracted data from the parser
  */
-function extractFileData(
-  parseResult: ParseResult,
+function convertToExtraction(
+  parseResult: UnifiedParseResult,
   projectRoot: string
 ): FileExtractionResult {
-  const { tree, language, filePath } = parseResult;
+  const { language, filePath, symbols, imports, loc, parser, parseTimeMs } = parseResult;
   const relativePath = path.relative(projectRoot, filePath);
-
-  // Extract symbols from AST
-  const symbols = extractSymbolsFromNode(tree.rootNode, language, null);
-
-  // Extract import statements
-  const imports = extractImportsFromNode(tree.rootNode, language);
-
-  // Count lines of code
-  const loc = tree.rootNode.endPosition.row + 1;
 
   return {
     filePath,
@@ -228,7 +182,9 @@ function extractFileData(
     language,
     symbols,
     imports,
-    loc
+    loc,
+    parser,
+    parseTimeMs
   };
 }
 
@@ -760,26 +716,12 @@ export function extractEdges(
     }
   }
 
-  // Build import edges
-  for (const extraction of extractions) {
-    const fileNodeId = `file:${extraction.relativePath}`;
-    if (!nodeMap.has(fileNodeId)) continue;
-
-    for (const imp of extraction.imports) {
-      const targetNodeId = resolveImportTarget(imp, extraction, fileToNodeId, config.projectRoot);
-      if (targetNodeId && nodeMap.has(targetNodeId)) {
-        const edgeId = `edge:imports:${fileNodeId}:${targetNodeId}`;
-        if (!edgeIds.has(edgeId)) {
-          edges.push({
-            id: edgeId,
-            source: fileNodeId,
-            target: targetNodeId,
-            type: 'imports',
-            label: imp.items.join(', ')
-          });
-          edgeIds.add(edgeId);
-        }
-      }
+  // Build import edges using the new unified approach
+  const importEdges = buildImportEdges(extractions, nodeMap, config.projectRoot);
+  for (const edge of importEdges) {
+    if (!edgeIds.has(edge.id)) {
+      edges.push(edge);
+      edgeIds.add(edge.id);
     }
   }
 
@@ -891,6 +833,122 @@ function extractInheritanceEdges(
   // This would require deeper AST analysis to find "extends" clauses
   // For now, return empty - can be enhanced later
   return edges;
+}
+
+// ============================================
+// OXC/Unified Parser Support
+// ============================================
+
+/**
+ * Extract function nodes from unified parse results (OXC or Tree-sitter)
+ *
+ * Converts ExtractedSymbol objects with type='function' into GraphNode objects
+ * suitable for the dependency graph visualization.
+ *
+ * @param parseResult - Unified parse result containing extracted symbols
+ * @param projectPath - Project root path for relative path calculation
+ * @returns Array of GraphNode objects representing functions
+ */
+export function extractFunctionNodes(
+  parseResult: UnifiedParseResult,
+  projectPath: string
+): GraphNode[] {
+  const nodes: GraphNode[] = [];
+  const relativePath = path.relative(projectPath, parseResult.filePath);
+
+  // Recursive function to extract function nodes from symbols
+  const extractFromSymbols = (symbols: ExtractedSymbol[], parentPath: string): void => {
+    for (const symbol of symbols) {
+      // Process function symbols
+      if (symbol.type === 'function') {
+        const functionType = getFunctionType(symbol);
+        const id = `function:${parentPath}:${symbol.name}`;
+
+        const node: GraphNode = {
+          id,
+          name: symbol.name,
+          type: 'function',
+          filePath: relativePath,
+          depth: 4 as DepthLevel,
+          metadata: {
+            startLine: symbol.startLine,
+            endLine: symbol.endLine,
+            loc: symbol.endLine - symbol.startLine + 1,
+            docstring: symbol.docstring,
+            signature: symbol.signature,
+            parameters: symbol.parameters,
+            returnType: symbol.returnType,
+            parentClass: symbol.parentClass,
+            language: parseResult.language,
+            functionType
+          }
+        };
+
+        nodes.push(node);
+      }
+
+      // Recursively process children (e.g., methods in classes)
+      if (symbol.children && symbol.children.length > 0) {
+        const childPath = symbol.type === 'class'
+          ? `${parentPath}:${symbol.name}`
+          : parentPath;
+        extractFromSymbols(symbol.children, childPath);
+      }
+    }
+  };
+
+  extractFromSymbols(parseResult.symbols, relativePath);
+  return nodes;
+}
+
+/**
+ * Determine the specific function type from an extracted symbol
+ *
+ * Handles different function variations:
+ * - Regular functions (function foo() {})
+ * - Arrow functions (const foo = () => {})
+ * - Async functions (async function foo() {})
+ * - Generator functions (function* foo() {})
+ * - Methods (within classes)
+ *
+ * @param symbol - Extracted symbol with type='function'
+ * @returns Specific function type string for metadata
+ */
+export function getFunctionType(symbol: ExtractedSymbol): string {
+  // If part of a class, it's a method
+  if (symbol.parentClass) {
+    // Check for async method
+    if (symbol.signature && symbol.signature.includes('async')) {
+      return 'async_method';
+    }
+    return 'method';
+  }
+
+  // Check signature for function characteristics
+  const sig = symbol.signature || '';
+
+  // Generator function (has * in signature)
+  if (sig.includes('*')) {
+    return 'generator';
+  }
+
+  // Async function
+  if (sig.includes('async')) {
+    return 'async_function';
+  }
+
+  // Arrow function (signature contains =>)
+  if (sig.includes('=>')) {
+    return 'arrow_function';
+  }
+
+  // Check if it's exported
+  if (symbol.exports) {
+    return 'exported_function';
+  }
+
+  // Default: regular function
+  return 'function';
 }
 
 // ============================================
@@ -1195,3 +1253,156 @@ export function updateGraph(
     generatedAt: new Date()
   };
 }
+
+// ============================================
+// OXC Symbol Extraction Functions
+// ============================================
+
+/**
+ * Extract class nodes from unified parse results
+ *
+ * Processes ExtractedSymbol objects from OXC parser and converts
+ * class symbols to GraphNode objects with proper hierarchy.
+ *
+ * @param parseResult - Unified parse result from OXC or Tree-sitter
+ * @param projectPath - Project root path for relative path calculation
+ * @returns Array of class GraphNode objects
+ */
+export function extractClassNodes(
+  parseResult: UnifiedParseResult,
+  projectPath: string
+): GraphNode[] {
+  const nodes: GraphNode[] = [];
+  const relativePath = path.relative(projectPath, parseResult.filePath);
+
+  // Filter for class symbols
+  const classSymbols = parseResult.symbols.filter(s => s.type === 'class');
+
+  for (const symbol of classSymbols) {
+    const node = symbolToNode(symbol, relativePath, projectPath);
+    nodes.push(node);
+
+    // Process nested classes recursively
+    if (symbol.children.length > 0) {
+      const nestedClasses = symbol.children.filter(c => c.type === 'class');
+      for (const nested of nestedClasses) {
+        const nestedNode = symbolToNode(nested, relativePath, projectPath);
+        nodes.push(nestedNode);
+      }
+    }
+  }
+
+  return nodes;
+}
+
+/**
+ * Extract interface nodes from unified parse results (TypeScript)
+ *
+ * Processes ExtractedSymbol objects from OXC parser and converts
+ * interface/type alias symbols to GraphNode objects.
+ *
+ * Note: Interfaces are represented as 'symbol' type with depth 5 in the graph.
+ *
+ * @param parseResult - Unified parse result from OXC or Tree-sitter
+ * @param projectPath - Project root path for relative path calculation
+ * @returns Array of interface/type GraphNode objects
+ */
+export function extractInterfaceNodes(
+  parseResult: UnifiedParseResult,
+  projectPath: string
+): GraphNode[] {
+  const nodes: GraphNode[] = [];
+  const relativePath = path.relative(projectPath, parseResult.filePath);
+
+  // Only process TypeScript files (interfaces don't exist in JS/Python)
+  if (parseResult.language !== 'typescript') {
+    return nodes;
+  }
+
+  // Filter for interface and type symbols
+  // Note: OXC parser marks interfaces/types as 'symbol' type
+  const interfaceSymbols = parseResult.symbols.filter(s => {
+    // Interface/type symbols are identified by having specific signature patterns
+    // or by checking docstrings/comments
+    return s.type === 'symbol' && (
+      s.signature?.includes('interface') ||
+      s.signature?.includes('type ') ||
+      s.docstring?.toLowerCase().includes('interface') ||
+      s.docstring?.toLowerCase().includes('type alias')
+    );
+  });
+
+  for (const symbol of interfaceSymbols) {
+    const node = symbolToNode(symbol, relativePath, projectPath);
+    nodes.push(node);
+
+    // Process generic type parameters if present
+    // Type parameters are typically represented as children
+    if (symbol.children.length > 0) {
+      for (const child of symbol.children) {
+        const childNode = symbolToNode(child, relativePath, projectPath);
+        nodes.push(childNode);
+      }
+    }
+  }
+
+  return nodes;
+}
+
+/**
+ * Convert ExtractedSymbol to GraphNode
+ *
+ * Maps OXC parser's ExtractedSymbol format to the internal GraphNode format
+ * used by the knowledge graph. Handles all symbol types (class, function, symbol).
+ *
+ * @param symbol - Extracted symbol from OXC parser
+ * @param filePath - Relative file path from project root
+ * @param projectPath - Project root path
+ * @returns GraphNode representation of the symbol
+ */
+export function symbolToNode(
+  symbol: ExtractedSymbol,
+  filePath: string,
+  projectPath: string
+): GraphNode {
+  // Generate unique ID based on symbol type, file path, and name
+  const id = `${symbol.type}:${filePath}:${symbol.name}`;
+
+  // Determine depth level based on symbol type
+  const depth = getDepthForType(symbol.type);
+
+  // Calculate lines of code for this symbol
+  const loc = symbol.endLine - symbol.startLine + 1;
+
+  // Build metadata object with all available symbol information
+  const metadata: NodeMetadata = {
+    startLine: symbol.startLine,
+    endLine: symbol.endLine,
+    loc,
+    docstring: symbol.docstring,
+    signature: symbol.signature,
+    parameters: symbol.parameters,
+    returnType: symbol.returnType,
+    parentClass: symbol.parentClass,
+    complexity: calculateComplexity(loc)
+  };
+
+  // Create and return the GraphNode
+  return {
+    id,
+    name: symbol.name,
+    type: symbol.type,
+    filePath,
+    depth,
+    metadata
+  };
+}
+
+// ============================================
+// Cache Exports
+// ============================================
+
+/**
+ * Export the global graph cache instance for external use
+ */
+export { graphCache };

@@ -8,6 +8,20 @@ import type {
   SelectedNodeInfo
 } from '../../shared/types';
 
+/**
+ * Parser statistics state
+ */
+export interface ParserStatsState {
+  /** Number of files parsed with OXC parser */
+  oxcFilesCount: number;
+  /** Number of files parsed with Tree-sitter parser */
+  treeSitterFilesCount: number;
+  /** Total time spent parsing in milliseconds */
+  totalParseTimeMs: number;
+  /** Timestamp of last refresh (Unix timestamp in ms) */
+  lastRefreshTime: number | null;
+}
+
 interface ExplorerState {
   // Graph Data
   graph: GraphData | null;
@@ -30,6 +44,9 @@ interface ExplorerState {
   // Viewport State
   viewport: GraphViewport;
 
+  // Parser Statistics
+  parserStats: ParserStatsState | null;
+
   // Actions
   setGraph: (graph: GraphData | null) => void;
   setGraphError: (error: string | null) => void;
@@ -40,6 +57,8 @@ interface ExplorerState {
   setLoadingStatus: (status: ExplorerLoadingStatus) => void;
   setFilterOptions: (options: Partial<GraphFilterOptions>) => void;
   setViewport: (viewport: Partial<GraphViewport>) => void;
+  setParserStats: (stats: ParserStatsState) => void;
+  clearParserStats: () => void;
   resetViewport: () => void;
   clearSelection: () => void;
   clearAll: () => void;
@@ -84,6 +103,9 @@ export const useExplorerStore = create<ExplorerState>((set) => ({
   // Viewport State
   viewport: DEFAULT_VIEWPORT,
 
+  // Parser Statistics
+  parserStats: null,
+
   // Actions
   setGraph: (graph) => set({ graph }),
   setGraphError: (error) => set({ graphError: error }),
@@ -104,6 +126,8 @@ export const useExplorerStore = create<ExplorerState>((set) => ({
     set((state) => ({
       viewport: { ...state.viewport, ...viewport }
     })),
+  setParserStats: (stats) => set({ parserStats: stats }),
+  clearParserStats: () => set({ parserStats: null }),
   resetViewport: () => set({ viewport: DEFAULT_VIEWPORT }),
   clearSelection: () =>
     set({
@@ -120,7 +144,8 @@ export const useExplorerStore = create<ExplorerState>((set) => ({
       isLoading: false,
       loadingStatus: DEFAULT_LOADING_STATUS,
       filterOptions: DEFAULT_FILTER_OPTIONS,
-      viewport: DEFAULT_VIEWPORT
+      viewport: DEFAULT_VIEWPORT,
+      parserStats: null
     })
 }));
 
@@ -143,6 +168,17 @@ export async function loadProjectGraph(projectId: string): Promise<void> {
     if (result.success) {
       // data can be null if no cached graph exists - this is not an error
       store.setGraph(result.data);
+
+      // Extract and store parser stats if available
+      if (result.data?.stats) {
+        store.setParserStats({
+          oxcFilesCount: result.data.stats.oxcFilesCount ?? 0,
+          treeSitterFilesCount: result.data.stats.treeSitterFilesCount ?? 0,
+          totalParseTimeMs: result.data.stats.parseDurationMs,
+          lastRefreshTime: result.data.generatedAt ? new Date(result.data.generatedAt).getTime() : null
+        });
+      }
+
       store.setLoadingStatus({
         phase: result.data ? 'complete' : 'idle',
         progress: result.data ? 100 : 0,
@@ -192,6 +228,17 @@ export async function refreshProjectGraph(projectId: string): Promise<void> {
     console.warn('[Explorer Store] IPC result:', result.success, result.data ? `${result.data.nodes?.length} nodes` : 'no data', result.error);
     if (result.success && result.data) {
       store.setGraph(result.data);
+
+      // Extract and store parser stats
+      if (result.data.stats) {
+        store.setParserStats({
+          oxcFilesCount: result.data.stats.oxcFilesCount ?? 0,
+          treeSitterFilesCount: result.data.stats.treeSitterFilesCount ?? 0,
+          totalParseTimeMs: result.data.stats.parseDurationMs,
+          lastRefreshTime: new Date(result.data.generatedAt).getTime()
+        });
+      }
+
       store.setLoadingStatus({
         phase: 'complete',
         progress: 100,

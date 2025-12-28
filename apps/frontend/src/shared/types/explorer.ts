@@ -66,6 +66,8 @@ export interface NodeMetadata {
   returnType?: string;
   /** Parameters for functions */
   parameters?: string[];
+  /** Specific function type (function, arrow_function, async_function, etc.) */
+  functionType?: string;
 }
 
 /**
@@ -156,6 +158,10 @@ export interface GraphStats {
   languages: ParserLanguage[];
   /** Parse duration in milliseconds */
   parseDurationMs: number;
+  /** Number of files parsed with OXC parser */
+  oxcFilesCount?: number;
+  /** Number of files parsed with Tree-sitter parser */
+  treeSitterFilesCount?: number;
 }
 
 /**

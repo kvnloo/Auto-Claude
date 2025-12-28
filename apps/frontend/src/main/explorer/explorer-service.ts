@@ -2,12 +2,14 @@
  * Explorer Service - Orchestrates codebase parsing and graph building
  *
  * This service coordinates between multiple specialized modules:
- * - TreeSitterParser: Handles WASM-based AST parsing
- * - GraphBuilder: Converts parsed ASTs to knowledge graph
+ * - ParserRouter: Routes files to appropriate parser (OXC or Tree-sitter)
+ * - GraphBuilder: Converts parsed results to knowledge graph
  * - Filesystem: Discovers parseable files and manages cache
  *
  * Key features:
  * - Async project parsing with progress events
+ * - Multi-parser support (OXC for JS/TS, Tree-sitter for Python)
+ * - Parser statistics tracking (files per parser, timing)
  * - Graph caching to .auto-claude/explorer/graph.json
  * - Cancellation support for long-running parses
  * - Cache validation via file timestamps
@@ -25,15 +27,16 @@ import type {
   SelectedNodeInfo
 } from '../../shared/types';
 import {
-  initTreeSitter,
   parseFiles,
+  initializeParsers,
   isParseableFile,
   getSupportedExtensions,
-  clearParsers,
-  ParserError,
-  type ParseResult
-} from './tree-sitter-parser';
+  type BatchParseResult,
+  type BatchParseStats
+} from './parser-router';
+import { ParserError, ParseError, ParserInitializationError } from './parser-errors';
 import { buildGraph, type GraphBuilderConfig } from './graph-builder';
+import type { UnifiedParseResult } from './types';
 
 // ============================================
 // Error Types
@@ -111,7 +114,12 @@ export class ExplorerError extends Error {
     }
 
     // Parser initialization errors
-    if (error instanceof ParserError || rawMessage.includes('Tree-sitter')) {
+    if (
+      error instanceof ParserError ||
+      error instanceof ParserInitializationError ||
+      rawMessage.includes('Tree-sitter') ||
+      rawMessage.includes('parser')
+    ) {
       return ExplorerError.createInitializationError(rawMessage, cause);
     }
 
@@ -435,24 +443,24 @@ export class ExplorerService extends EventEmitter {
         }
       }
 
-      // Initialize Tree-sitter if needed
+      // Initialize parsers if needed
       if (!this.initialized) {
         this.emitStatus(projectId, {
           phase: 'scanning-files',
           progress: 5,
-          message: 'Initializing parser...'
+          message: 'Initializing parsers...'
         });
-        console.warn('[ExplorerService] Initializing Tree-sitter...');
+        console.warn('[ExplorerService] Initializing parsers...');
         try {
-          await initTreeSitter();
+          await initializeParsers();
           this.initialized = true;
-          console.warn('[ExplorerService] Tree-sitter initialized successfully');
+          console.warn('[ExplorerService] Parsers initialized successfully');
         } catch (error) {
-          console.warn('[ExplorerService] Tree-sitter initialization failed:', error);
+          console.warn('[ExplorerService] Parser initialization failed:', error);
           throw error;
         }
       } else {
-        console.warn('[ExplorerService] Tree-sitter already initialized');
+        console.warn('[ExplorerService] Parsers already initialized');
       }
 
       // Check for abort
@@ -533,11 +541,22 @@ export class ExplorerService extends EventEmitter {
         throw new Error('Parse cancelled');
       }
 
+      // Log parser statistics
+      console.warn('[ExplorerService] Parse statistics:', {
+        oxcFiles: parseResults.stats.oxcCount,
+        treeSitterFiles: parseResults.stats.treeSitterCount,
+        totalFiles: parseResults.results.length,
+        totalTimeMs: parseResults.stats.totalTimeMs,
+        avgTimePerFile: parseResults.results.length > 0
+          ? Math.round(parseResults.stats.totalTimeMs / parseResults.results.length)
+          : 0
+      });
+
       // Build graph from parse results
       this.emitStatus(projectId, {
         phase: 'building-graph',
         progress: 90,
-        message: 'Building knowledge graph...'
+        message: `Building knowledge graph (OXC: ${parseResults.stats.oxcCount}, Tree-sitter: ${parseResults.stats.treeSitterCount})...`
       });
 
       const config: GraphBuilderConfig = {
@@ -547,6 +566,9 @@ export class ExplorerService extends EventEmitter {
       };
 
       const graph = buildGraph(parseResults.results, config);
+
+      // Add parser statistics to graph metadata
+      (graph as GraphData & { parserStats?: BatchParseStats }).parserStats = parseResults.stats;
 
       // Save to cache
       const fileTimestamps = await this.getFileTimestamps(files);
@@ -746,7 +768,9 @@ export class ExplorerService extends EventEmitter {
 
     // Clear caches
     this.graphCache.clear();
-    clearParsers();
+
+    // Note: Parser cleanup is handled by individual parser modules
+    // (OXC has no cleanup needed, tree-sitter cleans up on process exit)
   }
 
   // ============================================
@@ -801,15 +825,22 @@ export class ExplorerService extends EventEmitter {
   }
 
   /**
-   * Parse files with progress updates
+   * Parse files with progress updates and statistics
    */
   private async parseFilesWithProgress(
     projectId: string,
     files: string[],
     signal: AbortSignal
-  ): Promise<{ results: ParseResult[]; errors: { filePath: string; error: string }[] }> {
-    const results: ParseResult[] = [];
+  ): Promise<{
+    results: UnifiedParseResult[];
+    errors: { filePath: string; error: string }[];
+    stats: BatchParseStats;
+  }> {
+    const results: UnifiedParseResult[] = [];
     const errors: { filePath: string; error: string }[] = [];
+    let totalOxcCount = 0;
+    let totalTreeSitterCount = 0;
+    let totalParseTimeMs = 0;
 
     // Parse files in batches to allow progress updates
     const batchSize = 50;
@@ -828,6 +859,11 @@ export class ExplorerService extends EventEmitter {
       results.push(...batchResult.results);
       errors.push(...batchResult.errors);
 
+      // Accumulate statistics
+      totalOxcCount += batchResult.stats.oxcCount;
+      totalTreeSitterCount += batchResult.stats.treeSitterCount;
+      totalParseTimeMs += batchResult.stats.totalTimeMs;
+
       // Calculate progress (20-90 range for parsing phase)
       const progress = 20 + Math.round(((i + 1) / totalBatches) * 70);
 
@@ -837,11 +873,19 @@ export class ExplorerService extends EventEmitter {
         totalFiles: files.length,
         filesParsed: end,
         currentFile: batch[batch.length - 1],
-        message: `Parsed ${end} of ${files.length} files`
+        message: `Parsed ${end} of ${files.length} files (OXC: ${totalOxcCount}, Tree-sitter: ${totalTreeSitterCount})`
       });
     }
 
-    return { results, errors };
+    return {
+      results,
+      errors,
+      stats: {
+        oxcCount: totalOxcCount,
+        treeSitterCount: totalTreeSitterCount,
+        totalTimeMs: totalParseTimeMs
+      }
+    };
   }
 
   /**
