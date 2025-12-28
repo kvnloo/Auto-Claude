@@ -242,6 +242,8 @@ export async function initTreeSitter(): Promise<void> {
         );
       }
 
+      console.log('[TreeSitter] Initializing with core WASM:', coreWasmPath);
+
       // Initialize with the WASM location
       await ParserClass.init({
         locateFile: (scriptName: string) => {
@@ -254,8 +256,10 @@ export async function initTreeSitter(): Promise<void> {
       });
 
       parserInitialized = true;
+      console.log('[TreeSitter] Initialization complete');
     } catch (error) {
       initPromise = null;
+      console.error('[TreeSitter] Initialization failed:', error);
       throw new ParserError(
         'Failed to initialize Tree-sitter',
         undefined,
@@ -327,6 +331,7 @@ async function loadLanguage(language: ParserLanguage): Promise<TreeSitterLanguag
   // Check cache
   const cached = languages.get(language);
   if (cached) {
+    console.log(`[TreeSitter] Using cached ${language} parser`);
     return cached;
   }
 
@@ -338,6 +343,7 @@ async function loadLanguage(language: ParserLanguage): Promise<TreeSitterLanguag
 
   // Check if WASM file exists
   if (!fs.existsSync(wasmPath)) {
+    console.error(`[TreeSitter] Language WASM not found: ${wasmPath}`);
     throw new ParserError(
       `Language WASM not found for ${language} at: ${wasmPath}. ` +
       `Please ensure tree-sitter-${language === 'typescript' ? 'tsx' : language}.wasm is available.`,
@@ -347,10 +353,13 @@ async function loadLanguage(language: ParserLanguage): Promise<TreeSitterLanguag
   }
 
   try {
+    console.log(`[TreeSitter] Loading ${language} parser from: ${wasmPath}`);
     const lang = await ParserClass.Language.load(wasmPath);
     languages.set(language, lang);
+    console.log(`[TreeSitter] ${language} parser loaded successfully`);
     return lang;
   } catch (error) {
+    console.error(`[TreeSitter] Failed to load ${language} parser:`, error);
     throw new ParserError(
       `Failed to load language grammar for ${language}`,
       undefined,

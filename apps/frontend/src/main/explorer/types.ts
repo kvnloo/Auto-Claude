@@ -3,16 +3,19 @@
  *
  * This module consolidates types used in the main process explorer functionality:
  * - Tree-sitter parsing types
+ * - Unified parser types (OXC and Tree-sitter)
  * - File analysis types
  * - Graph building types
  *
  * Frontend-facing types (GraphNode, GraphEdge, etc.) are in shared/types/explorer.ts
+ *
+ * @module types
  */
 
 import type { ParserLanguage, NodeType } from '../../shared/types';
 
 // Re-export shared types for convenience
-export type { ParserLanguage } from '../../shared/types';
+export type { ParserLanguage, NodeType } from '../../shared/types';
 
 // ============================================
 // Parse Result Types
@@ -127,57 +130,80 @@ export interface TreeSitterParser {
 
 /**
  * Parser backend identifier
+ *
+ * - `oxc`: High-performance Rust-based parser for JavaScript/TypeScript (fastest)
+ * - `tree-sitter`: Universal parser supporting TypeScript, JavaScript, and Python
  */
 export type ParserBackend = 'oxc' | 'tree-sitter';
 
 /**
  * Extracted symbol representation (used by unified parsers)
+ *
+ * Represents a code symbol (class, function, variable, etc.) extracted during parsing.
+ * This is a unified format used by both OXC and Tree-sitter parsers.
  */
 export interface ExtractedSymbol {
+  /** Symbol name (e.g., "MyClass", "myFunction") */
   name: string;
+  /** Type of symbol (class, function, symbol, etc.) */
   type: NodeType;
+  /** Starting line number in the source file (1-indexed) */
   startLine: number;
+  /** Ending line number in the source file (1-indexed) */
   endLine: number;
+  /** Documentation string (JSDoc, docstring, etc.) if present */
   docstring?: string;
+  /** Function/method signature if applicable */
   signature?: string;
+  /** Function parameter names if applicable */
   parameters?: string[];
+  /** Return type annotation if available */
   returnType?: string;
+  /** Parent class name for methods */
   parentClass?: string;
+  /** Whether this symbol is exported from the module */
   exports: boolean;
+  /** Nested symbols (e.g., methods in a class) */
   children: ExtractedSymbol[];
 }
 
 /**
  * Extracted import statement (used by unified parsers)
+ *
+ * Represents an import statement found during parsing.
+ * Supports ES6 imports, CommonJS requires, and Python imports.
  */
 export interface ExtractedImport {
-  /** Module/file being imported from */
+  /** Module/file being imported from (e.g., "react", "./utils") */
   source: string;
   /** Specific items imported (or ['*'] for star imports) */
   items: string[];
-  /** Whether it's a default import */
+  /** Whether it's a default import (import X from 'y') */
   isDefault?: boolean;
-  /** Whether it's a relative import */
+  /** Whether it's a relative import (starts with . or /) */
   isRelative?: boolean;
 }
 
 /**
  * Unified parse result from either parser
+ *
+ * This is the standardized output format from both OXC and Tree-sitter parsers.
+ * It contains extracted symbols, imports, and metadata about the parse operation.
  */
 export interface UnifiedParseResult {
-  /** Extracted symbols (classes, functions, etc.) */
+  /** Extracted symbols (classes, functions, variables, etc.) */
   symbols: ExtractedSymbol[];
-  /** Import statements found */
+  /** Import statements found in the file */
   imports: ExtractedImport[];
-  /** Programming language */
+  /** Programming language of the parsed file */
   language: ParserLanguage;
-  /** File path parsed */
+  /** Absolute file path that was parsed */
   filePath: string;
-  /** Time to parse in ms */
+  /** Time taken to parse in milliseconds */
   parseTimeMs: number;
-  /** Which parser was used */
+  /** Which parser was used (oxc or tree-sitter) */
   parser: ParserBackend;
-  /** Lines of code */
+  /** Total lines of code in the file */
   loc: number;
 }
 
@@ -350,3 +376,48 @@ export const SUPPORTED_LANGUAGES: ParserLanguage[] = ['typescript', 'javascript'
  * File extensions supported for parsing
  */
 export const SUPPORTED_EXTENSIONS: string[] = Object.keys(EXTENSION_TO_LANGUAGE);
+
+// ============================================
+// Type Exports Summary
+// ============================================
+
+/**
+ * This module exports the following type categories:
+ *
+ * **Graph/Node Types (re-exported from shared):**
+ * - ParserLanguage - Programming language identifier
+ * - NodeType - Type of code entity (file, class, function, etc.)
+ *
+ * **Parser Backend Types:**
+ * - ParserBackend - Parser identifier ('oxc' | 'tree-sitter')
+ * - UnifiedParseResult - Standardized parse output
+ * - ExtractedSymbol - Code symbol representation
+ * - ExtractedImport - Import statement representation
+ *
+ * **Tree-sitter Types:**
+ * - ParseResult - Single file parse result
+ * - BatchParseResult - Multi-file parse result
+ * - FileParseError - Parse error information
+ * - TreeSitterTree - Tree-sitter AST tree
+ * - TreeSitterNode - Tree-sitter AST node
+ * - TreeSitterLanguage - Tree-sitter grammar
+ * - TreeSitterParser - Tree-sitter parser instance
+ *
+ * **File Analysis Types:**
+ * - FileAnalysis - Complete file analysis result
+ * - SymbolInfo - Symbol metadata
+ * - ImportInfo - Import metadata
+ * - ExportInfo - Export metadata
+ *
+ * **Project Analysis Types:**
+ * - AnalysisConfig - Analysis configuration
+ * - AnalysisStats - Analysis statistics
+ *
+ * **Parser Configuration:**
+ * - ParserStatus - Parser system status
+ * - EXTENSION_TO_LANGUAGE - Extension to language mapping
+ * - SUPPORTED_LANGUAGES - Supported language list
+ * - SUPPORTED_EXTENSIONS - Supported extension list
+ *
+ * Note: ParseMetric and ParserStats are defined in parser-metrics.ts
+ */

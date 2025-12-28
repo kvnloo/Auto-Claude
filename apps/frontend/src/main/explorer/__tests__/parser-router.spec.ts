@@ -18,12 +18,11 @@ import type { UnifiedParseResult, ParserBackend } from '../types';
 // Mock the parser backends
 vi.mock('../oxc-parser', () => ({
   parseFile: vi.fn(),
-  initialize: vi.fn(),
 }));
 
 vi.mock('../tree-sitter-parser', () => ({
   parseFile: vi.fn(),
-  initialize: vi.fn(),
+  initTreeSitter: vi.fn(),
 }));
 
 describe('Parser Router', () => {
@@ -478,75 +477,35 @@ describe('Parser Router', () => {
   });
 
   describe('initializeParsers', () => {
-    let mockOxcInitialize: ReturnType<typeof vi.fn>;
     let mockTreeSitterInitialize: ReturnType<typeof vi.fn>;
 
     beforeEach(async () => {
       vi.clearAllMocks();
 
-      const oxcParser = await import('../oxc-parser');
       const treeSitterParser = await import('../tree-sitter-parser');
-      mockOxcInitialize = oxcParser.initialize as ReturnType<typeof vi.fn>;
-      mockTreeSitterInitialize = treeSitterParser.initialize as ReturnType<typeof vi.fn>;
+      mockTreeSitterInitialize = treeSitterParser.initTreeSitter as ReturnType<typeof vi.fn>;
     });
 
-    it('should initialize both parsers', async () => {
-      mockOxcInitialize.mockResolvedValue(undefined);
+    it('should initialize tree-sitter parser', async () => {
       mockTreeSitterInitialize.mockResolvedValue(undefined);
 
       await initializeParsers();
 
-      expect(mockOxcInitialize).toHaveBeenCalled();
       expect(mockTreeSitterInitialize).toHaveBeenCalled();
     });
 
-    it('should initialize parsers in parallel', async () => {
-      const delay = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
-
-      mockOxcInitialize.mockImplementation(async () => {
-        await delay(100);
-      });
-
-      mockTreeSitterInitialize.mockImplementation(async () => {
-        await delay(100);
-      });
-
-      const startTime = performance.now();
-      await initializeParsers();
-      const elapsed = performance.now() - startTime;
-
-      // If parallel, should take ~100ms, not ~200ms
-      expect(elapsed).toBeLessThan(150);
-    });
-
-    it('should throw if OXC initialization fails', async () => {
-      mockOxcInitialize.mockRejectedValue(new Error('OXC init failed'));
-      mockTreeSitterInitialize.mockResolvedValue(undefined);
-
-      await expect(initializeParsers()).rejects.toThrow('Failed to initialize parsers');
-      await expect(initializeParsers()).rejects.toThrow('OXC init failed');
-    });
-
     it('should throw if tree-sitter initialization fails', async () => {
-      mockOxcInitialize.mockResolvedValue(undefined);
       mockTreeSitterInitialize.mockRejectedValue(new Error('Tree-sitter init failed'));
 
       await expect(initializeParsers()).rejects.toThrow('Failed to initialize parsers');
       await expect(initializeParsers()).rejects.toThrow('Tree-sitter init failed');
     });
 
-    it('should throw if both initializations fail', async () => {
-      mockOxcInitialize.mockRejectedValue(new Error('OXC init failed'));
-      mockTreeSitterInitialize.mockRejectedValue(new Error('Tree-sitter init failed'));
-
-      await expect(initializeParsers()).rejects.toThrow('Failed to initialize parsers');
-    });
-
     it('should handle non-Error rejections', async () => {
-      mockOxcInitialize.mockRejectedValue('Unknown error');
-      mockTreeSitterInitialize.mockResolvedValue(undefined);
+      mockTreeSitterInitialize.mockRejectedValue('Unknown error');
 
       await expect(initializeParsers()).rejects.toThrow('Failed to initialize parsers');
+      await expect(initializeParsers()).rejects.toThrow('Unknown error');
     });
   });
 

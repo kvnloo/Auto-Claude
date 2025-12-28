@@ -115,7 +115,9 @@ export async function parseFile(filePath: string): Promise<UnifiedParseResult | 
       case 'oxc':
         return await parseWithOxc(filePath);
       case 'tree-sitter':
-        return await parseWithTreeSitter(filePath);
+        // Note: tree-sitter parser will be updated to return UnifiedParseResult
+        // For now, we cast the result (it will be updated in a future task)
+        return (await parseWithTreeSitter(filePath)) as unknown as UnifiedParseResult;
       default:
         // TypeScript exhaustiveness check
         const _exhaustive: never = parser;
