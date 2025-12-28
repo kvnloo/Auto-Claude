@@ -22,6 +22,7 @@ import type {
 // Import parser backends
 import { parseFile as parseWithOxc } from './oxc-parser';
 import { parseFile as parseWithTreeSitter, initTreeSitter } from './tree-sitter-parser';
+import { adaptTreeSitterResult } from './tree-sitter-adapter';
 
 // ============================================
 // Extension to Parser Mapping
@@ -115,9 +116,9 @@ export async function parseFile(filePath: string): Promise<UnifiedParseResult | 
       case 'oxc':
         return await parseWithOxc(filePath);
       case 'tree-sitter':
-        // Note: tree-sitter parser will be updated to return UnifiedParseResult
-        // For now, we cast the result (it will be updated in a future task)
-        return (await parseWithTreeSitter(filePath)) as unknown as UnifiedParseResult;
+        // Tree-sitter returns raw AST, adapter converts to UnifiedParseResult
+        const parseResult = await parseWithTreeSitter(filePath);
+        return adaptTreeSitterResult(parseResult);
       default:
         // TypeScript exhaustiveness check
         const _exhaustive: never = parser;
