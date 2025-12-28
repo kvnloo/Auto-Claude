@@ -57,6 +57,37 @@ export function canParse(filePath: string): boolean {
 // ============================================
 
 /**
+ * Parse source code content directly (useful for testing)
+ */
+export function parseContent(
+  content: string,
+  filePath: string,
+  language: ParserLanguage
+): Omit<UnifiedParseResult, 'filePath' | 'parseTimeMs' | 'parser' | 'loc'> {
+  // Determine OXC language format
+  const lang = language === 'typescript'
+    ? (filePath.endsWith('.tsx') ? 'tsx' : 'ts')
+    : (filePath.endsWith('.jsx') ? 'jsx' : 'js');
+
+  const parseResult = parseSync(filePath, content, { lang });
+
+  if (parseResult.errors.length > 0) {
+    const errorMessages = parseResult.errors.map((e) => e.message).join(', ');
+    throw new Error(`Parse errors in ${filePath}: ${errorMessages}`);
+  }
+
+  // Extract symbols and imports from AST
+  const symbols = extractSymbols(parseResult.program, filePath, content);
+  const imports = extractImports(parseResult.program);
+
+  return {
+    symbols,
+    imports,
+    language,
+  };
+}
+
+/**
  * Parse a single file using OXC
  */
 export async function parseFile(filePath: string): Promise<UnifiedParseResult> {
@@ -209,6 +240,11 @@ function extractSymbolFromNode(
   extractJSDoc: (offset: number) => string | undefined,
   parentClass?: string,
 ): ExtractedSymbol | null {
+  // Skip nodes without span information
+  if (!node.span) {
+    return null;
+  }
+
   const startLine = getLineNumber(node.span.start);
   const endLine = getLineNumber(node.span.end);
   const docstring = extractJSDoc(node.span.start);
@@ -309,44 +345,45 @@ function extractSymbolFromNode(
     }
 
     case 'VariableDeclaration': {
-      // Check if any declarator contains a function
-      if (node.declarations && Array.isArray(node.declarations)) {
-        for (const declarator of node.declarations) {
-          if (
-            declarator.init &&
-            (declarator.init.type === 'ArrowFunctionExpression' ||
-              declarator.init.type === 'FunctionExpression')
-          ) {
-            const funcName = declarator.id?.name || 'anonymous';
-            const params =
-              declarator.init.params?.map((p: any) => p.pattern?.name || p.name || 'param') || [];
-            const returnType = declarator.init.returnType?.typeAnnotation?.type || undefined;
+      // Extract the first declarator (most common case is single declaration)
+      if (node.declarations && Array.isArray(node.declarations) && node.declarations.length > 0) {
+        const declarator = node.declarations[0];
 
-            return {
-              name: funcName,
-              type: 'function' as NodeType,
-              startLine,
-              endLine,
-              docstring,
-              parameters: params,
-              returnType,
-              exports: isExport,
-              children: [],
-            };
-          }
+        if (
+          declarator.init &&
+          (declarator.init.type === 'ArrowFunctionExpression' ||
+            declarator.init.type === 'FunctionExpression')
+        ) {
+          // Variable holding a function
+          const funcName = declarator.id?.name || 'anonymous';
+          const params =
+            declarator.init.params?.map((p: any) => p.pattern?.name || p.name || 'param') || [];
+          const returnType = declarator.init.returnType?.typeAnnotation?.type || undefined;
 
-          // Regular variable (const/let/var)
-          const varName = declarator.id?.name || 'unknown';
           return {
-            name: varName,
-            type: 'symbol' as NodeType,
+            name: funcName,
+            type: 'function' as NodeType,
             startLine,
             endLine,
             docstring,
+            parameters: params,
+            returnType,
             exports: isExport,
             children: [],
           };
         }
+
+        // Regular variable (const/let/var)
+        const varName = declarator.id?.name || 'unknown';
+        return {
+          name: varName,
+          type: 'symbol' as NodeType,
+          startLine,
+          endLine,
+          docstring,
+          exports: isExport,
+          children: [],
+        };
       }
       return null;
     }
@@ -433,7 +470,7 @@ function extractImports(program: any): ExtractedImport[] {
 
       imports.push({
         source,
-        items: items.length > 0 ? items : ['*'],
+        items, // Keep empty for side-effect imports
         isDefault,
         isRelative,
       });

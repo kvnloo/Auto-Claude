@@ -910,18 +910,57 @@ describe('Explorer Store', () => {
   });
 
   describe('Async Functions', () => {
+    let mockElectronAPI: any;
+    let loadProjectGraph: (projectId: string) => Promise<void>;
+    let refreshProjectGraph: (projectId: string) => Promise<void>;
+
+    beforeEach(async () => {
+      // Set up window mock for async tests
+      if (typeof window === 'undefined') {
+        // @ts-expect-error - Creating global window for tests
+        global.window = {};
+      }
+
+      // Create base mock API structure
+      mockElectronAPI = {
+        explorer: {
+          getGraph: vi.fn(),
+          refreshGraph: vi.fn(),
+          getNodeInfo: vi.fn()
+        }
+      };
+
+      // @ts-expect-error - Mocking window.electronAPI
+      window.electronAPI = mockElectronAPI;
+
+      // Reset store before each test
+      useExplorerStore.setState({
+        graph: null,
+        graphError: null,
+        selectedNodeId: null,
+        selectedNodeInfo: null,
+        depthLevel: 2,
+        isLoading: false,
+        loadingStatus: DEFAULT_LOADING_STATUS,
+        filterOptions: DEFAULT_FILTER_OPTIONS,
+        viewport: DEFAULT_VIEWPORT,
+        parserStats: null
+      });
+
+      // Reset modules to ensure fresh imports
+      vi.resetModules();
+
+      // Import functions after mock is set up
+      const module = await import('../stores/explorer-store');
+      loadProjectGraph = module.loadProjectGraph;
+      refreshProjectGraph = module.refreshProjectGraph;
+    });
+
     describe('loadProjectGraph', () => {
       it('should load graph from cache successfully', async () => {
         const mockGraph = createTestGraphData({ projectId: 'test-project' });
-        const mockElectronAPI = {
-          explorer: {
-            getGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.getGraph.mockResolvedValue({ success: true, data: mockGraph });
 
-        const { loadProjectGraph } = await import('../stores/explorer-store');
         await loadProjectGraph('test-project');
 
         const state = useExplorerStore.getState();
@@ -931,15 +970,8 @@ describe('Explorer Store', () => {
       });
 
       it('should handle no cached graph (null data)', async () => {
-        const mockElectronAPI = {
-          explorer: {
-            getGraph: vi.fn().mockResolvedValue({ success: true, data: null })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.getGraph.mockResolvedValue({ success: true, data: null });
 
-        const { loadProjectGraph } = await import('../stores/explorer-store');
         await loadProjectGraph('test-project');
 
         const state = useExplorerStore.getState();
@@ -950,15 +982,8 @@ describe('Explorer Store', () => {
       });
 
       it('should handle IPC error', async () => {
-        const mockElectronAPI = {
-          explorer: {
-            getGraph: vi.fn().mockResolvedValue({ success: false, error: 'Failed to load graph' })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.getGraph.mockResolvedValue({ success: false, error: 'Failed to load graph' });
 
-        const { loadProjectGraph } = await import('../stores/explorer-store');
         await loadProjectGraph('test-project');
 
         const state = useExplorerStore.getState();
@@ -982,37 +1007,24 @@ describe('Explorer Store', () => {
             treeSitterFilesCount: 8
           }
         });
-        const mockElectronAPI = {
-          explorer: {
-            getGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.getGraph.mockResolvedValue({ success: true, data: mockGraph });
 
-        const { loadProjectGraph } = await import('../stores/explorer-store');
         await loadProjectGraph('test-project');
 
         const state = useExplorerStore.getState();
-        expect(state.parserStats).toBeDefined();
+        expect(state.parserStats).not.toBeNull();
         expect(state.parserStats?.oxcFilesCount).toBe(42);
         expect(state.parserStats?.treeSitterFilesCount).toBe(8);
         expect(state.parserStats?.totalParseTimeMs).toBe(1500);
+        expect(state.parserStats?.lastRefreshTime).not.toBeNull();
       });
     });
 
     describe('refreshProjectGraph', () => {
       it('should refresh graph successfully', async () => {
         const mockGraph = createTestGraphData({ projectId: 'test-project' });
-        const mockElectronAPI = {
-          explorer: {
-            refreshGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.refreshGraph.mockResolvedValue({ success: true, data: mockGraph });
 
-        const { refreshProjectGraph } = await import('../stores/explorer-store');
         await refreshProjectGraph('test-project');
 
         const state = useExplorerStore.getState();
@@ -1023,15 +1035,8 @@ describe('Explorer Store', () => {
       });
 
       it('should handle refresh error', async () => {
-        const mockElectronAPI = {
-          explorer: {
-            refreshGraph: vi.fn().mockResolvedValue({ success: false, error: 'Parse failed' })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.refreshGraph.mockResolvedValue({ success: false, error: 'Parse failed' });
 
-        const { refreshProjectGraph } = await import('../stores/explorer-store');
         await refreshProjectGraph('test-project');
 
         const state = useExplorerStore.getState();
@@ -1055,35 +1060,21 @@ describe('Explorer Store', () => {
             treeSitterFilesCount: 15
           }
         });
-        const mockElectronAPI = {
-          explorer: {
-            refreshGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.refreshGraph.mockResolvedValue({ success: true, data: mockGraph });
 
-        const { refreshProjectGraph } = await import('../stores/explorer-store');
         await refreshProjectGraph('test-project');
 
         const state = useExplorerStore.getState();
-        expect(state.parserStats).toBeDefined();
+        expect(state.parserStats).not.toBeNull();
         expect(state.parserStats?.oxcFilesCount).toBe(85);
         expect(state.parserStats?.treeSitterFilesCount).toBe(15);
         expect(state.parserStats?.totalParseTimeMs).toBe(3000);
-        expect(state.parserStats?.lastRefreshTime).toBeDefined();
+        expect(state.parserStats?.lastRefreshTime).not.toBeNull();
       });
 
       it('should handle refresh with null data', async () => {
-        const mockElectronAPI = {
-          explorer: {
-            refreshGraph: vi.fn().mockResolvedValue({ success: true, data: null })
-          }
-        };
-        // @ts-expect-error - Mocking window.electronAPI
-        window.electronAPI = mockElectronAPI;
+        mockElectronAPI.explorer.refreshGraph.mockResolvedValue({ success: true, data: null });
 
-        const { refreshProjectGraph } = await import('../stores/explorer-store');
         await refreshProjectGraph('test-project');
 
         const state = useExplorerStore.getState();

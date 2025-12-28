@@ -52,6 +52,18 @@ beforeEach(() => {
   try {
     mkdirSync(TEST_DATA_DIR, { recursive: true });
     mkdirSync(path.join(TEST_DATA_DIR, 'store'), { recursive: true });
+
+    // Create mock WASM files for tree-sitter tests
+    const wasmDir = '/tmp/test-app/node_modules/web-tree-sitter';
+    const wasmGrammarsDir = '/tmp/test-app/node_modules/tree-sitter-wasms/out';
+    mkdirSync(wasmDir, { recursive: true });
+    mkdirSync(wasmGrammarsDir, { recursive: true });
+
+    // Create dummy WASM files (content doesn't matter since we mock the module)
+    writeFileSync(path.join(wasmDir, 'tree-sitter.wasm'), 'mock-wasm');
+    writeFileSync(path.join(wasmGrammarsDir, 'tree-sitter-python.wasm'), 'mock-wasm');
+    writeFileSync(path.join(wasmGrammarsDir, 'tree-sitter-tsx.wasm'), 'mock-wasm');
+    writeFileSync(path.join(wasmGrammarsDir, 'tree-sitter-javascript.wasm'), 'mock-wasm');
   } catch {
     // Ignore errors if directory already exists from another parallel test
   }
