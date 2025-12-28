@@ -10,6 +10,12 @@ The tree-sitter parser has been verified to work correctly for Python, TypeScrip
 
 2025-12-27
 
+## Test Environment Note
+
+⚠️ **Unit tests via Vitest currently fail** due to Electron mock configuration pointing to `/tmp/test-app` instead of the actual project directory. This is a test environment issue, NOT a parser functionality issue.
+
+✅ **Standalone verification passes** - The parser works correctly when run outside of the Vitest test environment (see verification script results below).
+
 ## Tests Performed
 
 ### 1. WASM File Availability ✅
