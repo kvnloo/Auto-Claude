@@ -822,6 +822,78 @@ export function getFunctionType(symbol: ExtractedSymbol): string {
 }
 
 // ============================================
+// Helper Functions
+// ============================================
+
+/**
+ * Get depth level for a node type
+ */
+function getDepthForType(type: NodeType): DepthLevel {
+  switch (type) {
+    case 'directory': return 1;
+    case 'file': return 2;
+    case 'class': return 3;
+    case 'function': return 4;
+    case 'symbol': return 5;
+  }
+}
+
+/**
+ * Calculate complexity rating based on LOC
+ */
+function calculateComplexity(loc: number): ComplexityRating {
+  if (loc < 100) return 'low';
+  if (loc < 500) return 'medium';
+  return 'high';
+}
+
+/**
+ * Calculate graph statistics
+ */
+function calculateStats(
+  nodes: GraphNode[],
+  edges: GraphEdge[],
+  extractions: FileExtractionResult[],
+  parseDurationMs: number
+): GraphStats {
+  const nodesByType: Record<NodeType, number> = {
+    directory: 0,
+    file: 0,
+    class: 0,
+    function: 0,
+    symbol: 0
+  };
+
+  const edgesByType: Record<EdgeType, number> = {
+    imports: 0,
+    calls: 0,
+    inherits: 0,
+    contains: 0
+  };
+
+  for (const node of nodes) {
+    nodesByType[node.type]++;
+  }
+
+  for (const edge of edges) {
+    edgesByType[edge.type]++;
+  }
+
+  const totalLoc = extractions.reduce((sum, e) => sum + e.loc, 0);
+  const languages = Array.from(new Set(extractions.map(e => e.language)));
+
+  return {
+    totalNodes: nodes.length,
+    nodesByType,
+    edgesByType,
+    filesParsed: extractions.length,
+    totalLoc,
+    languages,
+    parseDurationMs
+  };
+}
+
+// ============================================
 // Incremental Update Support
 // ============================================
 
@@ -831,7 +903,7 @@ export function getFunctionType(symbol: ExtractedSymbol): string {
  */
 export function updateGraph(
   existingGraph: GraphData,
-  changedFiles: ParseResult[],
+  changedFiles: UnifiedParseResult[],
   removedFiles: string[],
   config: GraphBuilderConfig
 ): GraphData {
@@ -861,7 +933,7 @@ export function updateGraph(
   const extractions: FileExtractionResult[] = [];
   for (const result of changedFiles) {
     try {
-      const extraction = extractFileData(result, config.projectRoot);
+      const extraction = convertToExtraction(result, config.projectRoot);
       extractions.push(extraction);
     } catch {
       // Skip files that fail to extract
