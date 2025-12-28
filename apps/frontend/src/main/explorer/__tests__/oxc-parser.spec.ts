@@ -3,6 +3,7 @@
  * Tests the OXC parser implementation for JavaScript/TypeScript files
  */
 import { describe, it, expect, beforeEach } from 'vitest';
+import { detectLanguage, canParse } from '../oxc-parser';
 import type {
   ParserLanguage,
   ExtractedSymbol,
@@ -145,54 +146,7 @@ export class UserRepository implements Repository<User> {
 }
 `;
 
-// Mock implementation - to be replaced with actual OXC parser
-// This demonstrates the expected interface and behavior
-class MockOXCParser {
-  detectLanguage(filePath: string): ParserLanguage | null {
-    const ext = filePath.substring(filePath.lastIndexOf('.'));
-    switch (ext) {
-      case '.ts':
-      case '.tsx':
-        return 'typescript';
-      case '.js':
-      case '.jsx':
-      case '.mjs':
-      case '.cjs':
-        return 'javascript';
-      default:
-        return null;
-    }
-  }
-
-  canParse(filePath: string): boolean {
-    return this.detectLanguage(filePath) !== null;
-  }
-
-  parseContent(
-    content: string,
-    filePath: string,
-    language: ParserLanguage
-  ): Omit<UnifiedParseResult, 'filePath' | 'parseTimeMs' | 'parser' | 'loc'> {
-    // This is a mock implementation
-    // The actual OXC parser will use the oxc-parser npm package
-    return {
-      symbols: [],
-      imports: [],
-      language,
-    };
-  }
-
-  parseFile(filePath: string): Promise<UnifiedParseResult> {
-    return Promise.reject(new Error('Not implemented - mock only'));
-  }
-}
-
 describe('OXC Parser', () => {
-  let parser: MockOXCParser;
-
-  beforeEach(() => {
-    parser = new MockOXCParser();
-  });
 
   // ============================================
   // Language Detection Tests
@@ -200,57 +154,57 @@ describe('OXC Parser', () => {
 
   describe('detectLanguage', () => {
     it('should detect TypeScript files', () => {
-      expect(parser.detectLanguage('/path/to/file.ts')).toBe('typescript');
-      expect(parser.detectLanguage('/src/components/App.tsx')).toBe('typescript');
+      expect(detectLanguage('/path/to/file.ts')).toBe('typescript');
+      expect(detectLanguage('/src/components/App.tsx')).toBe('typescript');
     });
 
     it('should detect JavaScript files', () => {
-      expect(parser.detectLanguage('/path/to/file.js')).toBe('javascript');
-      expect(parser.detectLanguage('/src/components/Button.jsx')).toBe('javascript');
+      expect(detectLanguage('/path/to/file.js')).toBe('javascript');
+      expect(detectLanguage('/src/components/Button.jsx')).toBe('javascript');
     });
 
     it('should detect ES Module JavaScript files', () => {
-      expect(parser.detectLanguage('/utils/helper.mjs')).toBe('javascript');
-      expect(parser.detectLanguage('/config/settings.cjs')).toBe('javascript');
+      expect(detectLanguage('/utils/helper.mjs')).toBe('javascript');
+      expect(detectLanguage('/config/settings.cjs')).toBe('javascript');
     });
 
     it('should return null for unsupported files', () => {
-      expect(parser.detectLanguage('/path/to/file.py')).toBeNull();
-      expect(parser.detectLanguage('/path/to/file.txt')).toBeNull();
-      expect(parser.detectLanguage('/path/to/README.md')).toBeNull();
+      expect(detectLanguage('/path/to/file.py')).toBeNull();
+      expect(detectLanguage('/path/to/file.txt')).toBeNull();
+      expect(detectLanguage('/path/to/README.md')).toBeNull();
     });
 
     it('should handle paths without extensions', () => {
-      expect(parser.detectLanguage('/path/to/Makefile')).toBeNull();
-      expect(parser.detectLanguage('/usr/bin/node')).toBeNull();
+      expect(detectLanguage('/path/to/Makefile')).toBeNull();
+      expect(detectLanguage('/usr/bin/node')).toBeNull();
     });
 
     it('should handle relative paths', () => {
-      expect(parser.detectLanguage('./src/index.ts')).toBe('typescript');
-      expect(parser.detectLanguage('../utils/helper.js')).toBe('javascript');
+      expect(detectLanguage('./src/index.ts')).toBe('typescript');
+      expect(detectLanguage('../utils/helper.js')).toBe('javascript');
     });
   });
 
   describe('canParse', () => {
     it('should return true for JavaScript files', () => {
-      expect(parser.canParse('/app.js')).toBe(true);
-      expect(parser.canParse('/component.jsx')).toBe(true);
-      expect(parser.canParse('/module.mjs')).toBe(true);
+      expect(canParse('app.js')).toBe(true);
+      expect(canParse('component.jsx')).toBe(true);
+      expect(canParse('module.mjs')).toBe(true);
     });
 
     it('should return true for TypeScript files', () => {
-      expect(parser.canParse('/app.ts')).toBe(true);
-      expect(parser.canParse('/component.tsx')).toBe(true);
+      expect(canParse('app.ts')).toBe(true);
+      expect(canParse('component.tsx')).toBe(true);
     });
 
     it('should return false for Python files', () => {
-      expect(parser.canParse('/script.py')).toBe(false);
+      expect(canParse('script.py')).toBe(false);
     });
 
     it('should return false for other files', () => {
-      expect(parser.canParse('/README.md')).toBe(false);
-      expect(parser.canParse('/data.json')).toBe(false);
-      expect(parser.canParse('/styles.css')).toBe(false);
+      expect(canParse('README.md')).toBe(false);
+      expect(canParse('data.json')).toBe(false);
+      expect(canParse('styles.css')).toBe(false);
     });
   });
 

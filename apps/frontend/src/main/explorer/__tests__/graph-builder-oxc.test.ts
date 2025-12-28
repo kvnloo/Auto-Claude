@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { extractClassNodes, extractInterfaceNodes, symbolToNode } from '../graph-builder';
+import { extractClassNodes, extractInterfaceNodes, symbolToNode, extractEdges, extractNodes } from '../graph-builder';
 import type { UnifiedParseResult, ExtractedSymbol } from '../types';
 import type { GraphNode } from '../../../shared/types';
 
@@ -266,6 +266,153 @@ describe('OXC Symbol Extraction', () => {
 
       expect(nodes).toHaveLength(1);
       expect(nodes[0].name).toBe('MyInterface');
+    });
+  });
+
+  describe('extractEdges', () => {
+    it('should build import edges from parse results', () => {
+      const parseResult1: UnifiedParseResult = {
+        symbols: [],
+        imports: [
+          {
+            source: './utils',
+            items: ['helper'],
+            isDefault: false,
+            isRelative: true
+          }
+        ],
+        language: 'typescript',
+        filePath: `${projectPath}/src/main.ts`,
+        parseTimeMs: 10,
+        parser: 'oxc',
+        loc: 10
+      };
+
+      const parseResult2: UnifiedParseResult = {
+        symbols: [],
+        imports: [],
+        language: 'typescript',
+        filePath: `${projectPath}/src/utils.ts`,
+        parseTimeMs: 10,
+        parser: 'oxc',
+        loc: 20
+      };
+
+      // Convert to extraction format by building nodes first
+      const extractions = [
+        {
+          filePath: `${projectPath}/src/main.ts`,
+          relativePath: 'src/main.ts',
+          language: 'typescript' as const,
+          symbols: [],
+          imports: parseResult1.imports,
+          loc: 10,
+          parser: 'oxc' as const,
+          parseTimeMs: 10
+        },
+        {
+          filePath: `${projectPath}/src/utils.ts`,
+          relativePath: 'src/utils.ts',
+          language: 'typescript' as const,
+          symbols: [],
+          imports: [],
+          loc: 20,
+          parser: 'oxc' as const,
+          parseTimeMs: 10
+        }
+      ];
+
+      const nodes = extractNodes(extractions, { projectRoot: projectPath, projectId: 'test' });
+      const edges = extractEdges(extractions, nodes, { projectRoot: projectPath, projectId: 'test' });
+
+      // Find the import edge
+      const importEdge = edges.find(e => e.type === 'imports');
+      expect(importEdge).toBeDefined();
+      expect(importEdge?.source).toBe('file:src/main.ts');
+      expect(importEdge?.target).toBe('file:src/utils.ts');
+      expect(importEdge?.label).toBe('helper');
+    });
+
+    it('should build containment edges', () => {
+      const parseResult: UnifiedParseResult = {
+        symbols: [
+          {
+            name: 'MyClass',
+            type: 'class',
+            startLine: 1,
+            endLine: 10,
+            exports: true,
+            children: []
+          }
+        ],
+        imports: [],
+        language: 'typescript',
+        filePath: `${projectPath}/src/MyClass.ts`,
+        parseTimeMs: 10,
+        parser: 'oxc',
+        loc: 10
+      };
+
+      const extractions = [{
+        filePath: parseResult.filePath,
+        relativePath: 'src/MyClass.ts',
+        language: parseResult.language,
+        symbols: parseResult.symbols,
+        imports: parseResult.imports,
+        loc: parseResult.loc,
+        parser: parseResult.parser,
+        parseTimeMs: parseResult.parseTimeMs
+      }];
+
+      const nodes = extractNodes(extractions, { projectRoot: projectPath, projectId: 'test' });
+      const edges = extractEdges(extractions, nodes, { projectRoot: projectPath, projectId: 'test' });
+
+      // Should have containment edges: dir -> file and file -> class
+      const containsEdges = edges.filter(e => e.type === 'contains');
+      expect(containsEdges.length).toBeGreaterThan(0);
+
+      // Verify file contains class
+      const fileContainsClass = containsEdges.find(
+        e => e.source === 'file:src/MyClass.ts' && e.target === 'class:src/MyClass.ts:MyClass'
+      );
+      expect(fileContainsClass).toBeDefined();
+    });
+
+    it('should skip external imports', () => {
+      const parseResult: UnifiedParseResult = {
+        symbols: [],
+        imports: [
+          {
+            source: 'react',
+            items: ['useState'],
+            isDefault: false,
+            isRelative: false  // External import
+          }
+        ],
+        language: 'typescript',
+        filePath: `${projectPath}/src/App.tsx`,
+        parseTimeMs: 10,
+        parser: 'oxc',
+        loc: 30
+      };
+
+      const extractions = [{
+        filePath: parseResult.filePath,
+        relativePath: 'src/App.tsx',
+        language: parseResult.language,
+        symbols: parseResult.symbols,
+        imports: parseResult.imports,
+        loc: parseResult.loc,
+        parser: parseResult.parser,
+        parseTimeMs: parseResult.parseTimeMs
+      }];
+
+      const nodes = extractNodes(extractions, { projectRoot: projectPath, projectId: 'test' });
+      const edges = extractEdges(extractions, nodes, { projectRoot: projectPath, projectId: 'test' });
+
+      // Should not create import edges for external imports
+      const importEdges = edges.filter(e => e.type === 'imports');
+      expect(importEdges.length).toBe(0);
     });
   });
 });

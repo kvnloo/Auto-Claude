@@ -15,7 +15,8 @@ export default defineConfig({
     },
     // Mock Electron modules for unit tests
     alias: {
-      electron: resolve(__dirname, 'src/__mocks__/electron.ts')
+      electron: resolve(__dirname, 'src/__mocks__/electron.ts'),
+      'web-tree-sitter': resolve(__dirname, 'src/__mocks__/web-tree-sitter.ts')
     },
     // Setup files for test environment
     setupFiles: ['src/__tests__/setup.ts']

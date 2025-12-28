@@ -571,6 +571,78 @@ describe('Explorer Store', () => {
     });
   });
 
+  describe('setParserStats', () => {
+    it('should set parser statistics', () => {
+      const stats = {
+        oxcFilesCount: 42,
+        treeSitterFilesCount: 8,
+        totalParseTimeMs: 1500,
+        lastRefreshTime: Date.now()
+      };
+
+      useExplorerStore.getState().setParserStats(stats);
+
+      expect(useExplorerStore.getState().parserStats).toEqual(stats);
+    });
+
+    it('should replace existing parser stats', () => {
+      const stats1 = {
+        oxcFilesCount: 10,
+        treeSitterFilesCount: 5,
+        totalParseTimeMs: 1000,
+        lastRefreshTime: Date.now()
+      };
+      const stats2 = {
+        oxcFilesCount: 20,
+        treeSitterFilesCount: 10,
+        totalParseTimeMs: 2000,
+        lastRefreshTime: Date.now()
+      };
+
+      useExplorerStore.getState().setParserStats(stats1);
+      useExplorerStore.getState().setParserStats(stats2);
+
+      expect(useExplorerStore.getState().parserStats).toEqual(stats2);
+    });
+
+    it('should handle zero values', () => {
+      const stats = {
+        oxcFilesCount: 0,
+        treeSitterFilesCount: 0,
+        totalParseTimeMs: 0,
+        lastRefreshTime: null
+      };
+
+      useExplorerStore.getState().setParserStats(stats);
+
+      expect(useExplorerStore.getState().parserStats).toEqual(stats);
+    });
+  });
+
+  describe('clearParserStats', () => {
+    it('should clear parser statistics', () => {
+      const stats = {
+        oxcFilesCount: 42,
+        treeSitterFilesCount: 8,
+        totalParseTimeMs: 1500,
+        lastRefreshTime: Date.now()
+      };
+      useExplorerStore.setState({ parserStats: stats });
+
+      useExplorerStore.getState().clearParserStats();
+
+      expect(useExplorerStore.getState().parserStats).toBeNull();
+    });
+
+    it('should handle clearing when already null', () => {
+      useExplorerStore.setState({ parserStats: null });
+
+      useExplorerStore.getState().clearParserStats();
+
+      expect(useExplorerStore.getState().parserStats).toBeNull();
+    });
+  });
+
   describe('clearAll', () => {
     it('should reset all state to initial values', () => {
       useExplorerStore.setState({
@@ -590,7 +662,13 @@ describe('Explorer Store', () => {
           showConnectedOnly: true,
           searchQuery: 'test'
         },
-        viewport: { zoom: 2, translateX: 100, translateY: -50 }
+        viewport: { zoom: 2, translateX: 100, translateY: -50 },
+        parserStats: {
+          oxcFilesCount: 42,
+          treeSitterFilesCount: 8,
+          totalParseTimeMs: 1500,
+          lastRefreshTime: Date.now()
+        }
       });
 
       useExplorerStore.getState().clearAll();
@@ -605,6 +683,7 @@ describe('Explorer Store', () => {
       expect(state.loadingStatus).toEqual(DEFAULT_LOADING_STATUS);
       expect(state.filterOptions).toEqual(DEFAULT_FILTER_OPTIONS);
       expect(state.viewport).toEqual(DEFAULT_VIEWPORT);
+      expect(state.parserStats).toBeNull();
     });
 
     it('should clear graph data', () => {
@@ -629,6 +708,21 @@ describe('Explorer Store', () => {
       useExplorerStore.getState().clearAll();
 
       expect(useExplorerStore.getState().depthLevel).toBe(2);
+    });
+
+    it('should clear parser stats', () => {
+      useExplorerStore.setState({
+        parserStats: {
+          oxcFilesCount: 42,
+          treeSitterFilesCount: 8,
+          totalParseTimeMs: 1500,
+          lastRefreshTime: Date.now()
+        }
+      });
+
+      useExplorerStore.getState().clearAll();
+
+      expect(useExplorerStore.getState().parserStats).toBeNull();
     });
   });
 
@@ -812,6 +906,190 @@ describe('Explorer Store', () => {
       useExplorerStore.getState().setViewport({ zoom: 10 });
 
       expect(useExplorerStore.getState().viewport.zoom).toBe(10);
+    });
+  });
+
+  describe('Async Functions', () => {
+    describe('loadProjectGraph', () => {
+      it('should load graph from cache successfully', async () => {
+        const mockGraph = createTestGraphData({ projectId: 'test-project' });
+        const mockElectronAPI = {
+          explorer: {
+            getGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { loadProjectGraph } = await import('../stores/explorer-store');
+        await loadProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.graph).toEqual(mockGraph);
+        expect(state.isLoading).toBe(false);
+        expect(state.loadingStatus.phase).toBe('complete');
+      });
+
+      it('should handle no cached graph (null data)', async () => {
+        const mockElectronAPI = {
+          explorer: {
+            getGraph: vi.fn().mockResolvedValue({ success: true, data: null })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { loadProjectGraph } = await import('../stores/explorer-store');
+        await loadProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.graph).toBeNull();
+        expect(state.isLoading).toBe(false);
+        expect(state.loadingStatus.phase).toBe('idle');
+        expect(state.graphError).toBeNull();
+      });
+
+      it('should handle IPC error', async () => {
+        const mockElectronAPI = {
+          explorer: {
+            getGraph: vi.fn().mockResolvedValue({ success: false, error: 'Failed to load graph' })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { loadProjectGraph } = await import('../stores/explorer-store');
+        await loadProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.graphError).toBe('Failed to load graph');
+        expect(state.isLoading).toBe(false);
+        expect(state.loadingStatus.phase).toBe('error');
+      });
+
+      it('should extract and store parser stats from graph', async () => {
+        const mockGraph = createTestGraphData({
+          projectId: 'test-project',
+          stats: {
+            totalNodes: 2,
+            nodesByType: { directory: 0, file: 2, class: 0, function: 0, symbol: 0 },
+            edgesByType: { imports: 1, calls: 0, inherits: 0, contains: 0 },
+            filesParsed: 50,
+            totalLoc: 1000,
+            languages: ['typescript'],
+            parseDurationMs: 1500,
+            oxcFilesCount: 42,
+            treeSitterFilesCount: 8
+          }
+        });
+        const mockElectronAPI = {
+          explorer: {
+            getGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { loadProjectGraph } = await import('../stores/explorer-store');
+        await loadProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.parserStats).toBeDefined();
+        expect(state.parserStats?.oxcFilesCount).toBe(42);
+        expect(state.parserStats?.treeSitterFilesCount).toBe(8);
+        expect(state.parserStats?.totalParseTimeMs).toBe(1500);
+      });
+    });
+
+    describe('refreshProjectGraph', () => {
+      it('should refresh graph successfully', async () => {
+        const mockGraph = createTestGraphData({ projectId: 'test-project' });
+        const mockElectronAPI = {
+          explorer: {
+            refreshGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { refreshProjectGraph } = await import('../stores/explorer-store');
+        await refreshProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.graph).toEqual(mockGraph);
+        expect(state.isLoading).toBe(false);
+        expect(state.loadingStatus.phase).toBe('complete');
+        expect(mockElectronAPI.explorer.refreshGraph).toHaveBeenCalledWith('test-project');
+      });
+
+      it('should handle refresh error', async () => {
+        const mockElectronAPI = {
+          explorer: {
+            refreshGraph: vi.fn().mockResolvedValue({ success: false, error: 'Parse failed' })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { refreshProjectGraph } = await import('../stores/explorer-store');
+        await refreshProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.graphError).toBe('Parse failed');
+        expect(state.isLoading).toBe(false);
+        expect(state.loadingStatus.phase).toBe('error');
+      });
+
+      it('should extract and store parser stats from refreshed graph', async () => {
+        const mockGraph = createTestGraphData({
+          projectId: 'test-project',
+          stats: {
+            totalNodes: 2,
+            nodesByType: { directory: 0, file: 2, class: 0, function: 0, symbol: 0 },
+            edgesByType: { imports: 1, calls: 0, inherits: 0, contains: 0 },
+            filesParsed: 100,
+            totalLoc: 2000,
+            languages: ['typescript', 'javascript'],
+            parseDurationMs: 3000,
+            oxcFilesCount: 85,
+            treeSitterFilesCount: 15
+          }
+        });
+        const mockElectronAPI = {
+          explorer: {
+            refreshGraph: vi.fn().mockResolvedValue({ success: true, data: mockGraph })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { refreshProjectGraph } = await import('../stores/explorer-store');
+        await refreshProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.parserStats).toBeDefined();
+        expect(state.parserStats?.oxcFilesCount).toBe(85);
+        expect(state.parserStats?.treeSitterFilesCount).toBe(15);
+        expect(state.parserStats?.totalParseTimeMs).toBe(3000);
+        expect(state.parserStats?.lastRefreshTime).toBeDefined();
+      });
+
+      it('should handle refresh with null data', async () => {
+        const mockElectronAPI = {
+          explorer: {
+            refreshGraph: vi.fn().mockResolvedValue({ success: true, data: null })
+          }
+        };
+        // @ts-expect-error - Mocking window.electronAPI
+        window.electronAPI = mockElectronAPI;
+
+        const { refreshProjectGraph } = await import('../stores/explorer-store');
+        await refreshProjectGraph('test-project');
+
+        const state = useExplorerStore.getState();
+        expect(state.graphError).toBe('Failed to refresh project graph');
+        expect(state.loadingStatus.phase).toBe('error');
+      });
     });
   });
 });

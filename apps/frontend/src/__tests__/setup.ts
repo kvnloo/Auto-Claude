@@ -2,7 +2,7 @@
  * Test setup file for Vitest
  */
 import { vi, beforeEach, afterEach } from 'vitest';
-import { mkdirSync, rmSync, existsSync } from 'fs';
+import { mkdirSync, rmSync, existsSync, writeFileSync } from 'fs';
 import path from 'path';
 
 // Mock localStorage for tests that need it
