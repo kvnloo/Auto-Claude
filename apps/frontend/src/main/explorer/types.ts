@@ -122,6 +122,66 @@ export interface TreeSitterParser {
 }
 
 // ============================================
+// Unified Parser Types
+// ============================================
+
+/**
+ * Parser backend identifier
+ */
+export type ParserBackend = 'oxc' | 'tree-sitter';
+
+/**
+ * Extracted symbol representation (used by unified parsers)
+ */
+export interface ExtractedSymbol {
+  name: string;
+  type: NodeType;
+  startLine: number;
+  endLine: number;
+  docstring?: string;
+  signature?: string;
+  parameters?: string[];
+  returnType?: string;
+  parentClass?: string;
+  exports: boolean;
+  children: ExtractedSymbol[];
+}
+
+/**
+ * Extracted import statement (used by unified parsers)
+ */
+export interface ExtractedImport {
+  /** Module/file being imported from */
+  source: string;
+  /** Specific items imported (or ['*'] for star imports) */
+  items: string[];
+  /** Whether it's a default import */
+  isDefault?: boolean;
+  /** Whether it's a relative import */
+  isRelative?: boolean;
+}
+
+/**
+ * Unified parse result from either parser
+ */
+export interface UnifiedParseResult {
+  /** Extracted symbols (classes, functions, etc.) */
+  symbols: ExtractedSymbol[];
+  /** Import statements found */
+  imports: ExtractedImport[];
+  /** Programming language */
+  language: ParserLanguage;
+  /** File path parsed */
+  filePath: string;
+  /** Time to parse in ms */
+  parseTimeMs: number;
+  /** Which parser was used */
+  parser: ParserBackend;
+  /** Lines of code */
+  loc: number;
+}
+
+// ============================================
 // File Analysis Types
 // ============================================
 
