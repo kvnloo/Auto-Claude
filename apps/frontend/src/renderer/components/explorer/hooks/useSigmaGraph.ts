@@ -36,7 +36,7 @@ interface UseSigmaGraphOptions {
 
 interface UseSigmaGraphResult {
   /** Ref to attach to container element */
-  containerRef: React.RefObject<HTMLDivElement>;
+  containerRef: React.RefObject<HTMLDivElement | null>;
   /** Current graph instance */
   graph: ExplorerGraph | null;
   /** Current Sigma instance */
@@ -123,7 +123,7 @@ export function useSigmaGraph(options: UseSigmaGraphOptions = {}): UseSigmaGraph
     ...SIGMA_SETTINGS,
     // Node reducer for dynamic styling
     nodeReducer: (node: string, data: GraphologyNodeAttributes) => {
-      const res = { ...data };
+      const res: GraphologyNodeAttributes & { zIndex?: number } = { ...data };
 
       // Apply hover/selection states
       if (hoveredNodeId === node || selectedNodeId === node) {
@@ -201,39 +201,42 @@ export function useSigmaGraph(options: UseSigmaGraphOptions = {}): UseSigmaGraph
     // Create Sigma instance
     if (containerRef.current) {
       try {
-        sigmaRef.current = new Sigma(result.graph, containerRef.current, sigmaSettings);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        sigmaRef.current = new Sigma(result.graph as any, containerRef.current, sigmaSettings as any) as any;
+        const sigma = sigmaRef.current;
+        if (!sigma) return;
 
         // Set up event handlers
-        sigmaRef.current.on('clickNode', (event: SigmaNodeEventPayload) => {
+        sigma.on('clickNode', (event: SigmaNodeEventPayload) => {
           const nodeId = event.node;
           const attrs = result.graph.getNodeAttributes(nodeId);
           setSelectedNodeId(nodeId);
           selectNode(result.graph, nodeId);
           onNodeClick?.(nodeId, attrs);
-          sigmaRef.current?.refresh();
+          sigma.refresh();
         });
 
-        sigmaRef.current.on('enterNode', (event: SigmaNodeEventPayload) => {
+        sigma.on('enterNode', (event: SigmaNodeEventPayload) => {
           const nodeId = event.node;
           const attrs = result.graph.getNodeAttributes(nodeId);
           setHoveredNodeId(nodeId);
           highlightNode(result.graph, nodeId);
           onNodeHover?.(nodeId, attrs);
-          sigmaRef.current?.refresh();
+          sigma.refresh();
         });
 
-        sigmaRef.current.on('leaveNode', () => {
+        sigma.on('leaveNode', () => {
           setHoveredNodeId(null);
           highlightNode(result.graph, null);
           onNodeHover?.(null, null);
-          sigmaRef.current?.refresh();
+          sigma.refresh();
         });
 
-        sigmaRef.current.on('clickStage', (_event: SigmaStageEventPayload) => {
+        sigma.on('clickStage', (_event: SigmaStageEventPayload) => {
           setSelectedNodeId(null);
           selectNode(result.graph, null);
           onBackgroundClick?.();
-          sigmaRef.current?.refresh();
+          sigma.refresh();
         });
 
         setIsLoaded(true);

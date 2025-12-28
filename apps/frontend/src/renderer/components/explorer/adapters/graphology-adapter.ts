@@ -63,7 +63,9 @@ export function convertToGraphology(
 
   // Set graph attributes
   graph.setAttribute('name', 'Codebase Dependency Graph');
-  graph.setAttribute('generatedAt', graphData.generatedAt);
+  graph.setAttribute('generatedAt', graphData.generatedAt instanceof Date
+    ? graphData.generatedAt.toISOString()
+    : graphData.generatedAt);
   graph.setAttribute('rootPath', graphData.rootPath);
 
   // Track added nodes for edge validation
@@ -176,7 +178,7 @@ function convertNodeToAttributes(
     parentClass: node.metadata?.parentClass,
     signature: node.metadata?.signature,
     docstring: node.metadata?.docstring,
-    exports: node.metadata?.exports,
+    exports: node.metadata?.exports && node.metadata.exports.length > 0,
   };
 }
 
@@ -199,7 +201,7 @@ function convertEdgeToAttributes(
 
   return {
     type: edge.type,
-    weight: edge.weight ?? 1,
+    weight: 1, // Default weight since GraphEdge doesn't have weight
     color,
     size,
     hidden: false,
@@ -346,13 +348,29 @@ export function exportToGraphData(graph: ExplorerGraph): GraphData {
   const nodes: GraphNode[] = [];
   const edges: GraphEdge[] = [];
 
+  // Count nodes by type for stats
+  const nodesByType: Record<string, number> = {
+    directory: 0,
+    file: 0,
+    class: 0,
+    function: 0,
+    symbol: 0,
+  };
+  const edgesByType: Record<string, number> = {
+    imports: 0,
+    calls: 0,
+    inherits: 0,
+    contains: 0,
+  };
+
   graph.forEachNode((id, attrs) => {
+    nodesByType[attrs.type] = (nodesByType[attrs.type] || 0) + 1;
     nodes.push({
       id,
       name: attrs.label,
       type: attrs.type,
       depth: attrs.depth,
-      filePath: attrs.filePath,
+      filePath: attrs.filePath || '',
       x: attrs.x,
       y: attrs.y,
       metadata: {
@@ -361,32 +379,39 @@ export function exportToGraphData(graph: ExplorerGraph): GraphData {
         parentClass: attrs.parentClass,
         signature: attrs.signature,
         docstring: attrs.docstring,
-        exports: attrs.exports,
+        // Convert boolean back to exports array (best effort)
+        exports: attrs.exports ? [attrs.label] : undefined,
       },
     });
   });
 
   graph.forEachEdge((_, attrs, source, target) => {
+    edgesByType[attrs.type] = (edgesByType[attrs.type] || 0) + 1;
     edges.push({
       id: `${source}->${target}`,
       source,
       target,
       type: attrs.type,
-      weight: attrs.weight,
     });
   });
+
+  const generatedAtStr = graph.getAttribute('generatedAt');
+  const generatedAt = generatedAtStr ? new Date(generatedAtStr) : new Date();
 
   return {
     nodes,
     edges,
     stats: {
-      nodeCount: nodes.length,
-      edgeCount: edges.length,
-      fileCount: nodes.filter((n) => n.type === 'file').length,
-      directoryCount: nodes.filter((n) => n.type === 'directory').length,
+      totalNodes: nodes.length,
+      nodesByType: nodesByType as Record<import('../../../../shared/types/explorer').NodeType, number>,
+      edgesByType: edgesByType as Record<import('../../../../shared/types/explorer').EdgeType, number>,
+      filesParsed: nodesByType.file || 0,
+      totalLoc: 0,
+      languages: [],
       parseDurationMs: 0,
     },
-    generatedAt: graph.getAttribute('generatedAt') || new Date().toISOString(),
+    generatedAt,
+    projectId: '',
     rootPath: graph.getAttribute('rootPath') || '',
   };
 }
