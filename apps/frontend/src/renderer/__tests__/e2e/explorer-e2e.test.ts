@@ -1,6 +1,8 @@
 /**
  * End-to-End tests for Explorer feature
  * Tests the complete user flow from graph generation to node interaction
+ *
+ * @vitest-environment jsdom
  */
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { renderHook, waitFor } from '@testing-library/react';
@@ -167,7 +169,6 @@ const mockElectronAPI = {
   }
 };
 
-// @ts-expect-error - Mocking window.electronAPI
 global.window = {
   electronAPI: mockElectronAPI
 } as any;
@@ -656,6 +657,9 @@ describe('Explorer E2E', () => {
       // Render hook to set up listeners
       const { unmount } = renderHook(() => useExplorer(TEST_PROJECT_ID, { autoLoad: false }));
 
+      // Wait for listener setup
+      await new Promise(resolve => setTimeout(resolve, 50));
+
       // Simulate progress updates
       const progressStates: ExplorerLoadingStatus[] = [
         { phase: 'scanning-files', progress: 0, message: 'Scanning...' },
@@ -665,7 +669,7 @@ describe('Explorer E2E', () => {
 
       for (const status of progressStates) {
         progressCallback(TEST_PROJECT_ID, status);
-        await new Promise(resolve => setTimeout(resolve, 10));
+        await new Promise(resolve => setTimeout(resolve, 50));
         const state = useExplorerStore.getState();
         expect(state.loadingStatus.phase).toBe(status.phase);
       }
@@ -678,11 +682,14 @@ describe('Explorer E2E', () => {
     it('should automatically load graph on mount', async () => {
       const { result, unmount } = renderHook(() => useExplorer(TEST_PROJECT_ID));
 
-      // Wait for graph to load
-      await waitFor(() => {
-        expect(result.current.hasGraph).toBe(true);
-      }, { timeout: 3000 });
+      // Wait for graph to load using polling
+      let attempts = 0;
+      while (!result.current.hasGraph && attempts < 30) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
 
+      expect(result.current.hasGraph).toBe(true);
       expect(mockElectronAPI.explorer.getGraph).toHaveBeenCalledWith(TEST_PROJECT_ID);
       expect(result.current.filteredNodes.length).toBeGreaterThan(0);
 
@@ -692,9 +699,12 @@ describe('Explorer E2E', () => {
     it('should filter nodes by depth level', async () => {
       const { result, unmount } = renderHook(() => useExplorer(TEST_PROJECT_ID));
 
-      await waitFor(() => {
-        expect(result.current.hasGraph).toBe(true);
-      }, { timeout: 3000 });
+      // Wait for graph to load
+      let attempts = 0;
+      while (!result.current.hasGraph && attempts < 30) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
 
       // Initial depth 2
       expect(result.current.depthLevel).toBe(2);
@@ -702,9 +712,9 @@ describe('Explorer E2E', () => {
       // Change to depth 5
       result.current.handleDepthChange(5);
 
-      await waitFor(() => {
-        expect(result.current.depthLevel).toBe(5);
-      }, { timeout: 1000 });
+      // Wait for depth to update
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(result.current.depthLevel).toBe(5);
 
       unmount();
     });
@@ -712,17 +722,20 @@ describe('Explorer E2E', () => {
     it('should handle node selection', async () => {
       const { result, unmount } = renderHook(() => useExplorer(TEST_PROJECT_ID));
 
-      await waitFor(() => {
-        expect(result.current.hasGraph).toBe(true);
-      }, { timeout: 3000 });
+      // Wait for graph to load
+      let attempts = 0;
+      while (!result.current.hasGraph && attempts < 30) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
 
       // Select node
       await result.current.selectNode('class-app');
 
-      await waitFor(() => {
-        expect(result.current.selectedNodeId).toBe('class-app');
-        expect(result.current.isInfoPanelOpen).toBe(true);
-      }, { timeout: 1000 });
+      // Wait for selection to update
+      await new Promise(resolve => setTimeout(resolve, 50));
+      expect(result.current.selectedNodeId).toBe('class-app');
+      expect(result.current.isInfoPanelOpen).toBe(true);
 
       unmount();
     });
@@ -730,9 +743,14 @@ describe('Explorer E2E', () => {
     it('should cleanup on unmount', async () => {
       const { unmount } = renderHook(() => useExplorer(TEST_PROJECT_ID));
 
-      await waitFor(() => {
-        expect(useExplorerStore.getState().graph).toBeTruthy();
-      }, { timeout: 3000 });
+      // Wait for graph to load
+      let attempts = 0;
+      while (!useExplorerStore.getState().graph && attempts < 30) {
+        await new Promise(resolve => setTimeout(resolve, 100));
+        attempts++;
+      }
+
+      expect(useExplorerStore.getState().graph).toBeTruthy();
 
       unmount();
 
