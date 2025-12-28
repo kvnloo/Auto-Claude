@@ -18,7 +18,8 @@ import {
   changelogMock,
   insightsMock,
   infrastructureMock,
-  settingsMock
+  settingsMock,
+  explorerMock
 } from './mocks';
 
 // Check if we're in a browser (not Electron)
@@ -170,7 +171,10 @@ const browserMockAPI: ElectronAPI = {
     onAnalyzePreviewProgress: () => () => {},
     onAnalyzePreviewComplete: () => () => {},
     onAnalyzePreviewError: () => () => {}
-  }
+  },
+
+  // Explorer API (codebase visualization)
+  explorer: explorerMock
 };
 
 /**

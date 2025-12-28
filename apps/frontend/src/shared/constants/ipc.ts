@@ -10,6 +10,7 @@ export const IPC_CHANNELS = {
   PROJECT_LIST: 'project:list',
   PROJECT_UPDATE_SETTINGS: 'project:updateSettings',
   PROJECT_INITIALIZE: 'project:initialize',
+  PROJECT_UPDATE_AUTOBUILD: 'project:updateAutoBuild',
   PROJECT_CHECK_VERSION: 'project:checkVersion',
 
   // Tab state operations (persisted in main process)
@@ -363,5 +364,11 @@ export const IPC_CHANNELS = {
   RELEASE_GET_VERSIONS: 'release:getVersions',
 
   // Release events (main -> renderer)
-  RELEASE_PROGRESS: 'release:progress'
-} as const;
+  RELEASE_PROGRESS: 'release:progress',
+
+  // Explorer operations (codebase visualization)
+  EXPLORER_GET_TREE: 'explorer:getTree',
+  EXPLORER_GET_FILE_CONTENT: 'explorer:getFileContent',
+  EXPLORER_SEARCH_FILES: 'explorer:searchFiles',
+  EXPLORER_GET_FILE_STATS: 'explorer:getFileStats',
+};
