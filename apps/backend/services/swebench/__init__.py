@@ -114,6 +114,25 @@ from .orchestrator import (
     validate_benchmark_environment,
 )
 
+# Results Parser - implemented in subtask-2-5
+from .results_parser import (
+    parse_report,
+    parse_report_file,
+    parse_report_from_dict,
+    get_instance_status,
+    get_resolved_instances,
+    get_evaluation_metrics,
+    summarize_report,
+    EvaluationReport,
+    InstanceStatusResult,
+    InstanceTestResults,
+    TestResult,
+    InstanceStatus,
+    ParseOptions,
+    ResultsParseError,
+    ReportNotFoundError,
+)
+
 __all__ = [
     # Models (implemented in subtask-1-2)
     "BenchmarkVariant",
@@ -176,4 +195,20 @@ __all__ = [
     "ExecutionInterruptedError",
     "run_benchmark",
     "validate_benchmark_environment",
+    # Results Parser (implemented in subtask-2-5)
+    "parse_report",
+    "parse_report_file",
+    "parse_report_from_dict",
+    "get_instance_status",
+    "get_resolved_instances",
+    "get_evaluation_metrics",
+    "summarize_report",
+    "EvaluationReport",
+    "InstanceStatusResult",
+    "InstanceTestResults",
+    "TestResult",
+    "InstanceStatus",
+    "ParseOptions",
+    "ResultsParseError",
+    "ReportNotFoundError",
 ]
