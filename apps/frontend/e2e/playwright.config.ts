@@ -5,7 +5,7 @@ import { defineConfig } from '@playwright/test';
 
 export default defineConfig({
   testDir: '.',
-  testMatch: '**/*.e2e.ts',
+  testMatch: ['**/*.e2e.ts', '**/*.spec.ts'],
   timeout: 60000,
   expect: {
     timeout: 10000
@@ -22,7 +22,7 @@ export default defineConfig({
   projects: [
     {
       name: 'electron',
-      testMatch: '**/*.e2e.ts'
+      testMatch: ['**/*.e2e.ts', '**/*.spec.ts']
     }
   ]
 });
