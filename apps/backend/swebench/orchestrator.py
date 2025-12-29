@@ -44,6 +44,10 @@ from swebench.adapters.results_adapter import (
     convert_to_swebench_prediction,
     export_predictions_to_jsonl,
 )
+from swebench.exporters import (
+    export_predictions,
+    generate_metrics_report,
+)
 from swebench.checkpoint_manager import (
     CheckpointCorruptedError,
     CheckpointManager,
@@ -178,13 +182,29 @@ class SWEBenchOrchestrator:
 
     @property
     def predictions_file(self) -> Path:
-        """Path to the predictions JSONL file."""
+        """Path to the predictions JSONL file (with run_id prefix)."""
         return self.output_dir / f"{self.run_id}-predictions.jsonl"
 
     @property
     def report_file(self) -> Path:
-        """Path to the metrics report JSON file."""
+        """Path to the metrics report JSON file (with run_id prefix)."""
         return self.output_dir / f"{self.run_id}-report.json"
+
+    @property
+    def standard_predictions_file(self) -> Path:
+        """Path to the standard predictions JSONL file (without run_id prefix).
+
+        This is the standard location expected by SWE-bench evaluation harness.
+        """
+        return self.output_dir / "predictions.jsonl"
+
+    @property
+    def standard_report_file(self) -> Path:
+        """Path to the standard report JSON file (without run_id prefix).
+
+        This is the standard location for the metrics report.
+        """
+        return self.output_dir / "report.json"
 
     @property
     def checkpoint_file(self) -> Path:
@@ -692,41 +712,73 @@ class SWEBenchOrchestrator:
         """Export evaluation results to files.
 
         Creates:
-        - predictions.jsonl: SWE-bench format predictions
-        - report.json: Metrics and statistics
+        - predictions.jsonl: SWE-bench format predictions (standard + run_id prefixed)
+        - report.json: Metrics and statistics (standard + run_id prefixed)
+
+        Uses the exporters from swebench.exporters for proper formatting:
+        - export_predictions: JSONL with instance_id, model_patch, model_name_or_path
+        - generate_metrics_report: JSON with resolution_rate, aggregated stats, etc.
         """
         logger.info(f"Exporting results to: {self.output_dir}")
 
-        # Convert results to predictions
         result_list = list(self._results.values())
-        predictions = convert_results_batch(result_list, include_failed=True)
 
-        # Export predictions JSONL
-        export_predictions_to_jsonl(
-            predictions,
+        # Export predictions using the JSONL exporter
+        # Export to both standard and run_id prefixed locations
+        model_name = self.model or "autoclaude"
+
+        # Export to standard location (predictions.jsonl)
+        export_stats = export_predictions(
+            result_list,
+            self.standard_predictions_file,
+            model_name_or_path=model_name,
+            include_failed=True,
+            include_empty_patches=True,
+            overwrite=True,
+        )
+        logger.info(
+            f"Exported {export_stats['total_exported']} predictions to: "
+            f"{self.standard_predictions_file}"
+        )
+
+        # Also export to run_id prefixed location for historical tracking
+        export_predictions(
+            result_list,
             self.predictions_file,
+            model_name_or_path=model_name,
+            include_failed=True,
+            include_empty_patches=True,
             overwrite=True,
         )
         logger.info(f"Exported predictions to: {self.predictions_file}")
 
-        # Export metrics report
-        import json
+        # Generate metrics report using the metrics exporter
+        # Export to standard location (report.json)
+        generate_metrics_report(
+            result_list,
+            self.standard_report_file,
+            run_id=self.run_id,
+            dataset_name=self.dataset_name,
+            model_name=model_name,
+            include_instance_results=True,
+            include_per_repo_stats=True,
+            include_timing_stats=True,
+            overwrite=True,
+        )
+        logger.info(f"Exported report to: {self.standard_report_file}")
 
-        report = {
-            "run_id": self.run_id,
-            "dataset": self.dataset_name,
-            "started_at": datetime.fromtimestamp(
-                self._start_time
-            ).isoformat() if self._start_time else None,
-            "completed_at": datetime.fromtimestamp(
-                self._end_time
-            ).isoformat() if self._end_time else None,
-            "metrics": self._metrics.model_dump() if self._metrics else None,
-            "instance_results": [r.model_dump() for r in result_list],
-        }
-
-        with open(self.report_file, "w") as f:
-            json.dump(report, f, indent=2)
+        # Also export to run_id prefixed location for historical tracking
+        generate_metrics_report(
+            result_list,
+            self.report_file,
+            run_id=self.run_id,
+            dataset_name=self.dataset_name,
+            model_name=model_name,
+            include_instance_results=True,
+            include_per_repo_stats=True,
+            include_timing_stats=True,
+            overwrite=True,
+        )
         logger.info(f"Exported report to: {self.report_file}")
 
     def get_result(self, instance_id: str) -> InstanceResult | None:
