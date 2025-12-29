@@ -16,3 +16,4 @@ export type {
 
 export { VariantSelector } from './VariantSelector';
 export { ConfigPanel } from './ConfigPanel';
+export { ExecutionMonitor } from './ExecutionMonitor';
