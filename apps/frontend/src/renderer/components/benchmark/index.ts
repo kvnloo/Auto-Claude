@@ -12,3 +12,5 @@ export type {
   BenchmarkResultsProps,
   InstanceResult,
 } from './types';
+
+export { VariantSelector } from './VariantSelector';
