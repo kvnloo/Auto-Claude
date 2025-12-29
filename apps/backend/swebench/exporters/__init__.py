@@ -16,6 +16,14 @@ from swebench.exporters.jsonl_exporter import (
     load_predictions,
     validate_predictions_file,
 )
+from swebench.exporters.metrics_exporter import (
+    MetricsExportError,
+    compare_reports,
+    generate_metrics_report,
+    get_summary_from_report,
+    load_metrics_report,
+    validate_metrics_report,
+)
 
 __all__ = [
     # JSONL Exporter
@@ -24,4 +32,11 @@ __all__ = [
     "export_predictions_streaming",
     "load_predictions",
     "validate_predictions_file",
+    # Metrics Exporter
+    "MetricsExportError",
+    "generate_metrics_report",
+    "load_metrics_report",
+    "validate_metrics_report",
+    "get_summary_from_report",
+    "compare_reports",
 ]
