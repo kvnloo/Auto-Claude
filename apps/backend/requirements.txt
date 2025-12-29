@@ -15,3 +15,13 @@ google-generativeai>=0.8.0
 
 # Pydantic for structured output schemas
 pydantic>=2.0.0
+
+# SWE-bench Evaluation Support
+# HuggingFace datasets for loading SWE-bench benchmark data
+datasets>=2.0.0
+
+# Docker SDK for Python (evaluation harness integration)
+docker>=6.0.0
+
+# SWE-bench library (not on PyPI - install from GitHub):
+# git clone https://github.com/princeton-nlp/SWE-bench.git && pip install -e ./SWE-bench
