@@ -14,6 +14,14 @@ from swebench.dataset_loader import (
     load_swebench_dataset,
     validate_dataset_instance,
 )
+from swebench.docker_checker import (
+    DockerNotAvailableError,
+    DockerVersionError,
+    check_docker,
+    check_docker_disk_space,
+    get_docker_info,
+    is_docker_available,
+)
 from swebench.models import (
     EvaluationMetrics,
     InstanceResult,
@@ -34,4 +42,11 @@ __all__ = [
     "list_available_datasets",
     "load_swebench_dataset",
     "validate_dataset_instance",
+    # Docker checking
+    "DockerNotAvailableError",
+    "DockerVersionError",
+    "check_docker",
+    "check_docker_disk_space",
+    "get_docker_info",
+    "is_docker_available",
 ]
