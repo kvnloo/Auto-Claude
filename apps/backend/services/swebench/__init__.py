@@ -57,11 +57,22 @@ from .loader import (
     DatasetValidationError,
 )
 
+# Health checks - implemented in subtask-1-5
+from .health import (
+    check_docker_available,
+    check_disk_space,
+    check_cpu_cores,
+    check_architecture,
+    check_infrastructure,
+    get_recommended_max_workers,
+    get_available_disk_space_gb,
+    HealthCheckError,
+)
+
 # Imports to be added as submodules are implemented
 # from .converter import convert_to_task
 # from .exporter import export_predictions
 # from .orchestrator import BenchmarkOrchestrator
-# from .health import check_docker_available, check_disk_space
 
 __all__ = [
     # Models (implemented in subtask-1-2)
@@ -83,13 +94,19 @@ __all__ = [
     "get_dataset_info",
     "DatasetLoadError",
     "DatasetValidationError",
+    # Health checks (implemented in subtask-1-5)
+    "check_docker_available",
+    "check_disk_space",
+    "check_cpu_cores",
+    "check_architecture",
+    "check_infrastructure",
+    "get_recommended_max_workers",
+    "get_available_disk_space_gb",
+    "HealthCheckError",
     # Converter (to be implemented in subtask-2-1)
     # "convert_to_task",
     # Exporter (to be implemented in subtask-2-2)
     # "export_predictions",
     # Orchestrator (to be implemented in subtask-2-4)
     # "BenchmarkOrchestrator",
-    # Health checks (to be implemented in subtask-1-5)
-    # "check_docker_available",
-    # "check_disk_space",
 ]
