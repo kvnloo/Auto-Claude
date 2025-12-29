@@ -11,6 +11,8 @@ export type {
   BenchmarkMonitorProps,
   BenchmarkResultsProps,
   InstanceResult,
+  CacheLevel,
 } from './types';
 
 export { VariantSelector } from './VariantSelector';
+export { ConfigPanel } from './ConfigPanel';

@@ -29,14 +29,23 @@ export interface BenchmarkSelectorProps {
 }
 
 /**
+ * Cache level for Docker images
+ */
+export type CacheLevel = 'none' | 'base' | 'env' | 'instance';
+
+/**
  * Props for benchmark configuration panel
  */
 export interface BenchmarkConfigProps {
   maxWorkers: number;
   instanceCount: number;
+  cacheLevel: CacheLevel;
   onMaxWorkersChange: (value: number) => void;
   onInstanceCountChange: (value: number) => void;
+  onCacheLevelChange: (value: CacheLevel) => void;
   disabled?: boolean;
+  recommendedMaxWorkers?: number;
+  maxInstanceCount?: number;
 }
 
 /**
