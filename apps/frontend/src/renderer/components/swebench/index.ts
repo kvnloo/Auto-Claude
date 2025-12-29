@@ -6,3 +6,4 @@
 
 export { SWEBenchDashboard, default as SWEBenchDashboardDefault } from './SWEBenchDashboard';
 export { SWEBenchProgress, default as SWEBenchProgressDefault } from './SWEBenchProgress';
+export { SWEBenchResults, default as SWEBenchResultsDefault } from './SWEBenchResults';
