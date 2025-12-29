@@ -77,8 +77,18 @@ from .converter import (
     ConversionError,
 )
 
+# Exporter - implemented in subtask-2-2
+from .exporter import (
+    export_predictions,
+    export_predictions_to_string,
+    create_prediction_entry,
+    append_prediction,
+    validate_predictions_file,
+    count_predictions,
+    ExportError,
+)
+
 # Imports to be added as submodules are implemented
-# from .exporter import export_predictions
 # from .orchestrator import BenchmarkOrchestrator
 
 __all__ = [
@@ -115,8 +125,14 @@ __all__ = [
     "convert_batch",
     "extract_repo_info",
     "ConversionError",
-    # Exporter (to be implemented in subtask-2-2)
-    # "export_predictions",
+    # Exporter (implemented in subtask-2-2)
+    "export_predictions",
+    "export_predictions_to_string",
+    "create_prediction_entry",
+    "append_prediction",
+    "validate_predictions_file",
+    "count_predictions",
+    "ExportError",
     # Orchestrator (to be implemented in subtask-2-4)
     # "BenchmarkOrchestrator",
 ]
