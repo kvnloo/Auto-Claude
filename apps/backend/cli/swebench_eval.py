@@ -151,12 +151,14 @@ Prerequisites:
 
 def main() -> int:
     """Main entry point for SWE-bench evaluation CLI."""
+    # Parse args first so --help works without requiring all dependencies
+    args = parse_args()
+
+    # Import dependencies after argparse has handled --help
     import asyncio
     import logging
 
     from swebench.orchestrator import SWEBenchOrchestrator
-
-    args = parse_args()
 
     # Configure logging
     if args.verbose:
