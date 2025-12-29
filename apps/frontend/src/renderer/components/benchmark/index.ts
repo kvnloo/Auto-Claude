@@ -18,3 +18,4 @@ export { VariantSelector } from './VariantSelector';
 export { ConfigPanel } from './ConfigPanel';
 export { ExecutionMonitor } from './ExecutionMonitor';
 export { ResultsView } from './ResultsView';
+export { BenchmarkDashboard } from './BenchmarkDashboard';
