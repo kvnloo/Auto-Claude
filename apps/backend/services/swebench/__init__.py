@@ -47,8 +47,17 @@ from .models import (
     InfrastructureStatus,
 )
 
+# Loader - implemented in subtask-1-4
+from .loader import (
+    load_benchmark,
+    load_benchmark_iterator,
+    get_available_variants,
+    get_dataset_info,
+    DatasetLoadError,
+    DatasetValidationError,
+)
+
 # Imports to be added as submodules are implemented
-# from .loader import load_benchmark
 # from .converter import convert_to_task
 # from .exporter import export_predictions
 # from .orchestrator import BenchmarkOrchestrator
@@ -67,8 +76,13 @@ __all__ = [
     "BenchmarkResult",
     "HealthCheckResult",
     "InfrastructureStatus",
-    # Loader (to be implemented in subtask-1-4)
-    # "load_benchmark",
+    # Loader (implemented in subtask-1-4)
+    "load_benchmark",
+    "load_benchmark_iterator",
+    "get_available_variants",
+    "get_dataset_info",
+    "DatasetLoadError",
+    "DatasetValidationError",
     # Converter (to be implemented in subtask-2-1)
     # "convert_to_task",
     # Exporter (to be implemented in subtask-2-2)
