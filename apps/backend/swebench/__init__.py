@@ -28,6 +28,11 @@ from swebench.models import (
     SWEBenchInstance,
     SWEBenchPrediction,
 )
+from swebench.orchestrator import (
+    EvaluationError,
+    SWEBenchOrchestrator,
+    run_evaluation,
+)
 
 __all__ = [
     # Models
@@ -49,4 +54,8 @@ __all__ = [
     "check_docker_disk_space",
     "get_docker_info",
     "is_docker_available",
+    # Orchestrator
+    "EvaluationError",
+    "SWEBenchOrchestrator",
+    "run_evaluation",
 ]
