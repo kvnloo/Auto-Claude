@@ -100,8 +100,19 @@ from .evaluator import (
     InfrastructureError,
 )
 
-# Imports to be added as submodules are implemented
-# from .orchestrator import BenchmarkOrchestrator
+# Orchestrator - implemented in subtask-2-4
+from .orchestrator import (
+    BenchmarkOrchestrator,
+    OrchestratorConfig,
+    OrchestrationProgress,
+    OrchestrationResult,
+    Checkpoint,
+    OrchestrationError,
+    ConfigurationError,
+    ExecutionInterruptedError,
+    run_benchmark,
+    validate_benchmark_environment,
+)
 
 __all__ = [
     # Models (implemented in subtask-1-2)
@@ -154,6 +165,15 @@ __all__ = [
     "EvaluationError",
     "EvaluationNotAvailableError",
     "InfrastructureError",
-    # Orchestrator (to be implemented in subtask-2-4)
-    # "BenchmarkOrchestrator",
+    # Orchestrator (implemented in subtask-2-4)
+    "BenchmarkOrchestrator",
+    "OrchestratorConfig",
+    "OrchestrationProgress",
+    "OrchestrationResult",
+    "Checkpoint",
+    "OrchestrationError",
+    "ConfigurationError",
+    "ExecutionInterruptedError",
+    "run_benchmark",
+    "validate_benchmark_environment",
 ]
