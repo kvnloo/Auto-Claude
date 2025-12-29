@@ -139,12 +139,36 @@ Prerequisites:
         help="Validate configuration without running evaluation",
     )
 
+    # Skip Docker check (for testing)
+    parser.add_argument(
+        "--skip-docker-check",
+        action="store_true",
+        help="Skip Docker availability check (for testing only)",
+    )
+
     return parser.parse_args()
 
 
 def main() -> int:
     """Main entry point for SWE-bench evaluation CLI."""
+    import asyncio
+    import logging
+
+    from swebench.orchestrator import SWEBenchOrchestrator
+
     args = parse_args()
+
+    # Configure logging
+    if args.verbose:
+        logging.basicConfig(
+            level=logging.DEBUG,
+            format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        )
+    else:
+        logging.basicConfig(
+            level=logging.INFO,
+            format="%(asctime)s - %(levelname)s - %(message)s",
+        )
 
     # Display configuration
     print("=" * 70)
@@ -164,12 +188,54 @@ def main() -> int:
         print("Dry run mode - configuration validated, exiting.")
         return 0
 
-    # TODO: Implement evaluation orchestration
-    # This will be implemented in subtask-2-4
-    print("Evaluation orchestration not yet implemented.")
-    print("See subtask-2-4 for orchestrator implementation.")
+    # Create and run orchestrator
+    try:
+        orchestrator = SWEBenchOrchestrator(
+            dataset_name=args.dataset,
+            max_instances=args.max_instances,
+            max_workers=args.max_workers,
+            run_id=args.run_id,
+            output_dir=args.output_dir,
+            timeout_per_instance=args.timeout,
+            model=args.model,
+            skip_docker_check=args.skip_docker_check,
+        )
 
-    return 0
+        # Run the evaluation
+        metrics = asyncio.run(orchestrator.run(resume=args.resume))
+
+        # Print summary
+        print()
+        print("=" * 70)
+        print("  EVALUATION COMPLETE")
+        print("=" * 70)
+        print()
+        print(f"  Total instances:      {metrics.total_instances}")
+        print(f"  Completed:            {metrics.completed_instances}")
+        print(f"  Successful:           {metrics.successful_instances}")
+        print(f"  Failed:               {metrics.failed_instances}")
+        print(f"  Errors:               {metrics.error_instances}")
+        print(f"  Resolution rate:      {metrics.resolution_rate:.1%}")
+        print(f"  Total time:           {metrics.total_execution_time_seconds:.1f}s")
+        print()
+        print(f"  Predictions file:     {orchestrator.predictions_file}")
+        print(f"  Report file:          {orchestrator.report_file}")
+        print(f"  Checkpoint file:      {orchestrator.checkpoint_file}")
+        print()
+
+        return 0
+
+    except KeyboardInterrupt:
+        print("\nEvaluation interrupted by user.")
+        print("Use --resume to continue from the last checkpoint.")
+        return 130
+
+    except Exception as e:
+        print(f"\nError: {e}")
+        if args.verbose:
+            import traceback
+            traceback.print_exc()
+        return 1
 
 
 if __name__ == "__main__":

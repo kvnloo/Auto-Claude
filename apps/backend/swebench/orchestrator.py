@@ -6,12 +6,13 @@ Main orchestration logic for SWE-bench benchmark evaluations.
 
 This orchestrator manages the evaluation loop:
 1. Load dataset from HuggingFace
-2. For each instance:
+2. Load or create checkpoint for resumable evaluations
+3. For each instance:
    a. Convert to autoclaude spec format
    b. Invoke SpecOrchestrator for evaluation
    c. Collect results
-   d. Update checkpoint (when integrated)
-3. Export results in SWE-bench format
+   d. Save checkpoint after each instance
+4. Export results in SWE-bench format
 
 Usage:
     from swebench.orchestrator import SWEBenchOrchestrator
@@ -43,6 +44,12 @@ from swebench.adapters.results_adapter import (
     convert_to_swebench_prediction,
     export_predictions_to_jsonl,
 )
+from swebench.checkpoint_manager import (
+    CheckpointCorruptedError,
+    CheckpointManager,
+    CheckpointNotFoundError,
+)
+from swebench.checkpoint_models import Checkpoint, InstanceCheckpointState
 from swebench.dataset_loader import (
     DatasetLoadError,
     DatasetNotFoundError,
@@ -77,10 +84,11 @@ class SWEBenchOrchestrator:
     - Loading datasets from HuggingFace
     - Converting instances to autoclaude format
     - Running evaluations via SpecOrchestrator
+    - Checkpointing for resumable evaluations
     - Collecting and exporting results
 
     The orchestrator is designed to support:
-    - Checkpointing for resumable evaluations (via later integration)
+    - Checkpointing: saves progress after each instance for resume capability
     - Parallel worker execution (controlled externally)
     - Progress tracking and metrics collection
     """
@@ -141,6 +149,12 @@ class SWEBenchOrchestrator:
         self._metrics: EvaluationMetrics | None = None
         self._start_time: float | None = None
         self._end_time: float | None = None
+
+        # Checkpointing
+        self._checkpoint_manager = CheckpointManager(
+            checkpoint_dir=self.output_dir / "checkpoints"
+        )
+        self._checkpoint: Checkpoint | None = None
 
         # Flags
         self._is_initialized = False
@@ -334,9 +348,27 @@ class SWEBenchOrchestrator:
                 f"run_id={self.run_id}"
             )
 
-            # TODO: Load checkpoint if resuming (phase-3)
-            if resume:
-                logger.info("Resume mode: checkpoint loading not yet implemented")
+            # Load or create checkpoint
+            resumed_count = 0
+            if resume and self._checkpoint_manager.exists(self.run_id):
+                try:
+                    self._checkpoint = self._checkpoint_manager.load(self.run_id)
+                    resumed_count = self._load_checkpoint_state()
+                    logger.info(
+                        f"Resumed from checkpoint: {resumed_count} instances "
+                        f"already completed"
+                    )
+                except (CheckpointNotFoundError, CheckpointCorruptedError) as e:
+                    logger.warning(
+                        f"Failed to load checkpoint, starting fresh: {e}"
+                    )
+                    self._checkpoint = self._create_checkpoint()
+            else:
+                self._checkpoint = self._create_checkpoint()
+
+            # Mark checkpoint as started
+            self._checkpoint.mark_started()
+            self._save_checkpoint()
 
             # Process instances sequentially
             # TODO: Add parallel processing with max_workers (future enhancement)
@@ -344,7 +376,8 @@ class SWEBenchOrchestrator:
                 instance_id = instance.instance_id
 
                 # Skip if already completed (for resume)
-                if self._results.get(instance_id, {}).status in {
+                result = self._results.get(instance_id)
+                if result and result.status in {
                     "success", "failed", "error", "skipped"
                 }:
                     logger.info(f"Skipping already completed: {instance_id}")
@@ -357,11 +390,13 @@ class SWEBenchOrchestrator:
 
                 # Update status to running
                 self._results[instance_id].status = "running"
+                self._update_checkpoint_instance_started(instance_id)
 
                 # Process this instance
                 try:
                     result = await self._process_instance(instance)
                     self._results[instance_id] = result
+                    self._update_checkpoint_instance_completed(instance_id, result)
                 except Exception as e:
                     logger.error(f"Instance {instance_id} failed with error: {e}")
                     self._results[instance_id] = InstanceResult(
@@ -369,8 +404,14 @@ class SWEBenchOrchestrator:
                         status="error",
                         error_message=str(e),
                     )
+                    self._update_checkpoint_instance_error(instance_id, str(e))
 
-                # TODO: Save checkpoint after each instance (phase-3)
+                # Save checkpoint after each instance
+                self._save_checkpoint()
+
+            # Mark checkpoint as finished
+            self._checkpoint.mark_finished()
+            self._save_checkpoint()
 
             # Calculate final metrics
             self._end_time = time.time()
@@ -492,6 +533,160 @@ class SWEBenchOrchestrator:
             skipped_instances=skipped,
             total_execution_time_seconds=total_time,
         )
+
+    # -------------------------------------------------------------------------
+    # Checkpointing Methods
+    # -------------------------------------------------------------------------
+
+    def _create_checkpoint(self) -> Checkpoint:
+        """Create a new checkpoint for this evaluation run.
+
+        Returns:
+            A new Checkpoint instance initialized with current instances.
+        """
+        instance_ids = [inst.instance_id for inst in self._instances]
+        return self._checkpoint_manager.create_checkpoint(
+            run_id=self.run_id,
+            dataset_name=self.dataset_name,
+            instance_ids=instance_ids,
+            max_instances=self.max_instances,
+            max_workers=self.max_workers,
+            timeout_seconds=self.timeout_per_instance,
+            model_name=self.model or "autoclaude",
+        )
+
+    def _save_checkpoint(self) -> None:
+        """Save the current checkpoint to disk."""
+        if self._checkpoint is None:
+            logger.warning("No checkpoint to save")
+            return
+
+        try:
+            self._checkpoint_manager.save(self._checkpoint)
+            logger.debug(f"Checkpoint saved: {self._checkpoint.completed_count} complete")
+        except Exception as e:
+            logger.error(f"Failed to save checkpoint: {e}")
+            # Don't raise - checkpoint failures shouldn't stop evaluation
+
+    def _load_checkpoint_state(self) -> int:
+        """Load state from checkpoint and restore completed results.
+
+        Returns:
+            Number of instances restored from checkpoint.
+        """
+        if self._checkpoint is None:
+            return 0
+
+        restored_count = 0
+        for state in self._checkpoint.instance_states:
+            if state.is_terminal():
+                # Restore the result from checkpoint state
+                self._results[state.instance_id] = InstanceResult(
+                    instance_id=state.instance_id,
+                    status=self._map_checkpoint_status(state.status),
+                    model_patch=state.model_patch,
+                    error_message=state.error_message,
+                    execution_time_seconds=state.execution_time_seconds,
+                )
+                restored_count += 1
+            elif state.status == "running":
+                # Instance was interrupted mid-run, reset to pending
+                state.status = "pending"
+                state.started_at = None
+                self._results[state.instance_id] = InstanceResult(
+                    instance_id=state.instance_id,
+                    status="pending",
+                )
+
+        return restored_count
+
+    def _map_checkpoint_status(self, checkpoint_status: str) -> str:
+        """Map checkpoint status to InstanceResult status.
+
+        Args:
+            checkpoint_status: Status from checkpoint ('completed', 'failed', etc.)
+
+        Returns:
+            Status string for InstanceResult.
+        """
+        # Map 'completed' in checkpoint to 'success' in results
+        if checkpoint_status == "completed":
+            return "success"
+        return checkpoint_status
+
+    def _update_checkpoint_instance_started(self, instance_id: str) -> None:
+        """Mark an instance as started in the checkpoint.
+
+        Args:
+            instance_id: The instance identifier.
+        """
+        if self._checkpoint is None:
+            return
+
+        state = self._checkpoint.get_instance_state(instance_id)
+        if state:
+            state.mark_started()
+
+    def _update_checkpoint_instance_completed(
+        self,
+        instance_id: str,
+        result: InstanceResult,
+    ) -> None:
+        """Update checkpoint with completed instance result.
+
+        Args:
+            instance_id: The instance identifier.
+            result: The evaluation result for this instance.
+        """
+        if self._checkpoint is None:
+            return
+
+        state = self._checkpoint.get_instance_state(instance_id)
+        if state is None:
+            # Create new state if not found
+            state = InstanceCheckpointState(instance_id=instance_id)
+            self._checkpoint.instance_states.append(state)
+
+        if result.status == "success":
+            state.mark_completed(result.model_patch or "")
+        elif result.status == "failed":
+            state.mark_failed(result.error_message or "Evaluation failed")
+        elif result.status == "skipped":
+            state.mark_skipped(result.error_message or "Skipped")
+        else:
+            # For pending status (stub evaluation), mark as completed
+            # This allows checkpoint to track progress during development
+            state.mark_completed(result.model_patch or "")
+
+        state.execution_time_seconds = result.execution_time_seconds
+        self._checkpoint._update_counts()
+
+    def _update_checkpoint_instance_error(
+        self,
+        instance_id: str,
+        error_message: str,
+    ) -> None:
+        """Mark an instance as errored in the checkpoint.
+
+        Args:
+            instance_id: The instance identifier.
+            error_message: The error message.
+        """
+        if self._checkpoint is None:
+            return
+
+        state = self._checkpoint.get_instance_state(instance_id)
+        if state:
+            state.mark_error(error_message)
+            self._checkpoint._update_counts()
+
+    def get_checkpoint(self) -> Checkpoint | None:
+        """Get the current checkpoint object.
+
+        Returns:
+            Current Checkpoint if available, None otherwise.
+        """
+        return self._checkpoint
 
     async def _export_results(self) -> None:
         """Export evaluation results to files.
