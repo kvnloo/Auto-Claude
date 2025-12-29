@@ -88,6 +88,18 @@ from .exporter import (
     ExportError,
 )
 
+# Evaluator - implemented in subtask-2-3
+from .evaluator import (
+    execute_evaluation,
+    execute_gold_evaluation,
+    check_evaluation_prerequisites,
+    cleanup_docker_resources,
+    get_evaluation_status,
+    EvaluationError,
+    EvaluationNotAvailableError,
+    InfrastructureError,
+)
+
 # Imports to be added as submodules are implemented
 # from .orchestrator import BenchmarkOrchestrator
 
@@ -133,6 +145,15 @@ __all__ = [
     "validate_predictions_file",
     "count_predictions",
     "ExportError",
+    # Evaluator (implemented in subtask-2-3)
+    "execute_evaluation",
+    "execute_gold_evaluation",
+    "check_evaluation_prerequisites",
+    "cleanup_docker_resources",
+    "get_evaluation_status",
+    "EvaluationError",
+    "EvaluationNotAvailableError",
+    "InfrastructureError",
     # Orchestrator (to be implemented in subtask-2-4)
     # "BenchmarkOrchestrator",
 ]
