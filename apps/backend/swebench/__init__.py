@@ -28,6 +28,20 @@ from swebench.models import (
     SWEBenchInstance,
     SWEBenchPrediction,
 )
+from swebench.checkpoint_manager import (
+    CheckpointCorruptedError,
+    CheckpointError,
+    CheckpointManager,
+    CheckpointNotFoundError,
+    CheckpointSaveError,
+    checkpoint_exists,
+    load_checkpoint,
+    save_checkpoint,
+)
+from swebench.checkpoint_models import (
+    Checkpoint,
+    InstanceCheckpointState,
+)
 from swebench.orchestrator import (
     EvaluationError,
     SWEBenchOrchestrator,
@@ -58,4 +72,15 @@ __all__ = [
     "EvaluationError",
     "SWEBenchOrchestrator",
     "run_evaluation",
+    # Checkpointing
+    "Checkpoint",
+    "CheckpointCorruptedError",
+    "CheckpointError",
+    "CheckpointManager",
+    "CheckpointNotFoundError",
+    "CheckpointSaveError",
+    "InstanceCheckpointState",
+    "checkpoint_exists",
+    "load_checkpoint",
+    "save_checkpoint",
 ]
