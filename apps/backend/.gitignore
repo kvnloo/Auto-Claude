@@ -59,8 +59,9 @@ Thumbs.db
 .claude_settings.json
 .auto-build-security.json
 
-# Tests (development only)
-tests/
+# Tests (development only - root level only)
+# Note: service-specific tests under services/**/tests/ are tracked
+/tests/
 
 # Auto Claude data directory
 .auto-claude/
