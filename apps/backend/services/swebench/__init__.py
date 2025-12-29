@@ -69,8 +69,15 @@ from .health import (
     HealthCheckError,
 )
 
+# Converter - implemented in subtask-2-1
+from .converter import (
+    convert_to_task,
+    convert_batch,
+    extract_repo_info,
+    ConversionError,
+)
+
 # Imports to be added as submodules are implemented
-# from .converter import convert_to_task
 # from .exporter import export_predictions
 # from .orchestrator import BenchmarkOrchestrator
 
@@ -103,8 +110,11 @@ __all__ = [
     "get_recommended_max_workers",
     "get_available_disk_space_gb",
     "HealthCheckError",
-    # Converter (to be implemented in subtask-2-1)
-    # "convert_to_task",
+    # Converter (implemented in subtask-2-1)
+    "convert_to_task",
+    "convert_batch",
+    "extract_repo_info",
+    "ConversionError",
     # Exporter (to be implemented in subtask-2-2)
     # "export_predictions",
     # Orchestrator (to be implemented in subtask-2-4)
