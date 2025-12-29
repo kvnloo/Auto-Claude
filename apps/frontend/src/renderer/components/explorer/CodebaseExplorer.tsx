@@ -22,13 +22,14 @@ import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
 import { Input } from '../ui/input';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
-import { DependencyGraph } from './DependencyGraph';
+import { SigmaGraph } from './SigmaGraph';
 import { DepthSlider, DepthSliderCompact } from './DepthSlider';
 import { InfoPanel } from './InfoPanel';
 import { GraphLegend, GraphLegendInline } from './GraphLegend';
 import { ExplorerLoadingState, ExplorerLoadingStateCompact } from './ExplorerLoadingState';
 import { useExplorer } from './hooks/useExplorer';
 import type { DepthLevel, GraphNode } from '../../../shared/types/explorer';
+import type { GraphologyNodeAttributes } from '../../../shared/types/graphology';
 
 interface CodebaseExplorerProps {
   projectId: string;
@@ -81,10 +82,32 @@ export function CodebaseExplorer({ projectId }: CodebaseExplorerProps) {
   // Local UI state
   const [showSearch, setShowSearch] = useState(false);
 
-  // Handle node hover (optional callback)
-  const handleNodeHover = useCallback((_node: GraphNode | null) => {
+  // Handle node hover from SigmaGraph (optional callback)
+  const handleNodeHover = useCallback((_nodeId: string | null, _attrs: GraphologyNodeAttributes | null) => {
     // Could update UI state here if needed
   }, []);
+
+  // Handle node select from SigmaGraph
+  const handleSigmaNodeSelect = useCallback((nodeId: string | null, attrs: GraphologyNodeAttributes | null) => {
+    if (nodeId && attrs) {
+      // Convert GraphologyNodeAttributes to GraphNode for InfoPanel
+      const graphNode: GraphNode = {
+        id: nodeId,
+        label: attrs.label || nodeId,
+        type: attrs.nodeType || 'file',
+        path: attrs.filePath || nodeId,
+        depth: attrs.depth || 0,
+        x: attrs.x,
+        y: attrs.y,
+        color: attrs.color,
+        size: attrs.size,
+        hidden: attrs.hidden,
+      };
+      handleNodeClick(graphNode);
+    } else {
+      selectNode(null);
+    }
+  }, [handleNodeClick, selectNode]);
 
   // Loading state
   if (isLoading && !hasGraph) {
@@ -255,18 +278,13 @@ export function CodebaseExplorer({ projectId }: CodebaseExplorerProps) {
               </div>
             </div>
           ) : (
-            <DependencyGraph
-              graph={graph}
-              depthLevel={depthLevel}
-              selectedNodeId={selectedNodeId}
-              onSelectNode={(node) => {
-                if (node) {
-                  handleNodeClick(node);
-                } else {
-                  selectNode(null);
-                }
-              }}
-              onHoverNode={handleNodeHover}
+            <SigmaGraph
+              data={graph}
+              depth={depthLevel}
+              onDepthChange={(d) => handleDepthChange(d as DepthLevel)}
+              onNodeSelect={handleSigmaNodeSelect}
+              onNodeHover={handleNodeHover}
+              isLoading={isLoading}
               className="flex-1"
             />
           )}
