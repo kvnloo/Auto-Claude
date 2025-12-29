@@ -44,6 +44,7 @@ import { GitHubIssues } from './components/GitHubIssues';
 import { GitHubPRs } from './components/github-prs';
 import { Changelog } from './components/Changelog';
 import { Worktrees } from './components/Worktrees';
+import { SWEBenchDashboard } from './components/swebench';
 import { WelcomeScreen } from './components/WelcomeScreen';
 import { RateLimitModal } from './components/RateLimitModal';
 import { SDKRateLimitModal } from './components/SDKRateLimitModal';
@@ -721,6 +722,9 @@ export function App() {
                       </p>
                     </div>
                   </div>
+                )}
+                {activeView === 'swebench' && (
+                  <SWEBenchDashboard />
                 )}
               </>
             ) : (
