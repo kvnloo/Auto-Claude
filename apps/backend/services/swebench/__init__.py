@@ -32,8 +32,22 @@ Usage:
     results = orchestrator.run(variant="lite", max_instances=10)
 """
 
-# Imports will be added as submodules are implemented
-# from .models import SWEBenchInstance
+# Models - implemented in subtask-1-2
+from .models import (
+    BenchmarkVariant,
+    VARIANT_DATASET_NAMES,
+    SWEBenchInstance,
+    AutoclaudeTask,
+    TestCriteria,
+    PredictionEntry,
+    ExecutionStatus,
+    InstanceResult,
+    BenchmarkResult,
+    HealthCheckResult,
+    InfrastructureStatus,
+)
+
+# Imports to be added as submodules are implemented
 # from .loader import load_benchmark
 # from .converter import convert_to_task
 # from .exporter import export_predictions
@@ -41,8 +55,18 @@ Usage:
 # from .health import check_docker_available, check_disk_space
 
 __all__ = [
-    # Models (to be implemented in subtask-1-2)
-    # "SWEBenchInstance",
+    # Models (implemented in subtask-1-2)
+    "BenchmarkVariant",
+    "VARIANT_DATASET_NAMES",
+    "SWEBenchInstance",
+    "AutoclaudeTask",
+    "TestCriteria",
+    "PredictionEntry",
+    "ExecutionStatus",
+    "InstanceResult",
+    "BenchmarkResult",
+    "HealthCheckResult",
+    "InfrastructureStatus",
     # Loader (to be implemented in subtask-1-4)
     # "load_benchmark",
     # Converter (to be implemented in subtask-2-1)
