@@ -1,26 +1,33 @@
 {
-  "spec_id": "011-fix-scale-adjustment-and-view-reload-issues",
+  "spec_id": "023-add-swe-bench-pro-thin-integration-layer",
   "subtasks": [
     {
       "id": "1",
-      "title": "Fix slider to defer view reload until drag ends and add zoom button functionality",
+      "title": "Create SWE-bench integration layer with CLI, UI dashboard, and checkpoint support",
       "status": "completed"
     }
   ],
   "qa_signoff": {
     "status": "fixes_applied",
-    "timestamp": "2025-12-27T02:20:00Z",
+    "timestamp": "2025-12-29T19:45:00Z",
     "fix_session": 0,
     "issues_fixed": [
       {
-        "title": "Remove preview hint textbox",
-        "fix_commit": "2653019"
+        "title": "Add Start Evaluation button to UI",
+        "fix_commit": "66fb774"
       },
       {
-        "title": "Remove unused preview translation keys",
-        "fix_commit": "e17536c"
+        "title": "Create SWE-bench IPC API for frontend-to-backend communication",
+        "fix_commit": "66fb774"
+      },
+      {
+        "title": "Add SWE-bench handlers for starting/stopping evaluations",
+        "fix_commit": "66fb774"
       }
     ],
     "ready_for_qa_revalidation": true
-  }
+  },
+  "status": "human_review",
+  "planStatus": "review",
+  "updated_at": "2025-12-29T19:45:00Z"
 }
