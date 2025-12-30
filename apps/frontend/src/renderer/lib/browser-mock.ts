@@ -170,6 +170,30 @@ const browserMockAPI: ElectronAPI = {
     onAnalyzePreviewProgress: () => () => {},
     onAnalyzePreviewComplete: () => () => {},
     onAnalyzePreviewError: () => () => {}
+  },
+
+  // SWE-bench API mock
+  swebench: {
+    startEvaluation: async () => ({ success: true, data: { terminalId: 'mock-terminal', runId: 'mock-run' } }),
+    stopEvaluation: async () => ({ success: true }),
+    getRuns: async () => ({ success: true, data: [] }),
+    getRun: async () => ({ success: true, data: null }),
+    getProgress: async () => ({
+      success: true,
+      data: {
+        runId: 'mock-run',
+        currentInstanceId: null,
+        completedInstances: 0,
+        totalInstances: 0,
+        successfulInstances: 0,
+        failedInstances: 0,
+        elapsedTimeSeconds: 0,
+        status: 'running' as const
+      }
+    }),
+    onProgress: () => () => {},
+    onComplete: () => () => {},
+    onError: () => () => {}
   }
 };
 

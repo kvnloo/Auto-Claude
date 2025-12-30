@@ -363,5 +363,17 @@ export const IPC_CHANNELS = {
   RELEASE_GET_VERSIONS: 'release:getVersions',
 
   // Release events (main -> renderer)
-  RELEASE_PROGRESS: 'release:progress'
+  RELEASE_PROGRESS: 'release:progress',
+
+  // SWE-bench operations
+  SWEBENCH_START_EVALUATION: 'swebench:startEvaluation',
+  SWEBENCH_STOP_EVALUATION: 'swebench:stopEvaluation',
+  SWEBENCH_GET_RUNS: 'swebench:getRuns',
+  SWEBENCH_GET_RUN: 'swebench:getRun',
+  SWEBENCH_GET_PROGRESS: 'swebench:getProgress',
+
+  // SWE-bench events (main -> renderer)
+  SWEBENCH_PROGRESS: 'swebench:progress',
+  SWEBENCH_COMPLETE: 'swebench:complete',
+  SWEBENCH_ERROR: 'swebench:error'
 } as const;

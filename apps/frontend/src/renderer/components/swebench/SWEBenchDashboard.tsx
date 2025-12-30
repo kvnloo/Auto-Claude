@@ -1,4 +1,4 @@
-import { useEffect } from 'react';
+import { useEffect, useState, useCallback } from 'react';
 import {
   BarChart3,
   CheckCircle2,
@@ -9,13 +9,17 @@ import {
   RefreshCw,
   Loader2,
   TrendingUp,
-  Database
+  Database,
+  Play,
+  Settings2
 } from 'lucide-react';
 import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '../ui/card';
 import { Progress } from '../ui/progress';
 import { Badge } from '../ui/badge';
 import { Button } from '../ui/button';
 import { ScrollArea } from '../ui/scroll-area';
+import { Input } from '../ui/input';
+import { Label } from '../ui/label';
 import { cn } from '../../lib/utils';
 import {
   useSWEBenchStore,
@@ -332,8 +336,43 @@ export function SWEBenchDashboard() {
 
 /**
  * Empty state when no evaluation data is available
+ * Includes a form to start a new evaluation
  */
 function EmptyState() {
+  const [showConfig, setShowConfig] = useState(false);
+  const [isStarting, setIsStarting] = useState(false);
+  const [startError, setStartError] = useState<string | null>(null);
+
+  // Default configuration values
+  const [dataset, setDataset] = useState('princeton-nlp/SWE-bench_Lite');
+  const [maxInstances, setMaxInstances] = useState('10');
+  const [maxWorkers, setMaxWorkers] = useState('1');
+
+  const handleStartEvaluation = useCallback(async () => {
+    setIsStarting(true);
+    setStartError(null);
+
+    try {
+      // Access the electron API to start the evaluation
+      const result = await window.electronAPI.swebench.startEvaluation({
+        dataset,
+        maxInstances: maxInstances ? parseInt(maxInstances, 10) : undefined,
+        maxWorkers: maxWorkers ? parseInt(maxWorkers, 10) : undefined
+      });
+
+      if (!result.success) {
+        setStartError(result.error || 'Failed to start evaluation');
+      } else {
+        // Refresh the runs to show the new evaluation
+        loadEvaluationRuns();
+      }
+    } catch (error) {
+      setStartError(error instanceof Error ? error.message : 'An unexpected error occurred');
+    } finally {
+      setIsStarting(false);
+    }
+  }, [dataset, maxInstances, maxWorkers]);
+
   return (
     <div className="flex h-full flex-col items-center justify-center text-center p-6">
       <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted mb-4">
@@ -343,14 +382,114 @@ function EmptyState() {
         No Evaluation Data
       </h3>
       <p className="max-w-md text-sm text-muted-foreground mb-6">
-        Start a SWE-bench evaluation using the CLI to see progress and results here.
+        Start a SWE-bench evaluation to benchmark autoclaude's coding capabilities against real-world GitHub issues.
       </p>
-      <div className="rounded-lg bg-muted p-4 text-left">
-        <p className="text-xs text-muted-foreground mb-2">Run evaluation with:</p>
-        <code className="text-xs text-foreground font-mono">
-          python -m cli.swebench_eval --dataset princeton-nlp/SWE-bench_Lite --max-instances 10
-        </code>
-      </div>
+
+      {startError && (
+        <div className="mb-4 p-3 rounded-lg bg-destructive/10 text-destructive text-sm max-w-md">
+          {startError}
+        </div>
+      )}
+
+      {!showConfig ? (
+        <div className="flex flex-col gap-3 items-center">
+          <Button onClick={() => setShowConfig(true)} size="lg">
+            <Play className="mr-2 h-4 w-4" />
+            Start Evaluation
+          </Button>
+          <Button variant="ghost" size="sm" onClick={() => setShowConfig(true)}>
+            <Settings2 className="mr-2 h-4 w-4" />
+            Configure Options
+          </Button>
+        </div>
+      ) : (
+        <Card className="w-full max-w-md text-left">
+          <CardHeader className="pb-3">
+            <CardTitle className="text-base flex items-center gap-2">
+              <Settings2 className="h-4 w-4" />
+              Evaluation Configuration
+            </CardTitle>
+            <CardDescription>
+              Configure and start a new SWE-bench evaluation
+            </CardDescription>
+          </CardHeader>
+          <CardContent className="space-y-4">
+            <div className="space-y-2">
+              <Label htmlFor="dataset">Dataset</Label>
+              <select
+                id="dataset"
+                value={dataset}
+                onChange={(e) => setDataset(e.target.value)}
+                className="w-full h-10 rounded-md border border-input bg-background px-3 py-2 text-sm ring-offset-background focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2"
+              >
+                <option value="princeton-nlp/SWE-bench_Lite">SWE-bench Lite (300 instances)</option>
+                <option value="princeton-nlp/SWE-bench_Verified">SWE-bench Verified</option>
+                <option value="princeton-nlp/SWE-bench">SWE-bench Full (2,294 instances)</option>
+              </select>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="maxInstances">Max Instances</Label>
+              <Input
+                id="maxInstances"
+                type="number"
+                min="1"
+                max="2294"
+                value={maxInstances}
+                onChange={(e) => setMaxInstances(e.target.value)}
+                placeholder="Number of instances to evaluate"
+              />
+              <p className="text-xs text-muted-foreground">
+                Leave empty to run all instances in the dataset
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="maxWorkers">Parallel Workers</Label>
+              <Input
+                id="maxWorkers"
+                type="number"
+                min="1"
+                max="8"
+                value={maxWorkers}
+                onChange={(e) => setMaxWorkers(e.target.value)}
+                placeholder="Number of parallel workers"
+              />
+              <p className="text-xs text-muted-foreground">
+                Number of evaluations to run in parallel
+              </p>
+            </div>
+
+            <div className="flex gap-2 pt-2">
+              <Button
+                variant="outline"
+                onClick={() => setShowConfig(false)}
+                disabled={isStarting}
+                className="flex-1"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleStartEvaluation}
+                disabled={isStarting}
+                className="flex-1"
+              >
+                {isStarting ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    Starting...
+                  </>
+                ) : (
+                  <>
+                    <Play className="mr-2 h-4 w-4" />
+                    Start Evaluation
+                  </>
+                )}
+              </Button>
+            </div>
+          </CardContent>
+        </Card>
+      )}
     </div>
   );
 }

@@ -604,6 +604,9 @@ export interface ElectronAPI {
 
   // GitHub API (nested for organized access)
   github: import('../../preload/api/modules/github-api').GitHubAPI;
+
+  // SWE-bench API (nested for organized access)
+  swebench: import('../../preload/api/modules/swebench-api').SWEBenchAPI;
 }
 
 declare global {
