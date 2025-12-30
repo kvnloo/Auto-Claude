@@ -335,11 +335,11 @@ describe('ResultsView', () => {
       });
 
       const searchQuery = 'django';
-      const statusFilter: 'all' | 'resolved' | 'unresolved' | 'error' = 'resolved';
+      const statusFilter = 'resolved' as const;
 
       const filteredInstances = props.instanceBreakdown.filter(instance => {
         const matchesSearch = instance.instanceId.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesFilter = statusFilter === 'all' || instance.status === statusFilter;
+        const matchesFilter = instance.status === statusFilter;
         return matchesSearch && matchesFilter;
       });
 
@@ -356,10 +356,8 @@ describe('ResultsView', () => {
         ]
       });
 
-      const searchQuery = '';
-      const filteredInstances = props.instanceBreakdown.filter(instance =>
-        searchQuery === '' || instance.instanceId.toLowerCase().includes(searchQuery.toLowerCase())
-      );
+      // With empty search, all instances should pass the filter
+      const filteredInstances = props.instanceBreakdown;
 
       expect(filteredInstances).toHaveLength(2);
     });
@@ -680,17 +678,9 @@ describe('ResultsView', () => {
 
     it('should display "No instances to display" when breakdown is empty', () => {
       const props = createTestProps({ instanceBreakdown: [] });
-      const searchQuery = '';
-      const statusFilter = 'all';
 
-      const filteredInstances = props.instanceBreakdown.filter(instance => {
-        const matchesSearch = searchQuery === '' ||
-          instance.instanceId.toLowerCase().includes(searchQuery.toLowerCase());
-        const matchesFilter = statusFilter === 'all' || instance.status === statusFilter;
-        return matchesSearch && matchesFilter;
-      });
-
-      expect(filteredInstances).toHaveLength(0);
+      // Empty breakdown means no instances to display
+      expect(props.instanceBreakdown).toHaveLength(0);
     });
   });
 

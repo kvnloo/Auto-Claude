@@ -604,6 +604,24 @@ export interface ElectronAPI {
 
   // GitHub API (nested for organized access)
   github: import('../../preload/api/modules/github-api').GitHubAPI;
+
+  // Benchmark operations (SWE-bench evaluation)
+  checkBenchmarkInfrastructure: () => Promise<IPCResult<{
+    dockerAvailable: boolean;
+    diskSpaceOk: boolean;
+    diskSpaceGb: number;
+    cpuCores: number;
+    recommendedMaxWorkers: number;
+    isArm: boolean;
+    armWarning: string | null;
+  }>>;
+  startBenchmark: (projectId: string, config: {
+    variant: 'lite' | 'verified' | 'full' | 'multimodal' | 'multilingual';
+    maxWorkers: number;
+    instanceCount: number;
+    cacheLevel: 'none' | 'base' | 'env' | 'instance';
+  }) => Promise<IPCResult<{ runId: string }>>;
+  cancelBenchmark: () => Promise<IPCResult>;
 }
 
 declare global {

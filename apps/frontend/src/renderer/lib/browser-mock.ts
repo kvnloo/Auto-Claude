@@ -110,6 +110,25 @@ const browserMockAPI: ElectronAPI = {
   // Infrastructure & Docker Operations
   ...infrastructureMock,
 
+  // Benchmark Operations (SWE-bench)
+  checkBenchmarkInfrastructure: async () => ({
+    success: true,
+    data: {
+      dockerAvailable: true,
+      diskSpaceOk: true,
+      diskSpaceGb: 50,
+      cpuCores: 8,
+      recommendedMaxWorkers: 6,
+      isArm: false,
+      armWarning: null
+    }
+  }),
+  startBenchmark: async () => ({
+    success: true,
+    data: { runId: `mock-benchmark-${Date.now()}` }
+  }),
+  cancelBenchmark: async () => ({ success: true }),
+
   // GitHub API
   github: {
     getGitHubRepositories: async () => ({ success: true, data: [] }),

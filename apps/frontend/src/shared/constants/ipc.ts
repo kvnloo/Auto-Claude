@@ -363,5 +363,15 @@ export const IPC_CHANNELS = {
   RELEASE_GET_VERSIONS: 'release:getVersions',
 
   // Release events (main -> renderer)
-  RELEASE_PROGRESS: 'release:progress'
+  RELEASE_PROGRESS: 'release:progress',
+
+  // Benchmark operations (SWE-bench evaluation)
+  BENCHMARK_CHECK_INFRASTRUCTURE: 'benchmark:checkInfrastructure',
+  BENCHMARK_START: 'benchmark:start',
+  BENCHMARK_CANCEL: 'benchmark:cancel',
+
+  // Benchmark events (main -> renderer)
+  BENCHMARK_PROGRESS: 'benchmark:progress',
+  BENCHMARK_COMPLETE: 'benchmark:complete',
+  BENCHMARK_ERROR: 'benchmark:error'
 } as const;
