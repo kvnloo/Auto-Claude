@@ -8,8 +8,43 @@ interface TimeEstimateProps {
   estimatedDurationMinutes?: number;
   confidenceMin?: number;
   confidenceMax?: number;
+  accuracyPercentage?: number;  // Historical estimate accuracy (0-100)
   className?: string;
   variant?: 'default' | 'compact';
+}
+
+/**
+ * Get emoji indicator for accuracy level.
+ * Matches backend AccuracyReporter logic.
+ */
+function getAccuracyEmoji(accuracy: number): string {
+  if (accuracy >= 90) return '🎯'; // Bullseye - excellent
+  if (accuracy >= 80) return '✨'; // Sparkles - very good
+  if (accuracy >= 70) return '👍'; // Thumbs up - good
+  if (accuracy >= 60) return '📊'; // Chart - fair
+  return '📈'; // Trending up - needs improvement
+}
+
+/**
+ * Get reliability level text for accuracy.
+ * Matches backend AccuracyReporter logic.
+ */
+function getReliabilityLevel(accuracy: number): string {
+  if (accuracy >= 90) return 'excellent';
+  if (accuracy >= 80) return 'very good';
+  if (accuracy >= 70) return 'good';
+  if (accuracy >= 60) return 'fair';
+  return 'needs improvement';
+}
+
+/**
+ * Get badge variant based on accuracy level.
+ */
+function getAccuracyBadgeVariant(accuracy: number): 'success' | 'info' | 'warning' | 'muted' {
+  if (accuracy >= 80) return 'success';
+  if (accuracy >= 70) return 'info';
+  if (accuracy >= 60) return 'warning';
+  return 'muted';
 }
 
 /**
@@ -20,6 +55,7 @@ export function TimeEstimate({
   estimatedDurationMinutes,
   confidenceMin,
   confidenceMax,
+  accuracyPercentage,
   className,
   variant = 'default'
 }: TimeEstimateProps) {
@@ -64,40 +100,84 @@ export function TimeEstimate({
 
   if (variant === 'compact') {
     return (
-      <Tooltip>
-        <TooltipTrigger asChild>
-          <Badge
-            variant="secondary"
-            className={cn('text-xs cursor-help', className)}
-          >
-            <Clock className="h-3 w-3 mr-1" />
-            {displayText}
-          </Badge>
-        </TooltipTrigger>
-        <TooltipContent side="top">
-          <p className="text-xs">{tooltipText}</p>
-        </TooltipContent>
-      </Tooltip>
+      <div className="inline-flex items-center gap-2">
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge
+              variant="secondary"
+              className={cn('text-xs cursor-help', className)}
+            >
+              <Clock className="h-3 w-3 mr-1" />
+              {displayText}
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p className="text-xs">{tooltipText}</p>
+          </TooltipContent>
+        </Tooltip>
+
+        {/* Accuracy indicator */}
+        {accuracyPercentage !== undefined && (
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Badge
+                variant={getAccuracyBadgeVariant(accuracyPercentage)}
+                className="text-xs cursor-help"
+              >
+                <span className="mr-1">{getAccuracyEmoji(accuracyPercentage)}</span>
+                {Math.round(accuracyPercentage)}%
+              </Badge>
+            </TooltipTrigger>
+            <TooltipContent side="top">
+              <p className="text-xs">
+                Historical accuracy: {getReliabilityLevel(accuracyPercentage)}
+              </p>
+            </TooltipContent>
+          </Tooltip>
+        )}
+      </div>
     );
   }
 
   // Default variant: more prominent display
   return (
-    <Tooltip>
-      <TooltipTrigger asChild>
-        <div
-          className={cn(
-            'inline-flex items-center gap-2 text-sm text-muted-foreground cursor-help',
-            className
-          )}
-        >
-          <Clock className="h-4 w-4 text-info" />
-          <span>{displayText}</span>
-        </div>
-      </TooltipTrigger>
-      <TooltipContent side="top">
-        <p className="text-xs">{tooltipText}</p>
-      </TooltipContent>
-    </Tooltip>
+    <div className="inline-flex items-center gap-3">
+      <Tooltip>
+        <TooltipTrigger asChild>
+          <div
+            className={cn(
+              'inline-flex items-center gap-2 text-sm text-muted-foreground cursor-help',
+              className
+            )}
+          >
+            <Clock className="h-4 w-4 text-info" />
+            <span>{displayText}</span>
+          </div>
+        </TooltipTrigger>
+        <TooltipContent side="top">
+          <p className="text-xs">{tooltipText}</p>
+        </TooltipContent>
+      </Tooltip>
+
+      {/* Accuracy indicator */}
+      {accuracyPercentage !== undefined && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <Badge
+              variant={getAccuracyBadgeVariant(accuracyPercentage)}
+              className="text-xs cursor-help"
+            >
+              <span className="mr-1">{getAccuracyEmoji(accuracyPercentage)}</span>
+              {Math.round(accuracyPercentage)}%
+            </Badge>
+          </TooltipTrigger>
+          <TooltipContent side="top">
+            <p className="text-xs">
+              Historical accuracy: {getReliabilityLevel(accuracyPercentage)}
+            </p>
+          </TooltipContent>
+        </Tooltip>
+      )}
+    </div>
   );
 }
