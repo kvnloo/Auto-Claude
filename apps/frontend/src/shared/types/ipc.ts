@@ -787,6 +787,47 @@ export interface ElectronAPI {
   // MCP Server health check operations
   checkMcpHealth: (server: CustomMcpServer) => Promise<IPCResult<McpHealthCheckResult>>;
   testMcpConnection: (server: CustomMcpServer) => Promise<IPCResult<McpTestConnectionResult>>;
+
+  // Token Usage & Cost Dashboard operations
+  /**
+   * Get aggregated usage summary with efficiency scores and trends
+   */
+  getUsageSummary: (
+    projectId: string,
+    startDate?: string,
+    endDate?: string
+  ) => Promise<IPCResult<import('../../preload/api/modules/usage-api').UsageSummary>>;
+
+  /**
+   * Get usage data for a specific date range with daily/weekly/monthly breakdowns
+   */
+  getUsageByDateRange: (
+    projectId: string,
+    startDate: string,
+    endDate: string
+  ) => Promise<IPCResult<import('../../preload/api/modules/usage-api').DateRangeUsage>>;
+
+  /**
+   * Get usage breakdown by agent type (planner, coder, qa)
+   */
+  getUsageByAgent: (
+    projectId: string,
+    startDate?: string,
+    endDate?: string
+  ) => Promise<IPCResult<import('../../preload/api/modules/usage-api').AgentBreakdown>>;
+
+  /**
+   * Get usage breakdown by spec
+   */
+  getUsageBySpec: (projectId: string) => Promise<IPCResult<import('../../preload/api/modules/usage-api').SpecUsage>>;
+
+  /**
+   * Export usage data to CSV format
+   */
+  exportUsageReport: (
+    projectId: string,
+    options?: import('../../preload/api/modules/usage-api').UsageExportOptions
+  ) => Promise<IPCResult<import('../../preload/api/modules/usage-api').ExportResult>>;
 }
 
 declare global {
