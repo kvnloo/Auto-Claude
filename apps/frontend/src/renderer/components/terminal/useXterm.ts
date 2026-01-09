@@ -41,6 +41,10 @@ export function useXterm({ terminalId, onCommandEnter, onResize, onDimensionsRea
   const dimensionsReadyCalledRef = useRef<boolean>(false);
   const [dimensions, setDimensions] = useState<{ cols: number; rows: number }>({ cols: 80, rows: 24 });
 
+  // RAF-based debouncing for terminal writes
+  const writeBufferRef = useRef<string>('');
+  const rafIdRef = useRef<number | null>(null);
+
   // Initialize xterm.js UI
   useEffect(() => {
     if (!terminalRef.current || xtermRef.current) return;
@@ -319,16 +323,53 @@ export function useXterm({ terminalId, onCommandEnter, onResize, onDimensionsRea
     }
   }, []);
 
-  const write = useCallback((data: string) => {
-    if (xtermRef.current) {
-      xtermRef.current.write(data);
+  /**
+   * Flush buffered terminal writes to xterm.
+   * This is called once per animation frame to batch multiple writes.
+   */
+  const flushWriteBuffer = useCallback(() => {
+    rafIdRef.current = null;
+    if (writeBufferRef.current.length > 0 && xtermRef.current) {
+      xtermRef.current.write(writeBufferRef.current);
+      writeBufferRef.current = '';
     }
   }, []);
 
-  const writeln = useCallback((data: string) => {
-    if (xtermRef.current) {
-      xtermRef.current.writeln(data);
+  /**
+   * Write data to the terminal with RAF-based debouncing.
+   * Multiple rapid calls are batched into a single xterm.write() per animation frame.
+   */
+  const write = useCallback((data: string) => {
+    if (!xtermRef.current) return;
+
+    // Accumulate data in buffer
+    writeBufferRef.current += data;
+
+    // Schedule flush if not already scheduled
+    if (rafIdRef.current === null) {
+      rafIdRef.current = requestAnimationFrame(flushWriteBuffer);
     }
+  }, [flushWriteBuffer]);
+
+  /**
+   * Write a line to the terminal with immediate flush.
+   * This ensures error messages and important output are displayed immediately.
+   */
+  const writeln = useCallback((data: string) => {
+    if (!xtermRef.current) return;
+
+    // Flush any pending buffered data first
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    if (writeBufferRef.current.length > 0) {
+      xtermRef.current.write(writeBufferRef.current);
+      writeBufferRef.current = '';
+    }
+
+    // Then write the line immediately
+    xtermRef.current.writeln(data);
   }, []);
 
   const focus = useCallback(() => {
@@ -358,6 +399,16 @@ export function useXterm({ terminalId, onCommandEnter, onResize, onDimensionsRea
     // Guard against double dispose (can happen in React StrictMode or rapid unmount)
     if (isDisposedRef.current) return;
     isDisposedRef.current = true;
+
+    // Cancel any pending RAF and flush buffered data to prevent data loss
+    if (rafIdRef.current !== null) {
+      cancelAnimationFrame(rafIdRef.current);
+      rafIdRef.current = null;
+    }
+    if (writeBufferRef.current.length > 0 && xtermRef.current) {
+      xtermRef.current.write(writeBufferRef.current);
+      writeBufferRef.current = '';
+    }
 
     // Serialize buffer before disposing to preserve ANSI formatting
     serializeBuffer();
