@@ -307,6 +307,55 @@ class ProgressCalculator:
         """
         self._cached_snapshot = None
 
+    def on_subtask_complete(self, subtask: Subtask) -> None:
+        """
+        Hook called when a subtask completes to trigger real-time updates.
+
+        Invalidates the cached snapshot and optionally updates plan time fields
+        to reflect the latest progress. This enables real-time remaining time
+        calculation as work progresses.
+
+        Args:
+            subtask: The subtask that was just completed
+
+        Usage:
+            When a subtask completes, call this method to ensure the next
+            call to calculate_progress() returns fresh data.
+        """
+        # Invalidate cache to force recalculation with updated data
+        self.invalidate_cache()
+
+        # Optionally update plan time fields for persistence
+        # This ensures the plan JSON reflects current progress
+        self.update_plan_time_fields()
+
+    def get_remaining_time_formatted(self) -> str:
+        """
+        Get remaining time in human-readable format.
+
+        Formats the remaining time estimate as a readable string
+        (e.g., "2 hours 30 minutes" or "45 minutes").
+
+        Returns:
+            Human-readable remaining time string
+        """
+        remaining = self.get_remaining_time()
+
+        if remaining <= 0:
+            return "Complete"
+
+        # Convert to hours and minutes
+        hours = int(remaining // 60)
+        minutes = int(remaining % 60)
+
+        if hours > 0:
+            if minutes > 0:
+                return f"{hours} hour{'s' if hours != 1 else ''} {minutes} minute{'s' if minutes != 1 else ''}"
+            else:
+                return f"{hours} hour{'s' if hours != 1 else ''}"
+        else:
+            return f"{minutes} minute{'s' if minutes != 1 else ''}"
+
     def get_velocity_summary(self) -> dict:
         """
         Get a summary of current velocity and time accuracy.
