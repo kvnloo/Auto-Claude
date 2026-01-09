@@ -791,3 +791,437 @@ describe('useXterm keyboard handlers', () => {
     });
   });
 });
+
+describe('useXterm debounced write functionality', () => {
+  let rafCallbacks: Array<FrameRequestCallback>;
+  let rafId: number;
+  let mockWrite: Mock;
+  let mockWriteln: Mock;
+
+  beforeEach(() => {
+    vi.clearAllMocks();
+
+    // Track RAF callbacks so we can manually execute them
+    rafCallbacks = [];
+    rafId = 0;
+
+    // Mock requestAnimationFrame to capture callbacks instead of executing immediately
+    global.requestAnimationFrame = vi.fn((cb: FrameRequestCallback) => {
+      rafId++;
+      rafCallbacks.push(cb);
+      return rafId;
+    });
+
+    // Mock cancelAnimationFrame
+    global.cancelAnimationFrame = vi.fn((id: number) => {
+      // Find and remove the callback from the queue
+      const index = id - 1;
+      if (index >= 0 && index < rafCallbacks.length) {
+        rafCallbacks.splice(index, 1);
+      }
+    });
+
+    // Ensure window and navigator exist
+    if (typeof window === 'undefined') {
+      (global as { window: unknown }).window = {};
+    }
+    if (typeof navigator === 'undefined') {
+      (global as { navigator: unknown }).navigator = {};
+    }
+
+    // Mock window.electronAPI
+    (window as unknown as { electronAPI: unknown }).electronAPI = {
+      sendTerminalInput: vi.fn()
+    };
+
+    // Mock ResizeObserver
+    global.ResizeObserver = vi.fn().mockImplementation(function() {
+      return {
+        observe: vi.fn(),
+        unobserve: vi.fn(),
+        disconnect: vi.fn()
+      };
+    });
+
+    // Create mock write/writeln functions
+    mockWrite = vi.fn();
+    mockWriteln = vi.fn();
+  });
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /**
+   * Helper to setup xterm mocks for debouncing tests
+   */
+  async function setupDebounceTest() {
+    let hookResult: ReturnType<typeof useXterm> | null = null;
+
+    // Override XTerm mock
+    (XTerm as unknown as Mock).mockImplementation(function() {
+      return {
+        open: vi.fn(),
+        loadAddon: vi.fn(),
+        attachCustomKeyEventHandler: vi.fn(),
+        hasSelection: vi.fn(() => false),
+        getSelection: vi.fn(() => ''),
+        paste: vi.fn(),
+        input: vi.fn(),
+        onData: vi.fn((cb: (data: string) => void) => ({ dispose: vi.fn() })),
+        onResize: vi.fn((cb: (size: { cols: number; rows: number }) => void) => ({ dispose: vi.fn() })),
+        dispose: vi.fn(),
+        focus: vi.fn(),
+        write: mockWrite,
+        writeln: mockWriteln,
+        cols: 80,
+        rows: 24
+      };
+    });
+
+    // Setup addon mocks
+    const { FitAddon } = await import('@xterm/addon-fit');
+    (FitAddon as unknown as Mock).mockImplementation(function() {
+      return { fit: vi.fn() };
+    });
+
+    const { WebLinksAddon } = await import('@xterm/addon-web-links');
+    (WebLinksAddon as unknown as Mock).mockImplementation(function() {
+      return {};
+    });
+
+    const { SerializeAddon } = await import('@xterm/addon-serialize');
+    (SerializeAddon as unknown as Mock).mockImplementation(function() {
+      return {
+        serialize: vi.fn(() => ''),
+        dispose: vi.fn()
+      };
+    });
+
+    // Create and render test wrapper component
+    const TestWrapper = () => {
+      hookResult = useXterm({ terminalId: 'test-terminal' });
+      return React.createElement('div', { ref: hookResult.terminalRef });
+    };
+
+    const { unmount } = render(React.createElement(TestWrapper));
+
+    // Wait for xterm initialization
+    await act(async () => {
+      await new Promise(resolve => setTimeout(resolve, 10));
+    });
+
+    if (!hookResult) {
+      throw new Error('Hook result not captured');
+    }
+
+    return {
+      result: { current: hookResult },
+      unmount
+    };
+  }
+
+  /**
+   * Helper to flush all pending RAF callbacks
+   */
+  function flushRAF() {
+    const callbacks = [...rafCallbacks];
+    rafCallbacks = [];
+    callbacks.forEach(cb => cb(performance.now()));
+  }
+
+  it('should batch multiple rapid write() calls into a single xterm.write()', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      // Make multiple rapid write calls
+      result.current.write('chunk1');
+      result.current.write('chunk2');
+      result.current.write('chunk3');
+
+      // At this point, no actual write should have happened yet
+      expect(mockWrite).not.toHaveBeenCalled();
+
+      // Flush the RAF queue
+      flushRAF();
+    });
+
+    // Should have batched all writes into a single call
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('chunk1chunk2chunk3');
+  });
+
+  it('should preserve data chunks in the correct order', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      // Write chunks in specific order
+      result.current.write('first');
+      result.current.write('second');
+      result.current.write('third');
+      result.current.write('fourth');
+
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('firstsecondthirdfourth');
+  });
+
+  it('should schedule only one RAF callback for multiple writes', async () => {
+    const { result } = await setupDebounceTest();
+
+    // Clear RAF calls from setup
+    vi.mocked(global.requestAnimationFrame).mockClear();
+
+    await act(async () => {
+      result.current.write('a');
+      result.current.write('b');
+      result.current.write('c');
+      result.current.write('d');
+      result.current.write('e');
+    });
+
+    // Should have scheduled only one RAF callback despite 5 writes
+    expect(global.requestAnimationFrame).toHaveBeenCalledTimes(1);
+  });
+
+  it('should flush buffer on component unmount', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      // Write some data
+      result.current.write('pending data');
+
+      // Dispose without flushing RAF
+      result.current.dispose();
+    });
+
+    // Should have written the pending data on dispose
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('pending data');
+  });
+
+  it('should cancel pending RAF on unmount', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      result.current.write('data');
+
+      // Dispose should cancel the RAF
+      result.current.dispose();
+    });
+
+    // cancelAnimationFrame should have been called
+    expect(global.cancelAnimationFrame).toHaveBeenCalled();
+  });
+
+  it('should handle writeln() with immediate write', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      // Buffer some data first
+      result.current.write('buffered');
+
+      // writeln should flush buffer and write immediately
+      result.current.writeln('immediate line');
+    });
+
+    // Should have flushed buffer first, then written the line
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('buffered');
+    expect(mockWriteln).toHaveBeenCalledTimes(1);
+    expect(mockWriteln).toHaveBeenCalledWith('immediate line');
+
+    // RAF should have been canceled
+    expect(global.cancelAnimationFrame).toHaveBeenCalled();
+  });
+
+  it('should handle writeln() when buffer is empty', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      // writeln with no buffered data
+      result.current.writeln('only line');
+    });
+
+    // Should write the line immediately without touching write()
+    expect(mockWrite).not.toHaveBeenCalled();
+    expect(mockWriteln).toHaveBeenCalledTimes(1);
+    expect(mockWriteln).toHaveBeenCalledWith('only line');
+  });
+
+  it('should handle empty write calls', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      result.current.write('');
+      result.current.write('actual data');
+      result.current.write('');
+
+      flushRAF();
+    });
+
+    // Empty strings should still be accumulated
+    expect(mockWrite).toHaveBeenCalledWith('actual data');
+  });
+
+  it('should handle very large writes', async () => {
+    const { result } = await setupDebounceTest();
+
+    // Create a large chunk of data (simulate npm install output)
+    const largeChunk = 'x'.repeat(10000);
+
+    await act(async () => {
+      result.current.write(largeChunk);
+      result.current.write('more');
+
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledWith(largeChunk + 'more');
+  });
+
+  it('should handle multiple RAF cycles', async () => {
+    const { result } = await setupDebounceTest();
+
+    // First batch
+    await act(async () => {
+      result.current.write('batch1a');
+      result.current.write('batch1b');
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('batch1a' + 'batch1b');
+
+    mockWrite.mockClear();
+
+    // Second batch
+    await act(async () => {
+      result.current.write('batch2a');
+      result.current.write('batch2b');
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('batch2a' + 'batch2b');
+  });
+
+  it('should not write after dispose', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      result.current.write('before dispose');
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    mockWrite.mockClear();
+
+    await act(async () => {
+      result.current.dispose();
+
+      // Attempt to write after dispose (should be no-op)
+      result.current.write('after dispose');
+      flushRAF();
+    });
+
+    // No additional writes should occur
+    expect(mockWrite).not.toHaveBeenCalled();
+  });
+
+  it('should handle rapid write-flush-write cycles', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      // Write and flush
+      result.current.write('cycle1');
+      flushRAF();
+
+      // Immediately write again
+      result.current.write('cycle2');
+      flushRAF();
+
+      // And again
+      result.current.write('cycle3');
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledTimes(3);
+    expect(mockWrite).toHaveBeenNthCalledWith(1, 'cycle1');
+    expect(mockWrite).toHaveBeenNthCalledWith(2, 'cycle2');
+    expect(mockWrite).toHaveBeenNthCalledWith(3, 'cycle3');
+  });
+
+  it('should handle interleaved write() and writeln() calls', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      result.current.write('buffered1');
+      result.current.write('buffered2');
+      result.current.writeln('line1');
+
+      // Write more after writeln
+      result.current.write('buffered3');
+      result.current.writeln('line2');
+    });
+
+    // First batch should be flushed before first writeln
+    expect(mockWrite).toHaveBeenNthCalledWith(1, 'buffered1buffered2');
+    expect(mockWriteln).toHaveBeenNthCalledWith(1, 'line1');
+
+    // Second batch should be flushed before second writeln
+    expect(mockWrite).toHaveBeenNthCalledWith(2, 'buffered3');
+    expect(mockWriteln).toHaveBeenNthCalledWith(2, 'line2');
+  });
+
+  it('should clear buffer after flushing', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      result.current.write('first batch');
+      flushRAF();
+    });
+
+    mockWrite.mockClear();
+
+    await act(async () => {
+      result.current.write('second batch');
+      flushRAF();
+    });
+
+    // Second call should only have second batch data, not accumulated
+    expect(mockWrite).toHaveBeenCalledTimes(1);
+    expect(mockWrite).toHaveBeenCalledWith('second batch');
+  });
+
+  it('should handle writes with special characters and ANSI codes', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      result.current.write('\x1b[31m'); // Red color ANSI code
+      result.current.write('Error: ');
+      result.current.write('Something went wrong\n');
+      result.current.write('\x1b[0m'); // Reset ANSI code
+
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledWith('\x1b[31mError: Something went wrong\n\x1b[0m');
+  });
+
+  it('should handle unicode and emoji in writes', async () => {
+    const { result } = await setupDebounceTest();
+
+    await act(async () => {
+      result.current.write('✓ Success ');
+      result.current.write('🚀 Deployed ');
+      result.current.write('你好');
+
+      flushRAF();
+    });
+
+    expect(mockWrite).toHaveBeenCalledWith('✓ Success 🚀 Deployed 你好');
+  });
+});
