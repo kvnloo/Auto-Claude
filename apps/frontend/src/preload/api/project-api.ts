@@ -11,8 +11,24 @@ import type {
   InfrastructureStatus,
   GraphitiValidationResult,
   GraphitiConnectionTestResult,
-  GitStatus
+  GitStatus,
+  GitCommit,
+  GitTagInfo
 } from '../../shared/types';
+
+/**
+ * Options for fetching Git history for Timeline view
+ */
+export interface TimelineGitHistoryOptions {
+  /** Maximum number of commits to retrieve (default: 500) */
+  limit?: number;
+  /** Include merge commits (default: true) */
+  includeMergeCommits?: boolean;
+  /** Only return commits since this date (ISO format) */
+  since?: string;
+  /** Only return commits until this date (ISO format) */
+  until?: string;
+}
 
 // Tab state interface (persisted in main process)
 export interface TabState {
@@ -97,6 +113,13 @@ export interface ProjectAPI {
   detectMainBranch: (projectPath: string) => Promise<IPCResult<string | null>>;
   checkGitStatus: (projectPath: string) => Promise<IPCResult<GitStatus>>;
   initializeGit: (projectPath: string) => Promise<IPCResult<InitializationResult>>;
+
+  // Git History Operations (for Timeline view)
+  getGitHistory: (
+    projectPath: string,
+    options?: TimelineGitHistoryOptions
+  ) => Promise<IPCResult<GitCommit[]>>;
+  getGitTags: (projectPath: string) => Promise<IPCResult<GitTagInfo[]>>;
 
   // Ollama Model Detection
   checkOllamaStatus: (baseUrl?: string) => Promise<IPCResult<{
@@ -276,6 +299,16 @@ export const createProjectAPI = (): ProjectAPI => ({
 
   initializeGit: (projectPath: string): Promise<IPCResult<InitializationResult>> =>
     ipcRenderer.invoke(IPC_CHANNELS.GIT_INITIALIZE, projectPath),
+
+  // Git History Operations (for Timeline view)
+  getGitHistory: (
+    projectPath: string,
+    options?: TimelineGitHistoryOptions
+  ): Promise<IPCResult<GitCommit[]>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.GIT_GET_HISTORY, projectPath, options),
+
+  getGitTags: (projectPath: string): Promise<IPCResult<GitTagInfo[]>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.GIT_GET_TAGS, projectPath),
 
   // Ollama Model Detection
   checkOllamaStatus: (baseUrl?: string) =>

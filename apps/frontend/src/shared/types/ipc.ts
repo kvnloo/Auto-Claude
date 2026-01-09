@@ -708,6 +708,18 @@ export interface ElectronAPI {
   checkGitStatus: (projectPath: string) => Promise<IPCResult<GitStatus>>;
   initializeGit: (projectPath: string) => Promise<IPCResult<InitializationResult>>;
 
+  // Git history operations (for Timeline view)
+  getGitHistory: (
+    projectPath: string,
+    options?: {
+      limit?: number;
+      includeMergeCommits?: boolean;
+      since?: string;
+      until?: string;
+    }
+  ) => Promise<IPCResult<GitCommit[]>>;
+  getGitTags: (projectPath: string) => Promise<IPCResult<GitTagInfo[]>>;
+
   // Ollama model detection operations
   checkOllamaStatus: (baseUrl?: string) => Promise<IPCResult<{
     running: boolean;

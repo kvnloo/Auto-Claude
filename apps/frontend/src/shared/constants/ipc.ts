@@ -471,6 +471,10 @@ export const IPC_CHANNELS = {
   GIT_CHECK_STATUS: 'git:checkStatus',
   GIT_INITIALIZE: 'git:initialize',
 
+  // Git history operations (for Timeline view)
+  GIT_GET_HISTORY: 'git:getHistory',
+  GIT_GET_TAGS: 'git:getTags',
+
   // App auto-update operations
   APP_UPDATE_CHECK: 'app-update:check',
   APP_UPDATE_DOWNLOAD: 'app-update:download',
