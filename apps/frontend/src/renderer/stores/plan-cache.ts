@@ -167,5 +167,64 @@ export function getCachedSubtasks(
   return subtasks;
 }
 
+/**
+ * Get cached validation result for a plan, or validate and cache if not cached or plan changed
+ *
+ * This function implements caching for plan validation:
+ * - Computes plan hash to detect content changes
+ * - Returns cached validation result if plan hasn't changed
+ * - Validates plan structure and caches result if plan changed
+ * - Avoids redundant validation checks (O(n*m) for phases*subtasks) on every call
+ *
+ * @param plan - The implementation plan to validate
+ * @param validator - Function that performs the actual validation
+ * @param cache - The PlanCache instance to use (defaults to singleton)
+ * @returns True if plan is valid, false otherwise
+ */
+export function getCachedValidation(
+  plan: ImplementationPlan,
+  validator: (plan: ImplementationPlan) => boolean,
+  cache: PlanCache = planCache
+): boolean {
+  // Compute current plan hash
+  const currentHash = getPlanHash(plan);
+
+  // Check if we have cached data for this plan
+  const cached = cache.get(plan);
+
+  // If cached and hash matches, return cached validation result (fast path)
+  if (cached && cached.hash === currentHash) {
+    return cached.isValid;
+  }
+
+  // Cache miss or plan changed - run validation (slow path)
+  const isValid = validator(plan);
+
+  // If we have cached data, update it with new validation result
+  if (cached) {
+    cache.set(plan, {
+      ...cached,
+      hash: currentHash,
+      isValid
+    });
+  } else {
+    // No cached data yet - create minimal cache entry with validation result
+    // Note: subtasks and statusFlags will be populated by getCachedSubtasks
+    cache.set(plan, {
+      hash: currentHash,
+      subtasks: [],
+      isValid,
+      statusFlags: {
+        allCompleted: false,
+        anyFailed: false,
+        anyInProgress: false,
+        anyCompleted: false
+      }
+    });
+  }
+
+  return isValid;
+}
+
 // Export singleton instance for use across the application
 export const planCache = new PlanCache();
