@@ -19,6 +19,7 @@ import {
   ChevronRight,
   ChevronDown,
   Clock,
+  Diamond,
   Flag,
   GitBranch,
   GitCommit as GitCommitIcon,
@@ -1055,9 +1056,19 @@ function CommitMarkers({
 }
 
 /**
- * TagMarkers - Renders tag/release markers as vertical dashed lines with labels
+ * MilestoneMarkers - Renders milestone markers for tags/releases on the timeline
+ *
+ * Milestone markers visually represent important points in the project's history,
+ * such as version releases and significant tags. Each marker consists of:
+ * - A vertical dashed line spanning the full height of the timeline grid
+ * - A diamond icon at the top indicating the milestone point
+ * - A label showing the version/tag name below the diamond
+ *
+ * Color coding:
+ * - Green: Release milestones (v1.0.0, etc.)
+ * - Amber: Regular tags (feature-complete, etc.)
  */
-interface TagMarkersProps {
+interface MilestoneMarkersProps {
   tags: TimelineGitTag[];
   milestones: TimelineMilestone[];
   zoomLevel: TimelineZoomLevel;
@@ -1068,7 +1079,7 @@ interface TagMarkersProps {
   highlightedTags?: string[];
 }
 
-function TagMarkers({
+function MilestoneMarkers({
   tags,
   milestones,
   zoomLevel,
@@ -1076,7 +1087,7 @@ function TagMarkers({
   visibleEndDate,
   totalWidth,
   highlightedTags
-}: TagMarkersProps) {
+}: MilestoneMarkersProps) {
   const { t } = useTranslation('tasks');
 
   // Create a Set for O(1) lookup of highlighted tag names
@@ -1085,7 +1096,7 @@ function TagMarkers({
     return new Set(highlightedTags);
   }, [highlightedTags]);
 
-  // Calculate position for a date
+  // Calculate position for a date on the timeline
   const getDatePosition = useCallback((date: Date): number => {
     const startMs = visibleStartDate.getTime();
     const endMs = visibleEndDate.getTime();
@@ -1113,7 +1124,7 @@ function TagMarkers({
       {visibleMilestones.map((milestone, idx) => {
         const isRelease = milestone.type === 'release';
         const milestoneDate = new Date(milestone.date);
-        // Check if this tag/milestone is highlighted (linked to hovered task)
+        // Check if this milestone is highlighted (linked to hovered task)
         const isHighlighted = highlightedSet?.has(milestone.tagName || milestone.name) ?? false;
 
         return (
@@ -1125,8 +1136,9 @@ function TagMarkers({
                   isHighlighted && "z-30"
                 )}
                 style={{ left: milestone.position }}
+                aria-label={t('timeline.milestoneMarker.ariaLabel', { name: milestone.name })}
               >
-                {/* Vertical dashed line */}
+                {/* Vertical dashed line - spans full height to indicate milestone point */}
                 <div
                   className={cn(
                     'absolute top-0 bottom-0 w-px border-l-2 border-dashed transition-all duration-200',
@@ -1139,21 +1151,29 @@ function TagMarkers({
                       : 'border-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.6)]')
                   )}
                 />
-                {/* Diamond marker at top */}
+                {/* Diamond icon at top - visual milestone indicator */}
                 <div
                   className={cn(
-                    'absolute -top-1 -left-1.5 w-3 h-3 rotate-45 transition-all duration-200 group-hover:scale-110',
-                    isRelease
-                      ? 'bg-green-500 border border-green-400'
-                      : 'bg-amber-500 border border-amber-400',
+                    'absolute -top-1 -left-2 flex items-center justify-center transition-all duration-200 group-hover:scale-110',
                     // Glow effect when highlighted
                     isHighlighted && 'scale-125',
                     isHighlighted && (isRelease
-                      ? 'ring-4 ring-green-400/50 shadow-[0_0_12px_rgba(34,197,94,0.8)]'
-                      : 'ring-4 ring-amber-400/50 shadow-[0_0_12px_rgba(245,158,11,0.8)]')
+                      ? 'drop-shadow-[0_0_8px_rgba(34,197,94,0.8)]'
+                      : 'drop-shadow-[0_0_8px_rgba(245,158,11,0.8)]')
                   )}
-                />
-                {/* Label */}
+                >
+                  <Diamond
+                    className={cn(
+                      'h-4 w-4 fill-current stroke-current',
+                      isRelease
+                        ? 'text-green-500 group-hover:text-green-400'
+                        : 'text-amber-500 group-hover:text-amber-400',
+                      isHighlighted && (isRelease ? 'text-green-400' : 'text-amber-400')
+                    )}
+                    strokeWidth={1.5}
+                  />
+                </div>
+                {/* Label showing version/tag name */}
                 <div
                   className={cn(
                     'absolute top-4 -left-8 w-16 text-center text-[10px] font-semibold truncate transition-all duration-200',
@@ -1173,15 +1193,17 @@ function TagMarkers({
             <TooltipContent side="right" className="max-w-xs">
               <div className="flex flex-col gap-1">
                 <div className="flex items-center gap-1.5">
-                  {isRelease ? (
-                    <Tag className="h-3.5 w-3.5 text-green-500" />
-                  ) : (
-                    <Tag className="h-3.5 w-3.5 text-amber-500" />
-                  )}
+                  <Diamond
+                    className={cn(
+                      'h-3.5 w-3.5',
+                      isRelease ? 'text-green-500' : 'text-amber-500'
+                    )}
+                    strokeWidth={1.5}
+                  />
                   <span className="font-semibold">{milestone.name}</span>
                 </div>
                 <span className="text-xs text-muted-foreground">
-                  {isRelease ? t('timeline.tags.release') : t('timeline.tags.tag')}
+                  {isRelease ? t('timeline.milestoneMarker.release') : t('timeline.milestoneMarker.tag')}
                 </span>
                 <span className="text-xs text-muted-foreground">
                   {milestoneDate.toLocaleDateString(undefined, {
@@ -1204,6 +1226,9 @@ function TagMarkers({
     </div>
   );
 }
+
+// Keep TagMarkers as an alias for backward compatibility
+const TagMarkers = MilestoneMarkers;
 
 /**
  * Timeline anchor data for jump navigation

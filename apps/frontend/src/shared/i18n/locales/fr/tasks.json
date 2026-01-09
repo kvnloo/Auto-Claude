@@ -201,6 +201,12 @@
       "release": "Version",
       "tag": "Tag"
     },
+    "milestoneMarker": {
+      "ariaLabel": "Jalon : {{name}}",
+      "release": "Jalon de version",
+      "tag": "Jalon de tag",
+      "description": "Les marqueurs de jalon indiquent les points importants comme les versions et les tags"
+    },
     "shallowHistory": {
       "title": "Historique incomplet",
       "description": "L'historique Git peut être incomplet. Cela peut se produire avec des clones superficiels ou lorsque la limite de commits est atteinte.",

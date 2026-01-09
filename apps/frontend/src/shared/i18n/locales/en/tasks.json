@@ -201,6 +201,12 @@
       "release": "Release",
       "tag": "Tag"
     },
+    "milestoneMarker": {
+      "ariaLabel": "Milestone: {{name}}",
+      "release": "Release Milestone",
+      "tag": "Tag Milestone",
+      "description": "Milestone markers show important points like releases and tags"
+    },
     "shallowHistory": {
       "title": "Incomplete History",
       "description": "Git history may be incomplete. This can happen with shallow clones or when the commit limit is reached.",
