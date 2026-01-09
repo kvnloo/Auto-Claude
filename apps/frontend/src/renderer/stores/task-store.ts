@@ -37,27 +37,6 @@ function findTaskIndex(tasks: Task[], taskId: string): number {
 }
 
 /**
- * Helper to update a single task efficiently.
- * Uses slice instead of map to avoid iterating all tasks.
- */
-function updateTaskAtIndex(tasks: Task[], index: number, updater: (task: Task) => Task): Task[] {
-  if (index < 0 || index >= tasks.length) return tasks;
-
-  const updatedTask = updater(tasks[index]);
-
-  // If the task reference didn't change, return original array
-  if (updatedTask === tasks[index]) {
-    return tasks;
-  }
-
-  // Create new array with only the changed task replaced
-  const newTasks = [...tasks];
-  newTasks[index] = updatedTask;
-
-  return newTasks;
-}
-
-/**
  * Validates implementation plan data structure before processing.
  * Returns true if valid, false if invalid/incomplete.
  */
