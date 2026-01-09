@@ -732,6 +732,51 @@ export function getTaskByGitHubIssue(issueNumber: number): Task | undefined {
 // ============================================
 
 /**
+ * Persist task schedule dates (scheduledStartDate and scheduledEndDate) to file
+ * Used by timeline drag-to-schedule and resize functionality
+ */
+export async function persistTaskSchedule(
+  taskId: string,
+  scheduledStartDate: string | null,
+  scheduledEndDate: string | null
+): Promise<boolean> {
+  const store = useTaskStore.getState();
+
+  try {
+    // Build metadata update with only defined values
+    const metadataUpdate: Partial<TaskMetadata> = {};
+
+    // Allow setting to undefined to clear the value, but only include if explicitly passed
+    if (scheduledStartDate !== undefined) {
+      metadataUpdate.scheduledStartDate = scheduledStartDate ?? undefined;
+    }
+    if (scheduledEndDate !== undefined) {
+      metadataUpdate.scheduledEndDate = scheduledEndDate ?? undefined;
+    }
+
+    // Call the IPC to persist changes to spec files
+    const result = await window.electronAPI.updateTask(taskId, {
+      metadata: metadataUpdate
+    });
+
+    if (result.success && result.data) {
+      // Update local state with the returned task data
+      store.updateTask(taskId, {
+        metadata: result.data.metadata,
+        updatedAt: new Date()
+      });
+      return true;
+    }
+
+    console.error('Failed to persist task schedule:', result.error);
+    return false;
+  } catch (error) {
+    console.error('Error persisting task schedule:', error);
+    return false;
+  }
+}
+
+/**
  * Check if a task is in human_review but has no completed subtasks.
  * This indicates the task crashed/exited before implementation completed
  * and should be resumed rather than reviewed.
