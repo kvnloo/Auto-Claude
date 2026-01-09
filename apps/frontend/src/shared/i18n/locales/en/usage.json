@@ -114,5 +114,34 @@
   "specs": {
     "title": "Usage by Spec",
     "tablePlaceholder": "Spec usage table will be displayed here"
+  },
+  "specTable": {
+    "title": "Spec Usage",
+    "noData": "No spec usage data available",
+    "specCount": "{{count}} specs",
+    "specCount_one": "{{count}} spec",
+    "columns": {
+      "specName": "Spec Name",
+      "sessions": "Sessions",
+      "inputTokens": "Input",
+      "outputTokens": "Output",
+      "cost": "Cost",
+      "outcome": "Success"
+    },
+    "search": {
+      "placeholder": "Search specs...",
+      "noResults": "No specs match your search"
+    },
+    "pagination": {
+      "showing": "{{start}}-{{end}} of {{total}}",
+      "previous": "Previous page",
+      "next": "Next page"
+    },
+    "outcome": {
+      "success": "Success",
+      "partial": "Partial",
+      "failed": "Failed",
+      "none": "No data"
+    }
   }
 }

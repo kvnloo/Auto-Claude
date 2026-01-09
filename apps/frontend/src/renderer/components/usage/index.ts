@@ -6,3 +6,4 @@
 
 export { UsageChart, type ChartViewMode } from './UsageChart';
 export { AgentBreakdown } from './AgentBreakdown';
+export { SpecUsageTable } from './SpecUsageTable';
