@@ -133,5 +133,22 @@
   },
   "subtasks": {
     "untitled": "Sous-tâche sans titre"
+  },
+  "timeline": {
+    "title": "Chronologie du Projet",
+    "today": "Aujourd'hui",
+    "genesis": "Genèse",
+    "firstRelease": "Première version",
+    "nextMilestone": "Prochain jalon",
+    "jumpTo": "Aller à",
+    "zoomLevels": {
+      "quarter": "Trimestre",
+      "month": "Mois",
+      "week": "Semaine",
+      "day": "Jour"
+    },
+    "noEstimate": "Sans estimation",
+    "dragToSchedule": "Glisser pour planifier",
+    "linkedArtifacts": "Artefacts liés"
   }
 }
