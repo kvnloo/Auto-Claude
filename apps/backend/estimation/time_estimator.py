@@ -7,7 +7,8 @@ and historical data. Updates estimates as work progresses.
 """
 
 from dataclasses import dataclass
-from typing import Optional
+from typing import Optional, List
+import statistics
 
 from spec.complexity import ComplexityAssessment, Complexity
 
@@ -75,11 +76,8 @@ class TimeEstimator:
         Returns:
             TimeEstimate with estimated minutes and confidence range
         """
-        # Get base estimate for complexity level
-        min_time, max_time = self.BASE_ESTIMATES.get(
-            assessment.complexity,
-            self.BASE_ESTIMATES[Complexity.STANDARD]
-        )
+        # Get base estimate for complexity level, refined by historical data
+        min_time, max_time = self._get_refined_base_estimate(assessment.complexity)
 
         # Calculate central estimate (midpoint of range)
         estimated_minutes = (min_time + max_time) / 2.0
@@ -87,9 +85,10 @@ class TimeEstimator:
         # Apply adjustments based on assessment characteristics
         estimated_minutes = self._apply_adjustments(estimated_minutes, assessment)
 
-        # Calculate confidence range (will be refined with historical data in future)
-        confidence_min = min_time
-        confidence_max = max_time
+        # Calculate confidence range using historical data
+        confidence_min, confidence_max = self._calculate_confidence_range(
+            estimated_minutes, assessment.complexity
+        )
 
         return TimeEstimate(
             estimated_minutes=estimated_minutes,
@@ -143,6 +142,76 @@ class TimeEstimator:
 
         return adjusted
 
+    def _get_refined_base_estimate(self, complexity: Complexity) -> tuple[float, float]:
+        """
+        Get base time estimate, refined by historical data if available.
+
+        Args:
+            complexity: Task complexity level
+
+        Returns:
+            Tuple of (min_time, max_time) in minutes
+        """
+        # Start with base estimate
+        base_min, base_max = self.BASE_ESTIMATES.get(
+            complexity,
+            self.BASE_ESTIMATES[Complexity.STANDARD]
+        )
+
+        # Refine with historical data if available
+        complexity_key = complexity.value
+        if "complexity" in self.historical_data and complexity_key in self.historical_data["complexity"]:
+            historical_times = self.historical_data["complexity"][complexity_key]
+            if len(historical_times) >= 3:  # Need minimum data points for reliability
+                # Use historical mean and standard deviation
+                mean_time = statistics.mean(historical_times)
+                stdev_time = statistics.stdev(historical_times)
+
+                # Refine estimate using weighted average (70% historical, 30% base)
+                refined_center = 0.7 * mean_time + 0.3 * ((base_min + base_max) / 2)
+
+                # Calculate range using historical variance
+                refined_min = max(refined_center - stdev_time, base_min * 0.5)
+                refined_max = refined_center + stdev_time
+
+                return (refined_min, refined_max)
+
+        return (base_min, base_max)
+
+    def _calculate_confidence_range(
+        self,
+        estimated_minutes: float,
+        complexity: Complexity
+    ) -> tuple[float, float]:
+        """
+        Calculate confidence range for estimate using historical accuracy data.
+
+        Args:
+            estimated_minutes: Central estimate in minutes
+            complexity: Task complexity level
+
+        Returns:
+            Tuple of (confidence_min, confidence_max) in minutes
+        """
+        # Default range is ±30% of estimate
+        default_range = estimated_minutes * 0.3
+
+        complexity_key = complexity.value
+        if "complexity" in self.historical_data and complexity_key in self.historical_data["complexity"]:
+            historical_times = self.historical_data["complexity"][complexity_key]
+            if len(historical_times) >= 3:
+                # Use historical standard deviation for more accurate range
+                stdev_time = statistics.stdev(historical_times)
+                confidence_min = max(estimated_minutes - stdev_time, estimated_minutes * 0.5)
+                confidence_max = estimated_minutes + stdev_time
+                return (confidence_min, confidence_max)
+
+        # Fallback to default range
+        return (
+            max(estimated_minutes - default_range, estimated_minutes * 0.5),
+            estimated_minutes + default_range
+        )
+
     def estimate_subtask(
         self,
         description: str,
@@ -178,9 +247,107 @@ class TimeEstimator:
 
         estimated_minutes = (min_time + max_time) / 2.0
 
+        # Refine with service-specific historical data
+        if service and "services" in self.historical_data:
+            if service in self.historical_data["services"]:
+                service_times = self.historical_data["services"][service]
+                if len(service_times) >= 3:
+                    # Use historical mean for this service
+                    mean_time = statistics.mean(service_times)
+                    stdev_time = statistics.stdev(service_times)
+
+                    # Blend historical data with base estimate (60% historical, 40% base)
+                    estimated_minutes = 0.6 * mean_time + 0.4 * estimated_minutes
+
+                    # Refine confidence range
+                    min_time = max(estimated_minutes - stdev_time, estimated_minutes * 0.5)
+                    max_time = estimated_minutes + stdev_time
+
         return TimeEstimate(
             estimated_minutes=estimated_minutes,
             confidence_min=min_time,
             confidence_max=max_time,
             confidence_level=0.7,
         )
+
+    def record_completion(
+        self,
+        actual_minutes: float,
+        complexity: Optional[Complexity] = None,
+        service: Optional[str] = None
+    ) -> None:
+        """
+        Record actual completion time to improve future estimates.
+
+        Args:
+            actual_minutes: Actual time taken in minutes
+            complexity: Task complexity level (if applicable)
+            service: Service name (if applicable)
+        """
+        # Initialize structure if needed
+        if "complexity" not in self.historical_data:
+            self.historical_data["complexity"] = {}
+        if "services" not in self.historical_data:
+            self.historical_data["services"] = {}
+
+        # Record by complexity
+        if complexity:
+            complexity_key = complexity.value
+            if complexity_key not in self.historical_data["complexity"]:
+                self.historical_data["complexity"][complexity_key] = []
+            self.historical_data["complexity"][complexity_key].append(actual_minutes)
+
+            # Keep only recent data (last 20 completions)
+            if len(self.historical_data["complexity"][complexity_key]) > 20:
+                self.historical_data["complexity"][complexity_key] = \
+                    self.historical_data["complexity"][complexity_key][-20:]
+
+        # Record by service
+        if service:
+            if service not in self.historical_data["services"]:
+                self.historical_data["services"][service] = []
+            self.historical_data["services"][service].append(actual_minutes)
+
+            # Keep only recent data (last 20 completions)
+            if len(self.historical_data["services"][service]) > 20:
+                self.historical_data["services"][service] = \
+                    self.historical_data["services"][service][-20:]
+
+    def get_accuracy_metrics(self, complexity: Optional[Complexity] = None) -> dict:
+        """
+        Get metrics about estimation accuracy based on historical data.
+
+        Args:
+            complexity: Optional complexity level to filter metrics
+
+        Returns:
+            Dictionary with accuracy metrics (sample_size, mean_time, stdev, etc.)
+        """
+        metrics = {}
+
+        if complexity:
+            complexity_key = complexity.value
+            if "complexity" in self.historical_data and complexity_key in self.historical_data["complexity"]:
+                times = self.historical_data["complexity"][complexity_key]
+                if len(times) >= 2:
+                    metrics["sample_size"] = len(times)
+                    metrics["mean_time"] = statistics.mean(times)
+                    if len(times) >= 3:
+                        metrics["stdev"] = statistics.stdev(times)
+                        metrics["min_time"] = min(times)
+                        metrics["max_time"] = max(times)
+        else:
+            # Overall metrics
+            all_times = []
+            if "complexity" in self.historical_data:
+                for times in self.historical_data["complexity"].values():
+                    all_times.extend(times)
+            if len(all_times) >= 2:
+                metrics["sample_size"] = len(all_times)
+                metrics["mean_time"] = statistics.mean(all_times)
+                if len(all_times) >= 3:
+                    metrics["stdev"] = statistics.stdev(all_times)
+                    metrics["min_time"] = min(all_times)
+                    metrics["max_time"] = max(all_times)
+
+        return metrics
