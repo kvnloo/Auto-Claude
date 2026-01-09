@@ -28,6 +28,7 @@ import {
 } from './components/ui/dialog';
 import { Sidebar, type SidebarView } from './components/Sidebar';
 import { KanbanBoard } from './components/KanbanBoard';
+import { TimelineView } from './components/TimelineView';
 import { TaskDetailModal } from './components/task-detail/TaskDetailModal';
 import { TaskCreationWizard } from './components/TaskCreationWizard';
 import { AppSettingsDialog, type AppSection } from './components/settings/AppSettings';
@@ -52,7 +53,7 @@ import { AppUpdateNotification } from './components/AppUpdateNotification';
 import { ProactiveSwapListener } from './components/ProactiveSwapListener';
 import { GitHubSetupModal } from './components/GitHubSetupModal';
 import { useProjectStore, loadProjects, addProject, initializeProject, removeProject } from './stores/project-store';
-import { useTaskStore, loadTasks } from './stores/task-store';
+import { useTaskStore, loadTasks, persistTaskSchedule } from './stores/task-store';
 import { useSettingsStore, loadSettings, loadProfiles } from './stores/settings-store';
 import { useClaudeProfileStore } from './stores/claude-profile-store';
 import { useTerminalStore, restoreTerminalSessions } from './stores/terminal-store';
@@ -812,6 +813,21 @@ export function App() {
                     onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
                     onRefresh={handleRefreshTasks}
                     isRefreshing={isRefreshingTasks}
+                  />
+                )}
+                {activeView === 'timeline' && (
+                  <TimelineView
+                    tasks={tasks}
+                    onTaskClick={handleTaskClick}
+                    onNewTaskClick={() => setIsNewTaskDialogOpen(true)}
+                    onTaskScheduleChange={async (taskId, newStartDate, newEndDate) => {
+                      await persistTaskSchedule(
+                        taskId,
+                        newStartDate.toISOString(),
+                        newEndDate.toISOString(),
+                        'drag'
+                      );
+                    }}
                   />
                 )}
                 {/* TerminalGrid is always mounted but hidden when not active to preserve terminal state */}
