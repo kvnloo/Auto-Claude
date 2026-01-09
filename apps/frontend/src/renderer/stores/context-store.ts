@@ -4,7 +4,8 @@ import type {
   GraphitiMemoryStatus,
   GraphitiMemoryState,
   MemoryEpisode,
-  ContextSearchResult
+  ContextSearchResult,
+  DependencyGraph
 } from '../../shared/types';
 
 interface ContextState {
@@ -28,6 +29,11 @@ interface ContextState {
   searchLoading: boolean;
   searchQuery: string;
 
+  // Dependency Graph
+  dependencyGraph: DependencyGraph | null;
+  graphLoading: boolean;
+  graphError: string | null;
+
   // Actions
   setProjectIndex: (index: ProjectIndex | null) => void;
   setIndexLoading: (loading: boolean) => void;
@@ -41,6 +47,9 @@ interface ContextState {
   setSearchResults: (results: ContextSearchResult[]) => void;
   setSearchLoading: (loading: boolean) => void;
   setSearchQuery: (query: string) => void;
+  setDependencyGraph: (graph: DependencyGraph | null) => void;
+  setGraphLoading: (loading: boolean) => void;
+  setGraphError: (error: string | null) => void;
   clearAll: () => void;
 }
 
@@ -65,6 +74,11 @@ export const useContextStore = create<ContextState>((set) => ({
   searchLoading: false,
   searchQuery: '',
 
+  // Dependency Graph
+  dependencyGraph: null,
+  graphLoading: false,
+  graphError: null,
+
   // Actions
   setProjectIndex: (index) => set({ projectIndex: index }),
   setIndexLoading: (loading) => set({ indexLoading: loading }),
@@ -78,6 +92,9 @@ export const useContextStore = create<ContextState>((set) => ({
   setSearchResults: (results) => set({ searchResults: results }),
   setSearchLoading: (loading) => set({ searchLoading: loading }),
   setSearchQuery: (query) => set({ searchQuery: query }),
+  setDependencyGraph: (graph) => set({ dependencyGraph: graph }),
+  setGraphLoading: (loading) => set({ graphLoading: loading }),
+  setGraphError: (error) => set({ graphError: error }),
   clearAll: () =>
     set({
       projectIndex: null,
@@ -91,7 +108,10 @@ export const useContextStore = create<ContextState>((set) => ({
       memoriesLoading: false,
       searchResults: [],
       searchLoading: false,
-      searchQuery: ''
+      searchQuery: '',
+      dependencyGraph: null,
+      graphLoading: false,
+      graphError: null
     })
 }));
 
@@ -195,5 +215,49 @@ export async function loadRecentMemories(
     // Silently fail - memories are optional
   } finally {
     store.setMemoriesLoading(false);
+  }
+}
+
+/**
+ * Load dependency graph data
+ */
+export async function loadDependencyGraph(projectId: string): Promise<void> {
+  const store = useContextStore.getState();
+  store.setGraphLoading(true);
+  store.setGraphError(null);
+
+  try {
+    const result = await window.electronAPI.getDependencyGraph(projectId);
+    if (result.success && result.data) {
+      store.setDependencyGraph(result.data);
+    } else {
+      store.setGraphError(result.error || 'Failed to load dependency graph');
+    }
+  } catch (error) {
+    store.setGraphError(error instanceof Error ? error.message : 'Unknown error');
+  } finally {
+    store.setGraphLoading(false);
+  }
+}
+
+/**
+ * Refresh dependency graph by re-analyzing project dependencies
+ */
+export async function refreshDependencyGraph(projectId: string): Promise<void> {
+  const store = useContextStore.getState();
+  store.setGraphLoading(true);
+  store.setGraphError(null);
+
+  try {
+    const result = await window.electronAPI.refreshDependencyGraph(projectId);
+    if (result.success && result.data) {
+      store.setDependencyGraph(result.data);
+    } else {
+      store.setGraphError(result.error || 'Failed to refresh dependency graph');
+    }
+  } catch (error) {
+    store.setGraphError(error instanceof Error ? error.message : 'Unknown error');
+  } finally {
+    store.setGraphLoading(false);
   }
 }
