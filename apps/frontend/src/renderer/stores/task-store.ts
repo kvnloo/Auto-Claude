@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { immer } from 'zustand/middleware/immer';
 import type { Task, TaskStatus, SubtaskStatus, ImplementationPlan, Subtask, TaskMetadata, ExecutionProgress, ExecutionPhase, ReviewReason, TaskDraft } from '../../shared/types';
 import { debugLog } from '../../shared/utils/debug-logger';
 
@@ -94,11 +95,12 @@ function validatePlanData(plan: ImplementationPlan): boolean {
   return true;
 }
 
-export const useTaskStore = create<TaskState>((set, get) => ({
-  tasks: [],
-  selectedTaskId: null,
-  isLoading: false,
-  error: null,
+export const useTaskStore = create<TaskState>()(
+  immer((set, get) => ({
+    tasks: [],
+    selectedTaskId: null,
+    isLoading: false,
+    error: null,
 
   setTasks: (tasks) => set({ tasks }),
 
@@ -365,7 +367,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
     const state = get();
     return state.tasks.filter((t) => t.status === status);
   }
-}));
+  }))
+);
 
 /**
  * Load tasks for a project
