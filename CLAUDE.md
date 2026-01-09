@@ -187,6 +187,12 @@ See [RELEASE.md](RELEASE.md) for detailed release process documentation.
 - **graphiti_providers.py** - Multi-provider factory (OpenAI, Anthropic, Azure, Ollama, Google AI)
 - **agents/memory_manager.py** - Session memory orchestration
 
+**Time Estimation:**
+- **estimation/time_estimator.py** - AI-powered time predictions based on complexity
+- **estimation/historical_tracker.py** - Completion tracking and accuracy metrics
+- **estimation/progress_calculator.py** - Real-time remaining time and velocity calculation
+- **estimation/accuracy_reporter.py** - Accuracy reporting with reliability levels
+
 **Workspace & Security:**
 - **cli/worktree.py** - Git worktree isolation for safe feature development
 - **context/project_analyzer.py** - Project stack detection for dynamic tooling
@@ -350,6 +356,85 @@ from integrations.graphiti.memory import get_graphiti_memory
 memory = get_graphiti_memory(spec_dir, project_dir)
 context = memory.get_context_for_session("Implementing feature X")
 memory.add_session_insight("Pattern: use React hooks for state")
+```
+
+### Time Estimation System
+
+**Intelligent Time Predictions** - `estimation/`
+
+Auto Claude provides AI-powered time estimates for tasks based on complexity assessment and historical data:
+
+**Core Components:**
+- **estimation/time_estimator.py** - Base time estimation algorithm with complexity-based predictions
+  - SIMPLE tasks: 10-20 minutes
+  - STANDARD tasks: 20-45 minutes
+  - COMPLEX tasks: 45-90 minutes
+  - Adjustments for multi-service, external integrations, infrastructure changes
+  - Historical data refinement for improved accuracy
+- **estimation/historical_tracker.py** - Completion time tracking and accuracy calculation
+  - Stores completion records in `.auto-claude/estimation_data.json`
+  - Tracks actual vs estimated duration per complexity level
+  - Rolling window of last 20 completions for relevancy
+  - Per-complexity and per-service accuracy metrics
+- **estimation/progress_calculator.py** - Real-time remaining time calculation
+  - Velocity-based progress tracking (ahead/on/behind schedule)
+  - Dynamic remaining time updates as subtasks complete
+  - Estimated completion time (ETA) predictions
+  - Cache invalidation on subtask completion
+- **estimation/accuracy_reporter.py** - Accuracy metrics and reliability reporting
+  - Calculates historical accuracy percentage
+  - Reliability levels: excellent (90%+), very good (80-89%), good (70-79%), fair (60-69%), needs improvement (<60%)
+  - Emoji indicators for quick visual feedback (🎯, ✨, 👍, 📊, 📈)
+
+**Integration Points:**
+- **Spec Creation** - Time estimates shown after complexity assessment with confidence range
+- **Build Execution** - Real-time remaining time displayed as work progresses
+- **Subtask Planning** - Per-subtask time estimates with keyword-based adjustments
+- **Progress Tracking** - Velocity metrics and schedule status (ahead/on/behind)
+- **Completion Reports** - Accuracy metrics displayed at build completion
+
+**Data Model Extensions:**
+- `ComplexityAssessment` - Added `estimated_duration_minutes`, `confidence_min`, `confidence_max`
+- `Subtask` - Added `estimated_duration_minutes` field
+- `Phase` - Added time aggregation methods (`get_total_estimated_time`, `get_remaining_time`)
+- `ImplementationPlan` - Added `total_estimated_minutes`, `elapsed_minutes`, `remaining_minutes`
+
+**Frontend Display:**
+- `TimeEstimate.tsx` component - Displays confidence ranges (e.g., "15-30 minutes")
+- Task detail view - Shows overall and per-subtask time estimates
+- Accuracy badges - Historical accuracy indicators with reliability levels
+- Real-time updates - Remaining time updates as progress is made
+
+**Usage:**
+```python
+from estimation.time_estimator import TimeEstimator
+from estimation.historical_tracker import HistoricalTracker
+from estimation.progress_calculator import ProgressCalculator
+
+# Estimate time for a complexity assessment
+estimator = TimeEstimator()
+assessment = ComplexityAssessment(complexity=Complexity.STANDARD, confidence=0.8)
+estimate = estimator.estimate(assessment)
+print(f"Estimated: {estimate.confidence_min}-{estimate.confidence_max} minutes")
+
+# Track completion for learning
+tracker = HistoricalTracker()
+tracker.record_completion(
+    complexity=Complexity.STANDARD,
+    estimated_minutes=30,
+    actual_minutes=35
+)
+
+# Get accuracy metrics
+accuracy = tracker.get_average_accuracy()
+print(f"Historical accuracy: {accuracy:.1f}%")
+
+# Calculate remaining time during build
+calculator = ProgressCalculator(plan)
+snapshot = calculator.get_progress_snapshot()
+print(f"Remaining: {calculator.get_remaining_time_formatted()}")
+print(f"ETA: {calculator.get_estimated_completion_time()}")
+print(f"Status: {calculator.get_velocity_summary()}")
 ```
 
 ## Development Guidelines
