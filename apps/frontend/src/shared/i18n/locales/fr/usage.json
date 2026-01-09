@@ -1,0 +1,70 @@
+{
+  "title": "Utilisation & Couts",
+  "subtitle": "Suivez l'utilisation des tokens et les estimations de couts",
+  "dateRange": {
+    "today": "Aujourd'hui",
+    "yesterday": "Hier",
+    "last7days": "7 Jours",
+    "last30days": "30 Jours",
+    "thisMonth": "Ce Mois",
+    "lastMonth": "Mois Dernier",
+    "thisYear": "Cette Annee",
+    "custom": "Personnalise"
+  },
+  "actions": {
+    "export": "Exporter CSV",
+    "refresh": "Actualiser"
+  },
+  "metrics": {
+    "totalCost": "Cout Total",
+    "avgCostPerSpec": "Cout Moy. / Spec",
+    "totalTokens": "Total Tokens",
+    "efficiencyScore": "Score d'Efficacite",
+    "inPeriod": "dans la periode selectionnee",
+    "specsCount": "sur {{count}} specs",
+    "specsCount_one": "sur {{count}} spec",
+    "sessionsCount": "{{count}} sessions",
+    "sessionsCount_one": "{{count}} session"
+  },
+  "efficiency": {
+    "rating": {
+      "excellent": "Excellent",
+      "good": "Bon",
+      "average": "Moyen",
+      "needs_improvement": "A Ameliorer",
+      "poor": "Faible"
+    }
+  },
+  "tabs": {
+    "overview": "Apercu",
+    "trends": "Tendances",
+    "agents": "Agents",
+    "specs": "Specs"
+  },
+  "overview": {
+    "title": "Apercu de l'Utilisation",
+    "tokenBreakdown": "Repartition des Tokens",
+    "inputTokens": "Tokens d'Entree",
+    "outputTokens": "Tokens de Sortie",
+    "thinkingTokens": "Tokens de Reflexion",
+    "cacheHits": "Tokens en Cache",
+    "sessionStats": "Statistiques de Session",
+    "totalSessions": "Sessions Totales",
+    "successfulSessions": "Sessions Reussies",
+    "failedSessions": "Sessions Echouees",
+    "successRate": "Taux de Reussite",
+    "noData": "Aucune donnee d'utilisation disponible. Executez des specs pour voir vos statistiques d'utilisation."
+  },
+  "trends": {
+    "title": "Tendances d'Utilisation",
+    "chartPlaceholder": "Le graphique des tendances d'utilisation sera affiche ici"
+  },
+  "agents": {
+    "title": "Utilisation par Agent",
+    "chartPlaceholder": "Le graphique de repartition par agent sera affiche ici"
+  },
+  "specs": {
+    "title": "Utilisation par Spec",
+    "tablePlaceholder": "Le tableau d'utilisation par spec sera affiche ici"
+  }
+}

@@ -1,0 +1,70 @@
+{
+  "title": "Usage & Costs",
+  "subtitle": "Track token usage and cost estimates",
+  "dateRange": {
+    "today": "Today",
+    "yesterday": "Yesterday",
+    "last7days": "7 Days",
+    "last30days": "30 Days",
+    "thisMonth": "This Month",
+    "lastMonth": "Last Month",
+    "thisYear": "This Year",
+    "custom": "Custom"
+  },
+  "actions": {
+    "export": "Export CSV",
+    "refresh": "Refresh"
+  },
+  "metrics": {
+    "totalCost": "Total Cost",
+    "avgCostPerSpec": "Avg Cost / Spec",
+    "totalTokens": "Total Tokens",
+    "efficiencyScore": "Efficiency Score",
+    "inPeriod": "in selected period",
+    "specsCount": "across {{count}} specs",
+    "specsCount_one": "across {{count}} spec",
+    "sessionsCount": "{{count}} sessions",
+    "sessionsCount_one": "{{count}} session"
+  },
+  "efficiency": {
+    "rating": {
+      "excellent": "Excellent",
+      "good": "Good",
+      "average": "Average",
+      "needs_improvement": "Needs Improvement",
+      "poor": "Poor"
+    }
+  },
+  "tabs": {
+    "overview": "Overview",
+    "trends": "Trends",
+    "agents": "Agents",
+    "specs": "Specs"
+  },
+  "overview": {
+    "title": "Usage Overview",
+    "tokenBreakdown": "Token Breakdown",
+    "inputTokens": "Input Tokens",
+    "outputTokens": "Output Tokens",
+    "thinkingTokens": "Thinking Tokens",
+    "cacheHits": "Cache Hits",
+    "sessionStats": "Session Statistics",
+    "totalSessions": "Total Sessions",
+    "successfulSessions": "Successful Sessions",
+    "failedSessions": "Failed Sessions",
+    "successRate": "Success Rate",
+    "noData": "No usage data available. Run some specs to see your usage statistics."
+  },
+  "trends": {
+    "title": "Usage Trends",
+    "chartPlaceholder": "Usage trend chart will be displayed here"
+  },
+  "agents": {
+    "title": "Usage by Agent",
+    "chartPlaceholder": "Agent breakdown chart will be displayed here"
+  },
+  "specs": {
+    "title": "Usage by Spec",
+    "tablePlaceholder": "Spec usage table will be displayed here"
+  }
+}
