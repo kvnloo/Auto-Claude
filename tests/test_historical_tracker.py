@@ -335,3 +335,166 @@ class TestHistoricalTracker:
             assert data["version"] == "1.0"
             assert data["total_records"] == 1
             assert isinstance(data["records"], list)
+
+    def test_get_record_count(self):
+        """Test getting the total number of completion records."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_file = Path(tmpdir) / "estimation_data.json"
+            tracker = HistoricalTracker(data_file=data_file)
+
+            # Initially empty
+            assert tracker.get_record_count() == 0
+
+            # Add one record
+            tracker.record_completion(
+                task_id="001",
+                task_description="Task 1",
+                complexity=Complexity.SIMPLE,
+                estimated_minutes=15.0,
+                actual_minutes=18.0,
+            )
+            assert tracker.get_record_count() == 1
+
+            # Add more records
+            tracker.record_completion(
+                task_id="002",
+                task_description="Task 2",
+                complexity=Complexity.STANDARD,
+                estimated_minutes=30.0,
+                actual_minutes=28.0,
+            )
+            tracker.record_completion(
+                task_id="003",
+                task_description="Task 3",
+                complexity=Complexity.COMPLEX,
+                estimated_minutes=60.0,
+                actual_minutes=75.0,
+            )
+            assert tracker.get_record_count() == 3
+
+    def test_repr(self):
+        """Test string representation of tracker."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_file = Path(tmpdir) / "estimation_data.json"
+            tracker = HistoricalTracker(data_file=data_file)
+
+            # Empty tracker
+            repr_str = repr(tracker)
+            assert "HistoricalTracker" in repr_str
+            assert str(data_file) in repr_str
+            assert "records=0" in repr_str
+
+            # Add some records
+            tracker.record_completion(
+                task_id="001",
+                task_description="Task 1",
+                complexity=Complexity.SIMPLE,
+                estimated_minutes=15.0,
+                actual_minutes=18.0,
+            )
+            tracker.record_completion(
+                task_id="002",
+                task_description="Task 2",
+                complexity=Complexity.SIMPLE,
+                estimated_minutes=12.0,
+                actual_minutes=15.0,
+            )
+
+            # Verify repr with records
+            repr_str = repr(tracker)
+            assert "HistoricalTracker" in repr_str
+            assert "records=2" in repr_str
+
+    def test_zero_estimated_minutes(self):
+        """Test handling of zero estimated minutes in record_completion."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_file = Path(tmpdir) / "estimation_data.json"
+            tracker = HistoricalTracker(data_file=data_file)
+
+            # Record completion with zero estimated minutes
+            record = tracker.record_completion(
+                task_id="001",
+                task_description="Task with zero estimate",
+                complexity=Complexity.SIMPLE,
+                estimated_minutes=0.0,
+                actual_minutes=18.0,
+            )
+
+            # Should handle gracefully with neutral accuracy
+            assert record.estimated_minutes == 0.0
+            assert record.actual_minutes == 18.0
+            assert record.accuracy_ratio == 1.0
+            assert record.estimation_error == 0.0
+
+    def test_record_completion_with_all_optional_fields(self):
+        """Test record_completion with all optional fields populated."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_file = Path(tmpdir) / "estimation_data.json"
+            tracker = HistoricalTracker(data_file=data_file)
+
+            record = tracker.record_completion(
+                task_id="001-full-record",
+                task_description="Complex task with all metadata",
+                complexity=Complexity.COMPLEX,
+                estimated_minutes=60.0,
+                actual_minutes=75.0,
+                services_involved=["backend", "frontend", "database"],
+                files_modified=25,
+                external_integrations=["stripe", "graphiti", "redis"],
+            )
+
+            # Verify all fields are properly stored
+            assert record.task_id == "001-full-record"
+            assert record.services_involved == ["backend", "frontend", "database"]
+            assert record.files_modified == 25
+            assert record.external_integrations == ["stripe", "graphiti", "redis"]
+            assert record.accuracy_ratio == 75.0 / 60.0
+            assert record.estimation_error == ((75.0 - 60.0) / 60.0) * 100
+
+            # Verify persistence
+            assert len(tracker.records) == 1
+            assert tracker.records[0] == record
+
+    def test_multiple_complexity_levels_accuracy(self):
+        """Test average accuracy calculation with multiple complexity levels."""
+        with tempfile.TemporaryDirectory() as tmpdir:
+            data_file = Path(tmpdir) / "estimation_data.json"
+            tracker = HistoricalTracker(data_file=data_file)
+
+            # Add records for SIMPLE complexity
+            for i in range(3):
+                tracker.record_completion(
+                    task_id=f"simple-{i}",
+                    task_description=f"Simple task {i}",
+                    complexity=Complexity.SIMPLE,
+                    estimated_minutes=15.0,
+                    actual_minutes=15.0 + i,  # accuracy_ratio: 1.0, 1.067, 1.133
+                )
+
+            # Add records for STANDARD complexity
+            for i in range(2):
+                tracker.record_completion(
+                    task_id=f"standard-{i}",
+                    task_description=f"Standard task {i}",
+                    complexity=Complexity.STANDARD,
+                    estimated_minutes=30.0,
+                    actual_minutes=30.0 + i * 3,  # accuracy_ratio: 1.0, 1.1
+                )
+
+            # Test overall accuracy
+            overall = tracker.get_average_accuracy()
+            expected_overall = (1.0 + 1.067 + 1.133 + 1.0 + 1.1) / 5
+            assert abs(overall - expected_overall) < 0.01
+
+            # Test per-complexity accuracy
+            simple_accuracy = tracker.get_average_accuracy(Complexity.SIMPLE)
+            expected_simple = (1.0 + 1.067 + 1.133) / 3
+            assert abs(simple_accuracy - expected_simple) < 0.01
+
+            standard_accuracy = tracker.get_average_accuracy(Complexity.STANDARD)
+            expected_standard = (1.0 + 1.1) / 2
+            assert abs(standard_accuracy - expected_standard) < 0.01
+
+            # Complex should return neutral (no records)
+            complex_accuracy = tracker.get_average_accuracy(Complexity.COMPLEX)
+            assert complex_accuracy == 1.0
