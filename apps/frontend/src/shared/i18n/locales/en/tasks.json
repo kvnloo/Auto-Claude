@@ -184,6 +184,11 @@
       "warningDescription": "This task is part of a circular dependency chain",
       "badgeLabel": "Cycle",
       "tooltip": "Circular dependency detected - tasks cannot be ordered correctly"
+    },
+    "dragFeedback": {
+      "newDates": "{{startDate}} → {{endDate}}",
+      "dropHere": "Release to schedule",
+      "snapTo": "Snapping to {{unit}}"
     }
   }
 }

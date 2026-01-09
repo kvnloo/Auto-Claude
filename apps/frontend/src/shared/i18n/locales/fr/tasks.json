@@ -184,6 +184,11 @@
       "warningDescription": "Cette tâche fait partie d'une chaîne de dépendances circulaire",
       "badgeLabel": "Cycle",
       "tooltip": "Dépendance circulaire détectée - les tâches ne peuvent pas être ordonnées correctement"
+    },
+    "dragFeedback": {
+      "newDates": "{{startDate}} → {{endDate}}",
+      "dropHere": "Relâcher pour planifier",
+      "snapTo": "Alignement sur {{unit}}"
     }
   }
 }

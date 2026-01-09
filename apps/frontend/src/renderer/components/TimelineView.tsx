@@ -2,11 +2,13 @@ import { useState, useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   DndContext,
+  DragOverlay,
   PointerSensor,
   useSensor,
   useSensors,
   type DragStartEvent,
-  type DragEndEvent
+  type DragEndEvent,
+  type DragMoveEvent
 } from '@dnd-kit/core';
 import { useViewState } from '../contexts/ViewStateContext';
 import { useGitHistory } from '../hooks';
@@ -36,7 +38,11 @@ import {
   calculateTaskBarPosition,
   isTaskBarVisible,
   detectDependencyCycles,
-  snapDatesToGrid
+  snapDatesToGrid,
+  getDatePixelPosition,
+  getTaskStartDate,
+  getTaskEndDate,
+  getSnapGridConfig
 } from '../lib/timeline-utils';
 import type { TaskBarPosition, TimelineZoomLevel } from '../lib/timeline-utils';
 import { TimelineTaskBar } from './TimelineTaskBar';
@@ -331,6 +337,177 @@ function TimelineHeader({
 }
 
 /**
+ * DragColumnHighlight - Highlights the date columns where the task will snap to during drag
+ * Shows a semi-transparent overlay on the columns covered by the ghost position
+ */
+interface DragColumnHighlightProps {
+  ghostPosition: TaskBarPosition;
+  visibleStartDate: Date;
+  visibleEndDate: Date;
+  totalWidth: number;
+}
+
+function DragColumnHighlight({
+  ghostPosition,
+  visibleStartDate,
+  visibleEndDate,
+  totalWidth
+}: DragColumnHighlightProps) {
+  // Calculate the highlight area based on ghost position
+  const highlightLeft = ghostPosition.left;
+  const highlightWidth = ghostPosition.width;
+
+  // Don't render if outside visible area
+  if (highlightLeft + highlightWidth < 0 || highlightLeft > totalWidth) {
+    return null;
+  }
+
+  return (
+    <div
+      className="absolute top-0 bottom-0 bg-primary/10 border-l-2 border-r-2 border-primary/40 pointer-events-none z-5 transition-all duration-75"
+      style={{
+        left: `${Math.max(0, highlightLeft)}px`,
+        width: `${highlightWidth}px`
+      }}
+    >
+      {/* Top edge indicator */}
+      <div className="absolute top-0 left-0 right-0 h-1 bg-primary/40" />
+      {/* Bottom edge indicator */}
+      <div className="absolute bottom-0 left-0 right-0 h-1 bg-primary/40" />
+    </div>
+  );
+}
+
+/**
+ * DragGhostPreview - Shows a semi-transparent ghost of the task bar at the snapped position
+ * This provides a clear preview of where the task will land when dropped
+ */
+interface DragGhostPreviewProps {
+  task: Task;
+  ghostPosition: TaskBarPosition;
+}
+
+function DragGhostPreview({ task, ghostPosition }: DragGhostPreviewProps) {
+  // Get the status-based background color for visual consistency
+  const bgColorClass = getStatusGhostColor(task.status);
+
+  return (
+    <div
+      className={cn(
+        'absolute h-6 rounded-md pointer-events-none z-25',
+        'border-2 border-dashed border-primary/70',
+        bgColorClass,
+        'flex items-center justify-center',
+        'animate-pulse transition-all duration-75'
+      )}
+      style={{
+        left: `${ghostPosition.left}px`,
+        width: `${Math.max(ghostPosition.width, 8)}px`,
+        top: '50%',
+        transform: 'translateY(-50%)'
+      }}
+    >
+      {/* Task title preview (truncated) */}
+      {ghostPosition.width > 50 && (
+        <span className="text-xs font-medium text-primary/80 truncate px-2">
+          {task.title}
+        </span>
+      )}
+    </div>
+  );
+}
+
+/**
+ * Get ghost color class based on task status - uses lighter versions of status colors
+ */
+function getStatusGhostColor(status: Task['status']): string {
+  switch (status) {
+    case 'backlog':
+      return 'bg-muted-foreground/20';
+    case 'in_progress':
+      return 'bg-blue-500/20';
+    case 'ai_review':
+      return 'bg-amber-500/20';
+    case 'human_review':
+      return 'bg-purple-500/20';
+    case 'pr_created':
+      return 'bg-emerald-500/20';
+    case 'done':
+      return 'bg-green-500/20';
+    default:
+      return 'bg-muted-foreground/20';
+  }
+}
+
+/**
+ * DragPreviewTooltip - Floating tooltip that follows the cursor during drag
+ * Shows the proposed new dates after snapping
+ */
+interface DragPreviewTooltipProps {
+  task: Task;
+  snappedStartDate: Date;
+  snappedEndDate: Date;
+  zoomLevel: TimelineZoomLevel;
+}
+
+function DragPreviewTooltip({
+  task,
+  snappedStartDate,
+  snappedEndDate,
+  zoomLevel
+}: DragPreviewTooltipProps) {
+  const { t } = useTranslation('tasks');
+
+  // Format dates for display
+  const formatDate = (date: Date): string => {
+    return date.toLocaleDateString(undefined, {
+      month: 'short',
+      day: 'numeric',
+      year: 'numeric'
+    });
+  };
+
+  const startDateStr = formatDate(snappedStartDate);
+  const endDateStr = formatDate(snappedEndDate);
+
+  // Get snap unit description for display
+  const snapConfig = getSnapGridConfig(zoomLevel);
+  const snapUnitLabel = snapConfig.unit === 'day' ? 'day'
+    : snapConfig.unit === 'week' ? 'week'
+    : 'month';
+
+  return (
+    <div className="flex flex-col gap-1 px-3 py-2 bg-popover border border-border rounded-lg shadow-lg text-sm pointer-events-none min-w-[200px]">
+      {/* Task title */}
+      <div className="font-semibold text-foreground truncate max-w-[180px]">
+        {task.title}
+      </div>
+
+      {/* New dates */}
+      <div className="flex items-center gap-1 text-primary font-medium">
+        <Calendar className="h-3.5 w-3.5" />
+        <span>
+          {t('timeline.dragFeedback.newDates', {
+            startDate: startDateStr,
+            endDate: endDateStr
+          })}
+        </span>
+      </div>
+
+      {/* Snap indicator */}
+      <div className="text-xs text-muted-foreground">
+        {t('timeline.dragFeedback.snapTo', { unit: snapUnitLabel })}
+      </div>
+
+      {/* Drop hint */}
+      <div className="text-xs text-primary/70 mt-0.5 border-t border-border/50 pt-1">
+        {t('timeline.dragFeedback.dropHere')}
+      </div>
+    </div>
+  );
+}
+
+/**
  * TimelineTaskSidebar - Left sidebar showing task list
  */
 interface TimelineTaskSidebarProps {
@@ -376,6 +553,17 @@ function TimelineTaskSidebar({ tasks, onTaskClick, selectedTaskId }: TimelineTas
 /**
  * TimelineGrid - Main scrollable timeline area with task bars
  */
+/** Drag preview state passed from TimelineView to TimelineGrid */
+interface DragPreviewState {
+  task: Task;
+  deltaX: number;
+  newStartDate: Date;
+  newEndDate: Date;
+  snappedStartDate: Date;
+  snappedEndDate: Date;
+  ghostPosition: TaskBarPosition;
+}
+
 interface TimelineGridProps {
   tasks: Task[];
   zoomLevel: TimelineZoomLevel;
@@ -399,6 +587,8 @@ interface TimelineGridProps {
   cyclicTaskIds?: Set<string>;
   /** ID of the task currently being dragged (for DragOverlay coordination) */
   draggingTaskId?: string;
+  /** Drag preview state for rendering ghost and column highlight */
+  dragPreview?: DragPreviewState | null;
 }
 
 function TimelineGrid({
@@ -419,7 +609,8 @@ function TimelineGrid({
   highlightedCommits,
   highlightedTags,
   cyclicTaskIds,
-  draggingTaskId
+  draggingTaskId,
+  dragPreview
 }: TimelineGridProps) {
   // Calculate total width based on date range and zoom
   const totalColumns = useMemo(() => {
@@ -485,6 +676,16 @@ function TimelineGrid({
           ))}
         </div>
 
+        {/* Column highlight during drag - shows where the task will snap to */}
+        {dragPreview && (
+          <DragColumnHighlight
+            ghostPosition={dragPreview.ghostPosition}
+            visibleStartDate={visibleStartDate}
+            visibleEndDate={visibleEndDate}
+            totalWidth={totalWidth}
+          />
+        )}
+
         {/* Tag/release markers - vertical dashed lines */}
         <TagMarkers
           tags={tags}
@@ -531,6 +732,9 @@ function TimelineGrid({
             // Check if this task is in a dependency cycle
             const isInCycle = cyclicTaskIds?.has(task.specId) ?? false;
 
+            // Check if this is the task being dragged (for ghost preview)
+            const isBeingDragged = draggingTaskId === task.id;
+
             return (
               <div
                 key={task.id}
@@ -547,9 +751,17 @@ function TimelineGrid({
                     isHovered={hoveredTaskId === task.id}
                     isInCycle={isInCycle}
                     isDraggable={true}
-                    isDragging={draggingTaskId === task.id}
+                    isDragging={isBeingDragged}
                     onClick={onTaskClick}
                     onHover={onTaskHover}
+                  />
+                )}
+
+                {/* Ghost preview - shows where the task will land after snap */}
+                {isBeingDragged && dragPreview && (
+                  <DragGhostPreview
+                    task={dragPreview.task}
+                    ghostPosition={dragPreview.ghostPosition}
                   />
                 )}
               </div>
@@ -1193,6 +1405,16 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
   const [hoveredTaskId, setHoveredTaskId] = useState<string | undefined>();
   // Drag state - tracks which task is being dragged
   const [draggingTaskId, setDraggingTaskId] = useState<string | undefined>();
+  // Drag preview state - tracks the current drag offset and calculated new dates
+  const [dragPreview, setDragPreview] = useState<{
+    task: Task;
+    deltaX: number;
+    newStartDate: Date;
+    newEndDate: Date;
+    snappedStartDate: Date;
+    snappedEndDate: Date;
+    ghostPosition: TaskBarPosition;
+  } | null>(null);
 
   // Refs
   const gridScrollRef = useRef<HTMLDivElement>(null);
@@ -1393,6 +1615,32 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
   }, []);
 
   /**
+   * Calculate total width of the timeline grid based on visible date range and zoom level
+   */
+  const calculateTotalWidth = useCallback(() => {
+    let totalColumns = 0;
+    const current = new Date(visibleStartDate);
+    while (current <= visibleEndDate) {
+      totalColumns++;
+      switch (zoomLevel) {
+        case 'day':
+          current.setDate(current.getDate() + 1);
+          break;
+        case 'week':
+          current.setDate(current.getDate() + 7);
+          break;
+        case 'month':
+          current.setMonth(current.getMonth() + 1);
+          break;
+        case 'quarter':
+          current.setMonth(current.getMonth() + 3);
+          break;
+      }
+    }
+    return totalColumns * columnWidth;
+  }, [visibleStartDate, visibleEndDate, zoomLevel, columnWidth]);
+
+  /**
    * Handle drag start - track which task is being dragged
    */
   const handleDragStart = useCallback((event: DragStartEvent) => {
@@ -1400,7 +1648,70 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
     // Extract task ID from draggable ID (format: 'timeline-task-{taskId}')
     const taskId = String(active.id).replace('timeline-task-', '');
     setDraggingTaskId(taskId);
+    // Clear any existing preview (will be set in handleDragMove)
+    setDragPreview(null);
   }, []);
+
+  /**
+   * Handle drag move - update the drag preview with current position and calculated dates
+   * This provides real-time visual feedback showing where the task will land
+   */
+  const handleDragMove = useCallback((event: DragMoveEvent) => {
+    const { active, delta } = event;
+
+    if (!active || delta.x === 0) return;
+
+    // Extract task ID from draggable ID
+    const taskId = String(active.id).replace('timeline-task-', '');
+    const task = filteredTasks.find(t => t.id === taskId);
+
+    if (!task) return;
+
+    // Calculate total width for date conversion
+    const totalWidth = calculateTotalWidth();
+
+    // Calculate new dates from drag offset
+    const { newStartDate, newEndDate } = calculateNewDatesFromDragOffset(
+      task,
+      delta.x,
+      visibleStartDate,
+      visibleEndDate,
+      totalWidth
+    );
+
+    // Apply snap-to-grid based on current zoom level
+    const { snappedStartDate, snappedEndDate } = snapDatesToGrid(
+      newStartDate,
+      newEndDate,
+      zoomLevel
+    );
+
+    // Calculate ghost position using snapped dates
+    const snappedLeft = getDatePixelPosition(snappedStartDate, visibleStartDate, visibleEndDate, totalWidth);
+    const snappedRight = getDatePixelPosition(snappedEndDate, visibleStartDate, visibleEndDate, totalWidth);
+    const snappedWidth = Math.max(snappedRight - snappedLeft, 8);
+
+    // Get original position for reference
+    const originalPosition = calculateTaskBarPosition(task, visibleStartDate, visibleEndDate, totalWidth);
+
+    const ghostPosition: TaskBarPosition = {
+      left: snappedLeft,
+      width: snappedWidth,
+      taskId: task.id,
+      startDate: snappedStartDate,
+      endDate: snappedEndDate
+    };
+
+    setDragPreview({
+      task,
+      deltaX: delta.x,
+      newStartDate,
+      newEndDate,
+      snappedStartDate,
+      snappedEndDate,
+      ghostPosition
+    });
+  }, [filteredTasks, visibleStartDate, visibleEndDate, zoomLevel, calculateTotalWidth, calculateNewDatesFromDragOffset]);
 
   /**
    * Handle drag end - calculate new dates based on drag offset, apply snap-to-grid,
@@ -1475,8 +1786,9 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
       onTaskScheduleChange(taskId, snappedStartDate, snappedEndDate);
     }
 
-    // Clear dragging state
+    // Clear dragging state and preview
     setDraggingTaskId(undefined);
+    setDragPreview(null);
   }, [filteredTasks, visibleStartDate, visibleEndDate, zoomLevel, columnWidth, calculateNewDatesFromDragOffset, onTaskScheduleChange]);
 
   // Compute anchor dates from git history and milestones
@@ -1628,6 +1940,7 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
         <DndContext
           sensors={sensors}
           onDragStart={handleDragStart}
+          onDragMove={handleDragMove}
           onDragEnd={handleDragEnd}
         >
           <div className="flex-1 flex flex-col overflow-hidden">
@@ -1660,8 +1973,21 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
               highlightedTags={highlightedTags}
               cyclicTaskIds={cyclicTaskIds}
               draggingTaskId={draggingTaskId}
+              dragPreview={dragPreview}
             />
           </div>
+
+          {/* DragOverlay - renders ghost preview during drag with date tooltip */}
+          <DragOverlay dropAnimation={null}>
+            {dragPreview && (
+              <DragPreviewTooltip
+                task={dragPreview.task}
+                snappedStartDate={dragPreview.snappedStartDate}
+                snappedEndDate={dragPreview.snappedEndDate}
+                zoomLevel={zoomLevel}
+              />
+            )}
+          </DragOverlay>
         </DndContext>
       </div>
 
