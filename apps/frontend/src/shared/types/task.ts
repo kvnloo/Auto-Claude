@@ -203,6 +203,13 @@ export interface TaskMetadata {
   // Effort estimation
   estimatedEffort?: TaskComplexity;
 
+  // Schedule metadata (for timeline view)
+  scheduledStartDate?: string;  // ISO date string for scheduled start
+  scheduledEndDate?: string;  // ISO date string for scheduled end
+  linkedCommits?: string[];  // Array of commit hashes linked to this task
+  linkedPRs?: number[];  // Array of PR numbers linked to this task
+  linkedTags?: string[];  // Array of tag names linked to this task
+
   // Type-specific metadata (from different idea types)
   securitySeverity?: 'low' | 'medium' | 'high' | 'critical';
   performanceCategory?: string;
