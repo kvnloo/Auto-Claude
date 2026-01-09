@@ -20,6 +20,25 @@ export interface CachedPlanData {
 }
 
 /**
+ * Generate a hash for a plan to detect when content actually changes
+ *
+ * The hash is based on:
+ * - updated_at timestamp (when plan was last modified)
+ * - phases.length (number of phases)
+ * - Phase IDs (array of phase numbers)
+ *
+ * This allows early-exit optimization when the same plan is processed
+ * multiple times without changes.
+ *
+ * @param plan - The implementation plan to hash
+ * @returns A hash string representing the plan's current state
+ */
+export function getPlanHash(plan: ImplementationPlan): string {
+  const phaseIds = plan.phases.map(phase => phase.phase);
+  return `${plan.updated_at}|${plan.phases.length}|${JSON.stringify(phaseIds)}`;
+}
+
+/**
  * PlanCache - Caches validated and processed implementation plans
  *
  * Uses WeakMap to cache plan data keyed by plan object reference.
