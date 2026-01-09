@@ -149,6 +149,16 @@
     },
     "noEstimate": "No estimate",
     "dragToSchedule": "Drag to schedule",
-    "linkedArtifacts": "Linked Artifacts"
+    "linkedArtifacts": "Linked Artifacts",
+    "commits": {
+      "single": "{{count}} commit",
+      "plural": "{{count}} commits",
+      "by": "by {{author}}",
+      "cluster": "{{count}} commits"
+    },
+    "tags": {
+      "release": "Release",
+      "tag": "Tag"
+    }
   }
 }

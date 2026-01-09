@@ -1,6 +1,7 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useViewState } from '../contexts/ViewStateContext';
+import { useGitHistory } from '../hooks';
 import {
   Calendar,
   ChevronLeft,
@@ -8,6 +9,7 @@ import {
   Clock,
   Flag,
   GitBranch,
+  GitCommit as GitCommitIcon,
   Inbox,
   Milestone,
   Plus,
@@ -21,6 +23,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Separator } from './ui/separator';
 import { cn } from '../lib/utils';
 import type { Task } from '../../shared/types';
+import type { TimelineGitCommit, TimelineGitTag, TimelineMilestone } from '../../shared/types/git';
 
 // Zoom level type
 export type TimelineZoomLevel = 'quarter' | 'month' | 'week' | 'day';
@@ -361,6 +364,9 @@ interface TimelineGridProps {
   onTaskClick: (task: Task) => void;
   onScroll: (scrollLeft: number) => void;
   scrollRef: React.RefObject<HTMLDivElement | null>;
+  commits: TimelineGitCommit[];
+  tags: TimelineGitTag[];
+  milestones: TimelineMilestone[];
 }
 
 function TimelineGrid({
@@ -371,7 +377,10 @@ function TimelineGrid({
   columnWidth,
   onTaskClick,
   onScroll,
-  scrollRef
+  scrollRef,
+  commits,
+  tags,
+  milestones
 }: TimelineGridProps) {
   // Calculate total width based on date range and zoom
   const totalColumns = useMemo(() => {
@@ -437,16 +446,35 @@ function TimelineGrid({
           ))}
         </div>
 
+        {/* Tag/release markers - vertical dashed lines */}
+        <TagMarkers
+          tags={tags}
+          milestones={milestones}
+          zoomLevel={zoomLevel}
+          visibleStartDate={visibleStartDate}
+          visibleEndDate={visibleEndDate}
+          totalWidth={totalWidth}
+        />
+
+        {/* Commit markers - dots at bottom */}
+        <CommitMarkers
+          commits={commits}
+          zoomLevel={zoomLevel}
+          visibleStartDate={visibleStartDate}
+          visibleEndDate={visibleEndDate}
+          totalWidth={totalWidth}
+        />
+
         {/* Now marker */}
         {nowPosition !== null && (
           <div
-            className="absolute top-0 bottom-0 w-0.5 bg-red-500/50 z-10 pointer-events-none"
+            className="absolute top-0 bottom-0 w-0.5 bg-red-500/50 z-15 pointer-events-none"
             style={{ left: nowPosition }}
           />
         )}
 
         {/* Task rows (placeholder - actual bars implemented in later subtask) */}
-        <div className="relative">
+        <div className="relative z-20">
           {tasks.map((task, idx) => (
             <div
               key={task.id}
@@ -497,6 +525,332 @@ function TimelineStatusBar({ taskCount, visibleStartDate, visibleEndDate }: Time
           {taskCount} {taskCount === 1 ? 'task' : 'tasks'}
         </span>
       </div>
+    </div>
+  );
+}
+
+/**
+ * Clustered commit data for coarse zoom levels
+ */
+interface CommitCluster {
+  startDate: Date;
+  endDate: Date;
+  commits: TimelineGitCommit[];
+  position: number;
+}
+
+/**
+ * CommitMarkers - Renders commit dots on the timeline grid
+ * Clusters commits at coarse zoom levels (quarter/month) to avoid visual clutter
+ */
+interface CommitMarkersProps {
+  commits: TimelineGitCommit[];
+  zoomLevel: TimelineZoomLevel;
+  visibleStartDate: Date;
+  visibleEndDate: Date;
+  totalWidth: number;
+}
+
+function CommitMarkers({
+  commits,
+  zoomLevel,
+  visibleStartDate,
+  visibleEndDate,
+  totalWidth
+}: CommitMarkersProps) {
+  const { t } = useTranslation('tasks');
+
+  // Calculate position for a date
+  const getDatePosition = useCallback((date: Date): number => {
+    const startMs = visibleStartDate.getTime();
+    const endMs = visibleEndDate.getTime();
+    const dateMs = date.getTime();
+    return ((dateMs - startMs) / (endMs - startMs)) * totalWidth;
+  }, [visibleStartDate, visibleEndDate, totalWidth]);
+
+  // Filter commits within visible range
+  const visibleCommits = useMemo(() => {
+    return commits.filter(commit => {
+      const commitDate = new Date(commit.date);
+      return commitDate >= visibleStartDate && commitDate <= visibleEndDate;
+    });
+  }, [commits, visibleStartDate, visibleEndDate]);
+
+  // Cluster commits based on zoom level
+  const clusteredData = useMemo((): CommitCluster[] => {
+    if (visibleCommits.length === 0) return [];
+
+    // At day/week zoom, show individual commits
+    if (zoomLevel === 'day' || zoomLevel === 'week') {
+      return visibleCommits.map(commit => ({
+        startDate: new Date(commit.date),
+        endDate: new Date(commit.date),
+        commits: [commit],
+        position: getDatePosition(new Date(commit.date))
+      }));
+    }
+
+    // At month/quarter zoom, cluster commits by time period
+    const clusterDuration = zoomLevel === 'month'
+      ? 7 * 24 * 60 * 60 * 1000   // 1 week for month view
+      : 30 * 24 * 60 * 60 * 1000; // 1 month for quarter view
+
+    const clusters: CommitCluster[] = [];
+    let currentCluster: TimelineGitCommit[] = [];
+    let clusterStart: Date | null = null;
+    let clusterEnd: Date | null = null;
+
+    // Sort commits by date (oldest first for clustering)
+    const sortedCommits = [...visibleCommits].sort(
+      (a, b) => new Date(a.date).getTime() - new Date(b.date).getTime()
+    );
+
+    for (const commit of sortedCommits) {
+      const commitDate = new Date(commit.date);
+
+      if (currentCluster.length === 0) {
+        // Start new cluster
+        currentCluster = [commit];
+        clusterStart = commitDate;
+        clusterEnd = commitDate;
+      } else if (clusterEnd && commitDate.getTime() - clusterEnd.getTime() <= clusterDuration) {
+        // Add to current cluster
+        currentCluster.push(commit);
+        clusterEnd = commitDate;
+      } else {
+        // Save current cluster and start new one
+        if (clusterStart && clusterEnd) {
+          const midDate = new Date((clusterStart.getTime() + clusterEnd.getTime()) / 2);
+          clusters.push({
+            startDate: clusterStart,
+            endDate: clusterEnd,
+            commits: currentCluster,
+            position: getDatePosition(midDate)
+          });
+        }
+        currentCluster = [commit];
+        clusterStart = commitDate;
+        clusterEnd = commitDate;
+      }
+    }
+
+    // Don't forget the last cluster
+    if (currentCluster.length > 0 && clusterStart && clusterEnd) {
+      const midDate = new Date((clusterStart.getTime() + clusterEnd.getTime()) / 2);
+      clusters.push({
+        startDate: clusterStart,
+        endDate: clusterEnd,
+        commits: currentCluster,
+        position: getDatePosition(midDate)
+      });
+    }
+
+    return clusters;
+  }, [visibleCommits, zoomLevel, getDatePosition]);
+
+  // Determine dot size based on zoom level and cluster size
+  const getDotSize = (commitCount: number): string => {
+    if (zoomLevel === 'day') return 'w-2 h-2';
+    if (zoomLevel === 'week') return 'w-2.5 h-2.5';
+    if (commitCount > 10) return 'w-4 h-4';
+    if (commitCount > 5) return 'w-3.5 h-3.5';
+    return 'w-3 h-3';
+  };
+
+  if (clusteredData.length === 0) return null;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-5">
+      {clusteredData.map((cluster, idx) => {
+        const isCluster = cluster.commits.length > 1;
+        const firstCommit = cluster.commits[0];
+        const dotSize = getDotSize(cluster.commits.length);
+
+        return (
+          <Tooltip key={idx}>
+            <TooltipTrigger asChild>
+              <div
+                className={cn(
+                  'absolute bottom-2 -translate-x-1/2 pointer-events-auto cursor-pointer transition-transform hover:scale-125',
+                  dotSize,
+                  'rounded-full',
+                  isCluster
+                    ? 'bg-blue-500/80 border border-blue-400'
+                    : 'bg-blue-400/70'
+                )}
+                style={{ left: cluster.position }}
+              >
+                {/* Show count badge for clusters with many commits */}
+                {cluster.commits.length > 3 && (
+                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-medium text-blue-400 whitespace-nowrap">
+                    {cluster.commits.length}
+                  </span>
+                )}
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="top" className="max-w-xs">
+              {isCluster ? (
+                <div className="flex flex-col gap-1">
+                  <span className="font-semibold">
+                    {t('timeline.commits.cluster', { count: cluster.commits.length })}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {cluster.startDate.toLocaleDateString()} - {cluster.endDate.toLocaleDateString()}
+                  </span>
+                  <div className="text-xs max-h-32 overflow-auto">
+                    {cluster.commits.slice(0, 5).map((commit, i) => (
+                      <div key={i} className="truncate py-0.5 border-t border-border/30 first:border-t-0">
+                        <span className="font-mono text-muted-foreground">{commit.hash}</span>{' '}
+                        <span>{commit.message}</span>
+                      </div>
+                    ))}
+                    {cluster.commits.length > 5 && (
+                      <div className="text-muted-foreground pt-1">
+                        +{cluster.commits.length - 5} more...
+                      </div>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div className="flex flex-col gap-0.5">
+                  <span className="font-mono text-xs text-muted-foreground">{firstCommit?.hash}</span>
+                  <span className="font-medium">{firstCommit?.message}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {t('timeline.commits.by', { author: firstCommit?.author })}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {new Date(firstCommit?.date ?? '').toLocaleString()}
+                  </span>
+                </div>
+              )}
+            </TooltipContent>
+          </Tooltip>
+        );
+      })}
+    </div>
+  );
+}
+
+/**
+ * TagMarkers - Renders tag/release markers as vertical dashed lines with labels
+ */
+interface TagMarkersProps {
+  tags: TimelineGitTag[];
+  milestones: TimelineMilestone[];
+  zoomLevel: TimelineZoomLevel;
+  visibleStartDate: Date;
+  visibleEndDate: Date;
+  totalWidth: number;
+}
+
+function TagMarkers({
+  tags,
+  milestones,
+  zoomLevel,
+  visibleStartDate,
+  visibleEndDate,
+  totalWidth
+}: TagMarkersProps) {
+  const { t } = useTranslation('tasks');
+
+  // Calculate position for a date
+  const getDatePosition = useCallback((date: Date): number => {
+    const startMs = visibleStartDate.getTime();
+    const endMs = visibleEndDate.getTime();
+    const dateMs = date.getTime();
+    return ((dateMs - startMs) / (endMs - startMs)) * totalWidth;
+  }, [visibleStartDate, visibleEndDate, totalWidth]);
+
+  // Filter and position milestones within visible range
+  const visibleMilestones = useMemo(() => {
+    return milestones
+      .filter(milestone => {
+        const milestoneDate = new Date(milestone.date);
+        return milestoneDate >= visibleStartDate && milestoneDate <= visibleEndDate;
+      })
+      .map(milestone => ({
+        ...milestone,
+        position: getDatePosition(new Date(milestone.date))
+      }));
+  }, [milestones, visibleStartDate, visibleEndDate, getDatePosition]);
+
+  if (visibleMilestones.length === 0) return null;
+
+  return (
+    <div className="absolute inset-0 pointer-events-none z-10">
+      {visibleMilestones.map((milestone, idx) => {
+        const isRelease = milestone.type === 'release';
+        const milestoneDate = new Date(milestone.date);
+
+        return (
+          <Tooltip key={milestone.id || idx}>
+            <TooltipTrigger asChild>
+              <div
+                className="absolute top-0 bottom-0 pointer-events-auto cursor-pointer group"
+                style={{ left: milestone.position }}
+              >
+                {/* Vertical dashed line */}
+                <div
+                  className={cn(
+                    'absolute top-0 bottom-0 w-px border-l-2 border-dashed',
+                    isRelease
+                      ? 'border-green-500/70 group-hover:border-green-400'
+                      : 'border-amber-500/70 group-hover:border-amber-400'
+                  )}
+                />
+                {/* Diamond marker at top */}
+                <div
+                  className={cn(
+                    'absolute -top-1 -left-1.5 w-3 h-3 rotate-45 transition-transform group-hover:scale-110',
+                    isRelease
+                      ? 'bg-green-500 border border-green-400'
+                      : 'bg-amber-500 border border-amber-400'
+                  )}
+                />
+                {/* Label */}
+                <div
+                  className={cn(
+                    'absolute top-4 -left-8 w-16 text-center text-[10px] font-semibold truncate transition-opacity',
+                    isRelease
+                      ? 'text-green-500 group-hover:text-green-400'
+                      : 'text-amber-500 group-hover:text-amber-400'
+                  )}
+                >
+                  {milestone.name}
+                </div>
+              </div>
+            </TooltipTrigger>
+            <TooltipContent side="right" className="max-w-xs">
+              <div className="flex flex-col gap-1">
+                <div className="flex items-center gap-1.5">
+                  {isRelease ? (
+                    <Tag className="h-3.5 w-3.5 text-green-500" />
+                  ) : (
+                    <Tag className="h-3.5 w-3.5 text-amber-500" />
+                  )}
+                  <span className="font-semibold">{milestone.name}</span>
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {isRelease ? t('timeline.tags.release') : t('timeline.tags.tag')}
+                </span>
+                <span className="text-xs text-muted-foreground">
+                  {milestoneDate.toLocaleDateString(undefined, {
+                    weekday: 'short',
+                    year: 'numeric',
+                    month: 'short',
+                    day: 'numeric'
+                  })}
+                </span>
+                {milestone.description && (
+                  <span className="text-xs mt-1 border-t border-border pt-1">
+                    {milestone.description}
+                  </span>
+                )}
+              </div>
+            </TooltipContent>
+          </Tooltip>
+        );
+      })}
     </div>
   );
 }
@@ -627,6 +981,16 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
   const { t } = useTranslation(['tasks', 'common']);
   const { showArchived } = useViewState();
 
+  // Git history hook
+  const {
+    commits,
+    tags,
+    milestones,
+    genesisDate: gitGenesisDate,
+    firstReleaseTag,
+    isLoading: isLoadingGit
+  } = useGitHistory({ autoFetch: true });
+
   // State
   const [zoomLevel, setZoomLevel] = useState<TimelineZoomLevel>('month');
   const [scrollLeft, setScrollLeft] = useState(0);
@@ -643,19 +1007,28 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     return tasks.filter((t) => !t.metadata?.archivedAt);
   }, [tasks, showArchived]);
 
-  // Calculate visible date range (default: 6 months before and after today)
+  // Calculate visible date range - extends back to git genesis if available
   const { visibleStartDate, visibleEndDate } = useMemo(() => {
     const today = new Date();
-    const start = new Date(today);
+
+    // Default start: 6 months before today
+    let start = new Date(today);
     start.setMonth(start.getMonth() - 6);
     start.setDate(1); // Start of month
 
+    // Extend back to git genesis if it's earlier
+    if (gitGenesisDate && gitGenesisDate < start) {
+      start = new Date(gitGenesisDate);
+      start.setDate(1); // Start of month
+    }
+
+    // Default end: 6 months after today
     const end = new Date(today);
     end.setMonth(end.getMonth() + 6);
     end.setDate(0); // End of month
 
     return { visibleStartDate: start, visibleEndDate: end };
-  }, []);
+  }, [gitGenesisDate]);
 
   // Get current column width based on zoom level
   const columnWidth = ZOOM_COLUMN_WIDTHS[zoomLevel];
@@ -745,33 +1118,43 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     scrollToDate(anchor.date, true);
   }, [scrollToDate]);
 
-  // Placeholder dates for anchors - will be populated by git history in Phase 3
-  // For now, use earliest task date as genesis and latest task date as milestone
-  const { genesisDate, firstReleaseDate, nextMilestoneDate } = useMemo(() => {
-    // Find earliest task creation date as placeholder for genesis
-    let earliest: Date | undefined;
-    let latest: Date | undefined;
+  // Compute anchor dates from git history and milestones
+  const { genesisDate, firstReleaseDate, nextMilestoneDate, nextMilestoneName } = useMemo(() => {
+    // Genesis date from git history (earliest commit)
+    const genesis = gitGenesisDate ?? undefined;
 
-    for (const task of filteredTasks) {
-      const createdAt = new Date(task.createdAt);
-      if (!earliest || createdAt < earliest) {
-        earliest = createdAt;
-      }
-      if (!latest || createdAt > latest) {
-        latest = createdAt;
-      }
+    // First release date from git tags
+    let firstRelease: Date | undefined;
+    if (firstReleaseTag) {
+      firstRelease = new Date(firstReleaseTag.date);
     }
 
-    // Placeholder: genesis is earliest task, no first release, milestone is 1 month from now
-    const nextMilestone = new Date();
-    nextMilestone.setMonth(nextMilestone.getMonth() + 1);
+    // Find next milestone (first future milestone/tag)
+    const now = new Date();
+    let nextMilestone: Date | undefined;
+    let nextName: string | undefined;
+
+    // Look for future milestones from tags
+    const futureMilestones = milestones
+      .filter(m => new Date(m.date) > now)
+      .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+    if (futureMilestones.length > 0) {
+      nextMilestone = new Date(futureMilestones[0].date);
+      nextName = futureMilestones[0].name;
+    } else {
+      // Fallback: 1 month from now as placeholder
+      nextMilestone = new Date();
+      nextMilestone.setMonth(nextMilestone.getMonth() + 1);
+    }
 
     return {
-      genesisDate: earliest,
-      firstReleaseDate: undefined, // Will be set when git tags are loaded
-      nextMilestoneDate: nextMilestone
+      genesisDate: genesis,
+      firstReleaseDate: firstRelease,
+      nextMilestoneDate: nextMilestone,
+      nextMilestoneName: nextName
     };
-  }, [filteredTasks]);
+  }, [gitGenesisDate, firstReleaseTag, milestones]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -788,6 +1171,7 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
             genesisDate={genesisDate}
             firstReleaseDate={firstReleaseDate}
             nextMilestoneDate={nextMilestoneDate}
+            nextMilestoneName={nextMilestoneName}
           />
 
           <Separator orientation="vertical" className="h-6" />
@@ -899,6 +1283,9 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
             onTaskClick={handleTaskClick}
             onScroll={handleScroll}
             scrollRef={gridScrollRef}
+            commits={commits}
+            tags={tags}
+            milestones={milestones}
           />
         </div>
       </div>
