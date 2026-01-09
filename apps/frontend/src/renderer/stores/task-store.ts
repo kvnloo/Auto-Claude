@@ -110,13 +110,12 @@ export const useTaskStore = create<TaskState>()(
     })),
 
   updateTask: (taskId, updates) =>
-    set((state) => {
-      const index = findTaskIndex(state.tasks, taskId);
-      if (index === -1) return state;
+    set((draft) => {
+      const index = findTaskIndex(draft.tasks, taskId);
+      if (index === -1) return;
 
-      return {
-        tasks: updateTaskAtIndex(state.tasks, index, (t) => ({ ...t, ...updates }))
-      };
+      // Direct mutation with immer - no need for spread operations
+      Object.assign(draft.tasks[index], updates);
     }),
 
   updateTaskStatus: (taskId, status) =>
