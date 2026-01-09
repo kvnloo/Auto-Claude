@@ -172,7 +172,12 @@
         "progress": "Progression : {{percent}}% ({{completed}}/{{total}} sous-tâches)",
         "noSubtasks": "Aucune sous-tâche définie",
         "clickToOpen": "Cliquez pour voir les détails"
-      }
+      },
+      "resizeHandle": {
+        "left": "Redimensionner la date de début",
+        "right": "Redimensionner la date de fin"
+      },
+      "resizeHint": "Glissez les bords pour redimensionner"
     },
     "dependencyCycle": {
       "warningTitle": "Cycle de dépendance",

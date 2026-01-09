@@ -1,4 +1,4 @@
-import { memo, useMemo, forwardRef } from 'react';
+import { memo, useMemo, useCallback, useState } from 'react';
 import { useTranslation } from 'react-i18next';
 import { useDraggable } from '@dnd-kit/core';
 import { CSS } from '@dnd-kit/utilities';
@@ -7,6 +7,11 @@ import { cn } from '../lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { getTaskDateRange } from '../lib/timeline-utils';
 import type { Task, TaskStatus, Subtask } from '../../shared/types';
+
+/**
+ * Resize edge type - indicates which edge of the task bar is being resized
+ */
+export type ResizeEdge = 'left' | 'right';
 
 /**
  * Props for TimelineTaskBar component
@@ -28,10 +33,18 @@ export interface TimelineTaskBarProps {
   isDraggable?: boolean;
   /** Whether this task is currently being dragged */
   isDragging?: boolean;
+  /** Whether resizing is enabled for this task bar */
+  isResizable?: boolean;
+  /** Which edge is currently being resized (if any) */
+  resizingEdge?: ResizeEdge | null;
   /** Callback when task is clicked */
   onClick: (task: Task) => void;
   /** Callback when task is hovered */
   onHover?: (task: Task | null) => void;
+  /** Callback when resize starts on an edge */
+  onResizeStart?: (task: Task, edge: ResizeEdge) => void;
+  /** Callback when resize ends */
+  onResizeEnd?: (task: Task, edge: ResizeEdge, deltaPixels: number) => void;
 }
 
 /**
@@ -158,6 +171,8 @@ function timelineTaskBarPropsAreEqual(
     prevProps.isInCycle === nextProps.isInCycle &&
     prevProps.isDraggable === nextProps.isDraggable &&
     prevProps.isDragging === nextProps.isDragging &&
+    prevProps.isResizable === nextProps.isResizable &&
+    prevProps.resizingEdge === nextProps.resizingEdge &&
     prevProps.onClick === nextProps.onClick &&
     prevProps.onHover === nextProps.onHover
   ) {
@@ -186,7 +201,9 @@ function timelineTaskBarPropsAreEqual(
     prevProps.isHovered === nextProps.isHovered &&
     prevProps.isInCycle === nextProps.isInCycle &&
     prevProps.isDraggable === nextProps.isDraggable &&
-    prevProps.isDragging === nextProps.isDragging
+    prevProps.isDragging === nextProps.isDragging &&
+    prevProps.isResizable === nextProps.isResizable &&
+    prevProps.resizingEdge === nextProps.resizingEdge
   );
 }
 
@@ -218,10 +235,18 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
   isInCycle = false,
   isDraggable = true,
   isDragging: isDraggingProp = false,
+  isResizable = true,
+  resizingEdge = null,
   onClick,
-  onHover
+  onHover,
+  onResizeStart,
+  onResizeEnd
 }: TimelineTaskBarProps) {
   const { t } = useTranslation('tasks');
+
+  // Local resize tracking state for visual feedback during resize
+  const [localResizeEdge, setLocalResizeEdge] = useState<ResizeEdge | null>(null);
+  const [resizeStartX, setResizeStartX] = useState<number>(0);
 
   // Setup draggable functionality using @dnd-kit/core
   // We use a unique ID that includes task ID to ensure each bar is uniquely identifiable
@@ -245,6 +270,10 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
 
   // Use internal drag state or prop (for DragOverlay coordination)
   const isDragging = isDraggingInternal || isDraggingProp;
+
+  // Combined resize state - either from parent prop or local state
+  const isResizing = localResizeEdge !== null || resizingEdge !== null;
+  const currentResizeEdge = resizingEdge ?? localResizeEdge;
 
   // Calculate date range for tooltip
   const dateRange = useMemo(() => getTaskDateRange(task), [task]);
@@ -278,8 +307,8 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
     const textColor = getStatusTextColor(task.status);
 
     return cn(
-      // Base bar styles
-      'absolute h-6 rounded-md cursor-pointer transition-all duration-150',
+      // Base bar styles - 'group' enables group-hover for child elements (resize handles)
+      'group absolute h-6 rounded-md cursor-pointer transition-all duration-150',
       'flex items-center overflow-hidden',
       // Status-based background color
       bgColor,
@@ -287,20 +316,22 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
       // Border for selected/hovered states
       'border',
       isSelected ? `${borderColor} border-2 shadow-md` : 'border-transparent',
-      // Hover effects (disabled during drag)
-      !isDragging && 'hover:brightness-110 hover:shadow-sm',
+      // Hover effects (disabled during drag or resize)
+      !isDragging && !isResizing && 'hover:brightness-110 hover:shadow-sm',
       // Highlight when linked artifacts are being viewed
-      isHovered && !isDragging && 'ring-2 ring-primary/50 ring-offset-1 ring-offset-background',
+      isHovered && !isDragging && !isResizing && 'ring-2 ring-primary/50 ring-offset-1 ring-offset-background',
       // Warning ring for tasks in dependency cycles
-      isInCycle && !isDragging && 'ring-2 ring-red-500/70 ring-offset-1 ring-offset-background',
+      isInCycle && !isDragging && !isResizing && 'ring-2 ring-red-500/70 ring-offset-1 ring-offset-background',
       // Drag state styling
       isDragging && 'opacity-90 shadow-lg ring-2 ring-primary/70 cursor-grabbing',
-      // Draggable cursor when enabled
-      isDraggable && !isDragging && 'cursor-grab',
+      // Resize state styling
+      isResizing && 'opacity-95 shadow-md ring-2 ring-primary/50',
+      // Draggable cursor when enabled (but not when resizing)
+      isDraggable && !isDragging && !isResizing && 'cursor-grab',
       // Touch handling for mobile
       'touch-none'
     );
-  }, [task.status, isSelected, isHovered, isInCycle, isDragging, isDraggable]);
+  }, [task.status, isSelected, isHovered, isInCycle, isDragging, isDraggable, isResizing]);
 
   // Handle mouse events for linked artifact highlighting
   const handleMouseEnter = () => {
@@ -316,11 +347,65 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
   };
 
   const handleClick = () => {
-    // Don't trigger click when dragging (user might have just finished dragging)
-    if (!isDragging) {
+    // Don't trigger click when dragging or resizing (user might have just finished)
+    if (!isDragging && !localResizeEdge && !resizingEdge) {
       onClick(task);
     }
   };
+
+  /**
+   * Handle resize start - triggered on mousedown on a resize handle
+   * Uses pointer capture for reliable tracking across the document
+   */
+  const handleResizeStart = useCallback((edge: ResizeEdge) => (e: React.MouseEvent | React.PointerEvent) => {
+    // Prevent triggering drag or click handlers
+    e.stopPropagation();
+    e.preventDefault();
+
+    // Capture the pointer for reliable tracking
+    (e.target as HTMLElement).setPointerCapture((e as React.PointerEvent).pointerId);
+
+    setLocalResizeEdge(edge);
+    setResizeStartX(e.clientX);
+
+    // Notify parent of resize start
+    onResizeStart?.(task, edge);
+  }, [task, onResizeStart]);
+
+  /**
+   * Handle pointer move during resize
+   */
+  const handleResizeMove = useCallback((e: React.PointerEvent) => {
+    if (!localResizeEdge) return;
+
+    // The actual delta calculation will happen in the parent component
+    // This handler is mainly for visual feedback during resize
+    e.stopPropagation();
+    e.preventDefault();
+  }, [localResizeEdge]);
+
+  /**
+   * Handle resize end - triggered on pointerup
+   */
+  const handleResizeEnd = useCallback((e: React.PointerEvent) => {
+    if (!localResizeEdge) return;
+
+    e.stopPropagation();
+    e.preventDefault();
+
+    // Release pointer capture
+    (e.target as HTMLElement).releasePointerCapture(e.pointerId);
+
+    // Calculate the pixel delta
+    const deltaPixels = e.clientX - resizeStartX;
+
+    // Notify parent of resize end with the delta
+    onResizeEnd?.(task, localResizeEdge, deltaPixels);
+
+    // Reset local state
+    setLocalResizeEdge(null);
+    setResizeStartX(0);
+  }, [task, localResizeEdge, resizeStartX, onResizeEnd]);
 
   // Minimum width thresholds for content display
   const showTitle = width > 60;
@@ -329,6 +414,9 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
   const showCycleBadge = isInCycle && width > 50;
   // Show drag handle when bar is wide enough and dragging is enabled
   const showDragHandle = isDraggable && width > 30;
+  // Show resize handles when bar is wide enough and resizing is enabled
+  // Resize handles need less space than drag handle since they're on the edges
+  const showResizeHandles = isResizable && width > 20 && !isDragging;
 
   // Format dates for tooltip
   const startDateStr = formatTooltipDate(dateRange.startDate);
@@ -363,6 +451,54 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
           {...attributes}
           {...listeners}
         >
+          {/* Left resize handle - adjusts start date */}
+          {showResizeHandles && (
+            <div
+              className={cn(
+                'absolute left-0 top-0 bottom-0 w-2 cursor-ew-resize z-30',
+                'flex items-center justify-center',
+                'opacity-0 group-hover:opacity-100 hover:opacity-100 transition-opacity duration-150',
+                // Visual indicator - small vertical line/grip
+                'before:content-[""] before:absolute before:left-0.5 before:top-1/2 before:-translate-y-1/2',
+                'before:w-0.5 before:h-4 before:bg-white/50 before:rounded-full',
+                // Enhanced visibility during resize
+                (currentResizeEdge === 'left') && 'opacity-100 before:bg-white/80 before:h-5'
+              )}
+              onPointerDown={handleResizeStart('left')}
+              onPointerMove={handleResizeMove}
+              onPointerUp={handleResizeEnd}
+              onPointerCancel={handleResizeEnd}
+              role="slider"
+              aria-label={t('timeline.taskBar.resizeHandle.left')}
+              aria-orientation="horizontal"
+              tabIndex={-1}
+            />
+          )}
+
+          {/* Right resize handle - adjusts duration/end date */}
+          {showResizeHandles && (
+            <div
+              className={cn(
+                'absolute right-0 top-0 bottom-0 w-2 cursor-ew-resize z-30',
+                'flex items-center justify-center',
+                'opacity-0 group-hover:opacity-100 hover:opacity-100 transition-opacity duration-150',
+                // Visual indicator - small vertical line/grip
+                'before:content-[""] before:absolute before:right-0.5 before:top-1/2 before:-translate-y-1/2',
+                'before:w-0.5 before:h-4 before:bg-white/50 before:rounded-full',
+                // Enhanced visibility during resize
+                (currentResizeEdge === 'right') && 'opacity-100 before:bg-white/80 before:h-5'
+              )}
+              onPointerDown={handleResizeStart('right')}
+              onPointerMove={handleResizeMove}
+              onPointerUp={handleResizeEnd}
+              onPointerCancel={handleResizeEnd}
+              role="slider"
+              aria-label={t('timeline.taskBar.resizeHandle.right')}
+              aria-orientation="horizontal"
+              tabIndex={-1}
+            />
+          )}
+
           {/* Progress bar overlay (background) */}
           {showProgressBar && progress.percent > 0 && (
             <div
@@ -467,11 +603,20 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
             </span>
           )}
 
-          {/* Drag hint when draggable */}
-          {isDraggable && (
-            <span className="text-xs text-primary/70 mt-0.5">
-              {t('timeline.dragToSchedule')}
-            </span>
+          {/* Drag and resize hints when enabled */}
+          {(isDraggable || isResizable) && (
+            <div className="flex flex-col gap-0.5 mt-0.5">
+              {isDraggable && (
+                <span className="text-xs text-primary/70">
+                  {t('timeline.dragToSchedule')}
+                </span>
+              )}
+              {isResizable && (
+                <span className="text-xs text-primary/70">
+                  {t('timeline.taskBar.resizeHint')}
+                </span>
+              )}
+            </div>
           )}
 
           {/* Click hint */}

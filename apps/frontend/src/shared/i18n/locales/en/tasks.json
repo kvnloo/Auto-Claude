@@ -172,7 +172,12 @@
         "progress": "Progress: {{percent}}% ({{completed}}/{{total}} subtasks)",
         "noSubtasks": "No subtasks defined",
         "clickToOpen": "Click to view details"
-      }
+      },
+      "resizeHandle": {
+        "left": "Resize task start date",
+        "right": "Resize task end date"
+      },
+      "resizeHint": "Drag edges to resize"
     },
     "dependencyCycle": {
       "warningTitle": "Dependency Cycle",
