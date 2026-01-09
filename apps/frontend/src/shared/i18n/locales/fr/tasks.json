@@ -173,6 +173,12 @@
         "noSubtasks": "Aucune sous-tâche définie",
         "clickToOpen": "Cliquez pour voir les détails"
       }
+    },
+    "dependencyCycle": {
+      "warningTitle": "Cycle de dépendance",
+      "warningDescription": "Cette tâche fait partie d'une chaîne de dépendances circulaire",
+      "badgeLabel": "Cycle",
+      "tooltip": "Dépendance circulaire détectée - les tâches ne peuvent pas être ordonnées correctement"
     }
   }
 }

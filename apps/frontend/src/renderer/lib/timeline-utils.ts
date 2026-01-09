@@ -486,3 +486,190 @@ export function getArrowheadMarkerAttrs(
     fillClass
   };
 }
+
+/**
+ * Result of dependency cycle detection
+ */
+export interface CycleDetectionResult {
+  /** True if any cycles were detected */
+  hasCycles: boolean;
+  /** Array of task specIds involved in cycles */
+  cyclicTaskIds: string[];
+  /** Set version for efficient O(1) lookups */
+  cyclicTaskIdSet: Set<string>;
+  /** Array of individual cycles, each containing the task specIds in that cycle */
+  cycles: string[][];
+}
+
+/**
+ * Detect dependency cycles among tasks.
+ *
+ * Uses depth-first search (DFS) with coloring to detect cycles in the
+ * dependency graph. A cycle exists when we encounter a "gray" node (currently
+ * being processed) during DFS traversal.
+ *
+ * The algorithm:
+ * 1. Build adjacency list from task dependencies
+ * 2. For each unvisited node, start DFS
+ * 3. Mark nodes as gray (in progress) or black (completed)
+ * 4. If we visit a gray node, we found a cycle - trace back to identify cycle members
+ *
+ * @param tasks Array of tasks to check for dependency cycles
+ * @returns CycleDetectionResult with information about detected cycles
+ *
+ * @example
+ * ```tsx
+ * // Tasks with circular dependency: A -> B -> C -> A
+ * const tasks = [
+ *   { specId: 'A', metadata: { dependsOnTaskIds: ['C'] } },
+ *   { specId: 'B', metadata: { dependsOnTaskIds: ['A'] } },
+ *   { specId: 'C', metadata: { dependsOnTaskIds: ['B'] } }
+ * ];
+ *
+ * const result = detectDependencyCycles(tasks);
+ * // result.hasCycles === true
+ * // result.cyclicTaskIds === ['A', 'B', 'C']
+ * // result.cycles === [['A', 'B', 'C']] (or similar ordering)
+ * ```
+ */
+export function detectDependencyCycles(tasks: Task[]): CycleDetectionResult {
+  // Build adjacency list: specId -> list of specIds it depends on
+  const adjacencyList = new Map<string, string[]>();
+  const taskSpecIds = new Set<string>();
+
+  for (const task of tasks) {
+    const specId = task.specId;
+    taskSpecIds.add(specId);
+
+    // Get dependencies, filtering to only existing tasks
+    const deps = task.metadata?.dependsOnTaskIds ?? [];
+    adjacencyList.set(specId, deps);
+  }
+
+  // Track node states: 0 = white (unvisited), 1 = gray (in progress), 2 = black (done)
+  const WHITE = 0;
+  const GRAY = 1;
+  const BLACK = 2;
+  const nodeState = new Map<string, number>();
+
+  // Parent tracking for cycle reconstruction
+  const parent = new Map<string, string>();
+
+  // Collect all cyclic nodes and individual cycles
+  const cyclicNodes = new Set<string>();
+  const detectedCycles: string[][] = [];
+
+  /**
+   * Reconstruct the cycle by following parent links back from the repeat node
+   */
+  function reconstructCycle(start: string, end: string): string[] {
+    const cycle: string[] = [end];
+    let current = start;
+
+    // Trace back from start until we reach end again
+    while (current !== end) {
+      cycle.push(current);
+      const p = parent.get(current);
+      if (!p) break;
+      current = p;
+    }
+
+    return cycle;
+  }
+
+  /**
+   * DFS traversal to detect cycles
+   * Returns true if a cycle is found starting from this node
+   */
+  function dfs(node: string, parentNode: string | null): boolean {
+    nodeState.set(node, GRAY);
+    if (parentNode !== null) {
+      parent.set(node, parentNode);
+    }
+
+    const neighbors = adjacencyList.get(node) ?? [];
+
+    for (const neighbor of neighbors) {
+      // Only consider neighbors that exist in our task set
+      if (!taskSpecIds.has(neighbor)) continue;
+
+      const state = nodeState.get(neighbor) ?? WHITE;
+
+      if (state === GRAY) {
+        // Found a back edge - this is a cycle!
+        const cycle = reconstructCycle(node, neighbor);
+        detectedCycles.push(cycle);
+
+        // Mark all nodes in the cycle as cyclic
+        for (const cycleNode of cycle) {
+          cyclicNodes.add(cycleNode);
+        }
+
+        return true;
+      } else if (state === WHITE) {
+        // Continue DFS
+        if (dfs(neighbor, node)) {
+          // Propagate that we're part of a cycle path
+          cyclicNodes.add(node);
+        }
+      }
+    }
+
+    nodeState.set(node, BLACK);
+    return false;
+  }
+
+  // Run DFS from each unvisited node
+  for (const specId of taskSpecIds) {
+    const state = nodeState.get(specId) ?? WHITE;
+    if (state === WHITE) {
+      parent.clear(); // Reset parent tracking for new DFS tree
+      dfs(specId, null);
+    }
+  }
+
+  return {
+    hasCycles: cyclicNodes.size > 0,
+    cyclicTaskIds: Array.from(cyclicNodes),
+    cyclicTaskIdSet: cyclicNodes,
+    cycles: detectedCycles
+  };
+}
+
+/**
+ * Check if a specific task is part of a dependency cycle.
+ * Convenience function for UI components.
+ *
+ * @param taskSpecId The spec ID of the task to check
+ * @param cyclicTaskIdSet Set of cyclic task IDs from detectDependencyCycles
+ * @returns True if the task is involved in a cycle
+ */
+export function isTaskInCycle(taskSpecId: string, cyclicTaskIdSet: Set<string>): boolean {
+  return cyclicTaskIdSet.has(taskSpecId);
+}
+
+/**
+ * Get a human-readable description of cycles for UI display.
+ * Returns a formatted string showing the cycle path.
+ *
+ * @param cycles Array of cycles from detectDependencyCycles
+ * @param taskNameMap Optional map of specId to task name for prettier display
+ * @returns Array of formatted cycle descriptions
+ *
+ * @example
+ * ```ts
+ * const descriptions = formatCycleDescriptions([['A', 'B', 'C']]);
+ * // Returns: ['A → B → C → A']
+ * ```
+ */
+export function formatCycleDescriptions(
+  cycles: string[][],
+  taskNameMap?: Map<string, string>
+): string[] {
+  return cycles.map(cycle => {
+    const getLabel = (id: string) => taskNameMap?.get(id) ?? id;
+    const labels = cycle.map(getLabel);
+    // Close the cycle by adding the first element at the end
+    return [...labels, labels[0]].join(' → ');
+  });
+}

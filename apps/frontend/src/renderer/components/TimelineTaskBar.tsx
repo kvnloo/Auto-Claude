@@ -1,5 +1,6 @@
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
+import { AlertTriangle } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { getTaskDateRange } from '../lib/timeline-utils';
@@ -19,6 +20,8 @@ export interface TimelineTaskBarProps {
   isSelected?: boolean;
   /** Whether this task is currently hovered (for linked artifact highlighting) */
   isHovered?: boolean;
+  /** Whether this task is part of a dependency cycle */
+  isInCycle?: boolean;
   /** Callback when task is clicked */
   onClick: (task: Task) => void;
   /** Callback when task is hovered */
@@ -146,6 +149,7 @@ function timelineTaskBarPropsAreEqual(
     prevProps.width === nextProps.width &&
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.isHovered === nextProps.isHovered &&
+    prevProps.isInCycle === nextProps.isInCycle &&
     prevProps.onClick === nextProps.onClick &&
     prevProps.onHover === nextProps.onHover
   ) {
@@ -171,7 +175,8 @@ function timelineTaskBarPropsAreEqual(
     prevProps.left === nextProps.left &&
     prevProps.width === nextProps.width &&
     prevProps.isSelected === nextProps.isSelected &&
-    prevProps.isHovered === nextProps.isHovered
+    prevProps.isHovered === nextProps.isHovered &&
+    prevProps.isInCycle === nextProps.isInCycle
   );
 }
 
@@ -199,6 +204,7 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
   width,
   isSelected = false,
   isHovered = false,
+  isInCycle = false,
   onClick,
   onHover
 }: TimelineTaskBarProps) {
@@ -232,9 +238,11 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
       // Hover effects
       'hover:brightness-110 hover:shadow-sm',
       // Highlight when linked artifacts are being viewed
-      isHovered && 'ring-2 ring-primary/50 ring-offset-1 ring-offset-background'
+      isHovered && 'ring-2 ring-primary/50 ring-offset-1 ring-offset-background',
+      // Warning ring for tasks in dependency cycles
+      isInCycle && 'ring-2 ring-red-500/70 ring-offset-1 ring-offset-background'
     );
-  }, [task.status, isSelected, isHovered]);
+  }, [task.status, isSelected, isHovered, isInCycle]);
 
   // Handle mouse events for linked artifact highlighting
   const handleMouseEnter = () => {
@@ -252,6 +260,8 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
   // Minimum width thresholds for content display
   const showTitle = width > 60;
   const showProgressBar = width > 40 && progress.total > 0;
+  // Show cycle badge when bar is wide enough and task is in a cycle
+  const showCycleBadge = isInCycle && width > 50;
 
   // Format dates for tooltip
   const startDateStr = formatTooltipDate(dateRange.startDate);
@@ -291,6 +301,28 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
 
           {/* Content container - title and optional progress indicator */}
           <div className="relative flex items-center gap-1 px-2 w-full z-10">
+            {/* Cycle warning badge - positioned at start of bar */}
+            {showCycleBadge && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span className="flex-shrink-0 flex items-center justify-center w-4 h-4 bg-red-500 rounded-sm">
+                    <AlertTriangle className="h-3 w-3 text-white" />
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="top" className="max-w-xs">
+                  <div className="flex flex-col gap-0.5">
+                    <span className="font-semibold text-red-500 flex items-center gap-1">
+                      <AlertTriangle className="h-3.5 w-3.5" />
+                      {t('timeline.dependencyCycle.warningTitle')}
+                    </span>
+                    <span className="text-xs text-muted-foreground">
+                      {t('timeline.dependencyCycle.tooltip')}
+                    </span>
+                  </div>
+                </TooltipContent>
+              </Tooltip>
+            )}
+
             {showTitle && (
               <span className="truncate text-xs font-medium flex-1 min-w-0">
                 {task.title}
@@ -318,6 +350,16 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
               endDate: endDateStr
             })}
           </span>
+
+          {/* Cycle warning banner */}
+          {isInCycle && (
+            <div className="flex items-center gap-1.5 px-2 py-1 bg-red-500/10 border border-red-500/30 rounded text-xs">
+              <AlertTriangle className="h-3.5 w-3.5 text-red-500 flex-shrink-0" />
+              <span className="text-red-600 dark:text-red-400">
+                {t('timeline.dependencyCycle.warningDescription')}
+              </span>
+            </div>
+          )}
 
           {/* Progress indicator */}
           {progress.total > 0 ? (
