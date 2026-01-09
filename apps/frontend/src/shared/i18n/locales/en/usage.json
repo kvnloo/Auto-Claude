@@ -59,6 +59,20 @@
     "title": "Usage Trends",
     "chartPlaceholder": "Usage trend chart will be displayed here"
   },
+  "chart": {
+    "title": "Daily Usage Trends",
+    "tokens": "Tokens",
+    "cost": "Cost",
+    "sessions": "Sessions",
+    "legendTokens": "Token Usage",
+    "legendCost": "Cost (USD)",
+    "noData": "No usage data for the selected period",
+    "viewModes": {
+      "both": "Both",
+      "tokens": "Tokens",
+      "cost": "Cost"
+    }
+  },
   "agents": {
     "title": "Usage by Agent",
     "chartPlaceholder": "Agent breakdown chart will be displayed here"

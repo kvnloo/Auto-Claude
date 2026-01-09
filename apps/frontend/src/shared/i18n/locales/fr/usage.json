@@ -59,6 +59,20 @@
     "title": "Tendances d'Utilisation",
     "chartPlaceholder": "Le graphique des tendances d'utilisation sera affiche ici"
   },
+  "chart": {
+    "title": "Tendances Quotidiennes",
+    "tokens": "Tokens",
+    "cost": "Cout",
+    "sessions": "Sessions",
+    "legendTokens": "Utilisation des Tokens",
+    "legendCost": "Cout (USD)",
+    "noData": "Aucune donnee pour la periode selectionnee",
+    "viewModes": {
+      "both": "Les Deux",
+      "tokens": "Tokens",
+      "cost": "Cout"
+    }
+  },
   "agents": {
     "title": "Utilisation par Agent",
     "chartPlaceholder": "Le graphique de repartition par agent sera affiche ici"
