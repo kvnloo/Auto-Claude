@@ -3,9 +3,11 @@ import { useTranslation } from 'react-i18next';
 import { useViewState } from '../contexts/ViewStateContext';
 import { useGitHistory } from '../hooks';
 import {
+  AlertTriangle,
   Calendar,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Clock,
   Flag,
   GitBranch,
@@ -964,6 +966,59 @@ function JumpAnchorsBar({
 }
 
 /**
+ * ShallowHistoryIndicator - Shows a warning when git history may be incomplete
+ */
+interface ShallowHistoryIndicatorProps {
+  isShallow: boolean;
+  hasMore: boolean;
+  isLoadingMore: boolean;
+  onLoadMore: () => void;
+}
+
+function ShallowHistoryIndicator({
+  isShallow,
+  hasMore,
+  isLoadingMore,
+  onLoadMore
+}: ShallowHistoryIndicatorProps) {
+  const { t } = useTranslation('tasks');
+
+  if (!isShallow) return null;
+
+  return (
+    <div className="flex items-center gap-2 px-4 py-2 bg-amber-500/10 border-t border-amber-500/20">
+      <AlertTriangle className="h-4 w-4 text-amber-500 flex-shrink-0" />
+      <div className="flex-1 min-w-0">
+        <span className="text-xs font-medium text-amber-600 dark:text-amber-400">
+          {t('timeline.shallowHistory.title')}
+        </span>
+        <span className="text-xs text-amber-600/70 dark:text-amber-400/70 ml-2">
+          {t('timeline.shallowHistory.description')}
+        </span>
+      </div>
+      {hasMore && (
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onLoadMore}
+          disabled={isLoadingMore}
+          className="h-6 px-2 text-xs text-amber-600 hover:text-amber-700 hover:bg-amber-500/20"
+        >
+          {isLoadingMore ? (
+            <span className="animate-pulse">{t('timeline.shallowHistory.loadMore')}...</span>
+          ) : (
+            <>
+              <ChevronDown className="h-3 w-3 mr-1" />
+              {t('timeline.shallowHistory.loadMore')}
+            </>
+          )}
+        </Button>
+      )}
+    </div>
+  );
+}
+
+/**
  * Helper function to get week number
  */
 function getWeekNumber(date: Date): number {
@@ -988,7 +1043,11 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     milestones,
     genesisDate: gitGenesisDate,
     firstReleaseTag,
-    isLoading: isLoadingGit
+    isLoading: isLoadingGit,
+    isShallowHistory,
+    hasMore,
+    loadMore,
+    isLoadingMore
   } = useGitHistory({ autoFetch: true });
 
   // State
@@ -1289,6 +1348,14 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
           />
         </div>
       </div>
+
+      {/* Shallow history indicator */}
+      <ShallowHistoryIndicator
+        isShallow={isShallowHistory}
+        hasMore={hasMore}
+        isLoadingMore={isLoadingMore}
+        onLoadMore={loadMore}
+      />
 
       {/* Bottom status bar */}
       <TimelineStatusBar

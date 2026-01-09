@@ -159,6 +159,11 @@
     "tags": {
       "release": "Release",
       "tag": "Tag"
+    },
+    "shallowHistory": {
+      "title": "Incomplete History",
+      "description": "Git history may be incomplete. This can happen with shallow clones or when the commit limit is reached.",
+      "loadMore": "Load more history"
     }
   }
 }

@@ -19,6 +19,15 @@ interface ProjectState {
 }
 
 /**
+ * Response format from git history API
+ */
+interface GitHistoryApiResponse {
+  commits: Array<GitCommit & { hasParents?: boolean }>;
+  isShallowRepository: boolean;
+  oldestCommitHash?: string;
+}
+
+/**
  * Options for the useGitHistory hook
  */
 export interface UseGitHistoryOptions {
@@ -68,7 +77,7 @@ export interface UseGitHistoryReturn {
 /**
  * Convert GitCommit (from changelog) to TimelineGitCommit
  */
-function toTimelineCommit(commit: GitCommit): TimelineGitCommit {
+function toTimelineCommit(commit: GitCommit & { hasParents?: boolean }): TimelineGitCommit {
   return {
     hash: commit.hash,
     fullHash: commit.fullHash,
@@ -81,7 +90,7 @@ function toTimelineCommit(commit: GitCommit): TimelineGitCommit {
     filesChanged: commit.filesChanged,
     insertions: commit.insertions,
     deletions: commit.deletions,
-    hasParents: true // Assume true, will check for shallow detection
+    hasParents: commit.hasParents ?? true // Use API response, default to true
   };
 }
 
@@ -173,6 +182,7 @@ export function useGitHistory(
   const [lastFetchedAt, setLastFetchedAt] = useState<Date | null>(null);
   const [currentLimit, setCurrentLimit] = useState(initialLimit);
   const [totalCommitCount, setTotalCommitCount] = useState(0);
+  const [isShallowRepo, setIsShallowRepo] = useState(false);
 
   // Refs for caching
   const cacheKeyRef = useRef<string | null>(null);
@@ -221,8 +231,19 @@ export function useGitHistory(
         throw new Error(tagsResult.error ?? 'Failed to fetch Git tags');
       }
 
-      const rawCommits = historyResult.data ?? [];
+      // Handle both old format (array) and new format (object with commits and metadata)
+      const historyData = historyResult.data as GitHistoryApiResponse | Array<GitCommit & { hasParents?: boolean }>;
+      const isNewFormat = historyData && !Array.isArray(historyData) && 'commits' in historyData;
+
+      const rawCommits = isNewFormat
+        ? (historyData as GitHistoryApiResponse).commits
+        : (historyData as Array<GitCommit & { hasParents?: boolean }>) ?? [];
       const rawTags = tagsResult.data ?? [];
+
+      // Set shallow repository flag from API response
+      if (isNewFormat) {
+        setIsShallowRepo((historyData as GitHistoryApiResponse).isShallowRepository ?? false);
+      }
 
       // Convert to timeline types
       const timelineCommits = rawCommits.map(toTimelineCommit);
@@ -300,15 +321,24 @@ export function useGitHistory(
   }, [tags]);
 
   const isShallowHistory = useMemo((): boolean => {
+    // If the API explicitly tells us it's a shallow repository, trust that
+    if (isShallowRepo) return true;
+
     if (commits.length === 0) return false;
-    // Check if the oldest commit has no parents and there are many commits
-    // This is a heuristic - shallow clones usually have commits without parents
-    // at the boundary
+
+    // Check if the oldest commit has parents but we don't have access to them
+    // This indicates either a shallow clone or we've hit our fetch limit
     const oldestCommit = commits[commits.length - 1];
-    // If we fetched the max limit and the oldest commit appears to be cut off,
-    // it might be shallow
-    return commits.length >= currentLimit && oldestCommit?.hasParents === false;
-  }, [commits, currentLimit]);
+
+    // If the oldest commit has parents (is not a root commit) but we can't
+    // see earlier history, it means the history is incomplete
+    // This happens when:
+    // 1. Repository is a shallow clone
+    // 2. We've hit our commit fetch limit
+    const historyMayBeIncomplete = oldestCommit?.hasParents === true && commits.length >= currentLimit;
+
+    return historyMayBeIncomplete;
+  }, [commits, currentLimit, isShallowRepo]);
 
   const milestones = useMemo((): TimelineMilestone[] => {
     return tags.map(tagToMilestone);
