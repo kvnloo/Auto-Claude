@@ -806,6 +806,185 @@ export async function persistTaskSchedule(
   }
 }
 
+// ============================================
+// Linked Artifacts Helpers (commits, PRs, tags)
+// ============================================
+
+/**
+ * Type of artifact that can be linked to a task
+ */
+export type LinkedArtifactType = 'commit' | 'pr' | 'tag';
+
+/**
+ * Persist linking artifacts (commits, PRs, or tags) to a task
+ * Handles deduplication and proper array merging.
+ */
+export async function persistLinkArtifacts(
+  taskId: string,
+  artifacts: {
+    commits?: string[];
+    prs?: number[];
+    tags?: string[];
+  }
+): Promise<boolean> {
+  const store = useTaskStore.getState();
+
+  try {
+    // Find the current task to merge with existing arrays
+    const task = store.tasks.find(t => t.id === taskId || t.specId === taskId);
+    const currentMetadata = task?.metadata || {};
+
+    // Merge arrays, avoiding duplicates
+    const metadataUpdate: Partial<TaskMetadata> = {};
+
+    if (artifacts.commits && artifacts.commits.length > 0) {
+      const existingCommits = currentMetadata.linkedCommits || [];
+      const newCommits = [...new Set([...existingCommits, ...artifacts.commits])];
+      metadataUpdate.linkedCommits = newCommits;
+    }
+
+    if (artifacts.prs && artifacts.prs.length > 0) {
+      const existingPRs = currentMetadata.linkedPRs || [];
+      const newPRs = [...new Set([...existingPRs, ...artifacts.prs])];
+      metadataUpdate.linkedPRs = newPRs;
+    }
+
+    if (artifacts.tags && artifacts.tags.length > 0) {
+      const existingTags = currentMetadata.linkedTags || [];
+      const newTags = [...new Set([...existingTags, ...artifacts.tags])];
+      metadataUpdate.linkedTags = newTags;
+    }
+
+    // If no updates, return success
+    if (Object.keys(metadataUpdate).length === 0) {
+      return true;
+    }
+
+    // Call the IPC to persist changes
+    const result = await window.electronAPI.updateTask(taskId, {
+      metadata: metadataUpdate
+    });
+
+    if (result.success && result.data) {
+      // Update local state with the returned task data
+      store.updateTask(taskId, {
+        metadata: result.data.metadata,
+        updatedAt: new Date()
+      });
+      return true;
+    }
+
+    console.error('Failed to persist linked artifacts:', result.error);
+    return false;
+  } catch (error) {
+    console.error('Error persisting linked artifacts:', error);
+    return false;
+  }
+}
+
+/**
+ * Persist unlinking a single artifact from a task
+ */
+export async function persistUnlinkArtifact(
+  taskId: string,
+  type: LinkedArtifactType,
+  value: string | number
+): Promise<boolean> {
+  const store = useTaskStore.getState();
+
+  try {
+    // Find the current task to filter from existing arrays
+    const task = store.tasks.find(t => t.id === taskId || t.specId === taskId);
+    const currentMetadata = task?.metadata || {};
+
+    const metadataUpdate: Partial<TaskMetadata> = {};
+
+    switch (type) {
+      case 'commit': {
+        const existingCommits = currentMetadata.linkedCommits || [];
+        metadataUpdate.linkedCommits = existingCommits.filter(h => h !== value);
+        break;
+      }
+      case 'pr': {
+        const existingPRs = currentMetadata.linkedPRs || [];
+        metadataUpdate.linkedPRs = existingPRs.filter(n => n !== value);
+        break;
+      }
+      case 'tag': {
+        const existingTags = currentMetadata.linkedTags || [];
+        metadataUpdate.linkedTags = existingTags.filter(t => t !== value);
+        break;
+      }
+    }
+
+    // Call the IPC to persist changes
+    const result = await window.electronAPI.updateTask(taskId, {
+      metadata: metadataUpdate
+    });
+
+    if (result.success && result.data) {
+      // Update local state with the returned task data
+      store.updateTask(taskId, {
+        metadata: result.data.metadata,
+        updatedAt: new Date()
+      });
+      return true;
+    }
+
+    console.error('Failed to persist artifact unlink:', result.error);
+    return false;
+  } catch (error) {
+    console.error('Error persisting artifact unlink:', error);
+    return false;
+  }
+}
+
+/**
+ * Convenience helper to link a single commit
+ */
+export async function persistLinkCommit(taskId: string, commitHash: string): Promise<boolean> {
+  return persistLinkArtifacts(taskId, { commits: [commitHash] });
+}
+
+/**
+ * Convenience helper to link a single PR
+ */
+export async function persistLinkPR(taskId: string, prNumber: number): Promise<boolean> {
+  return persistLinkArtifacts(taskId, { prs: [prNumber] });
+}
+
+/**
+ * Convenience helper to link a single tag
+ */
+export async function persistLinkTag(taskId: string, tagName: string): Promise<boolean> {
+  return persistLinkArtifacts(taskId, { tags: [tagName] });
+}
+
+/**
+ * Convenience helper to unlink a commit
+ */
+export async function persistUnlinkCommit(taskId: string, commitHash: string): Promise<boolean> {
+  return persistUnlinkArtifact(taskId, 'commit', commitHash);
+}
+
+/**
+ * Convenience helper to unlink a PR
+ */
+export async function persistUnlinkPR(taskId: string, prNumber: number): Promise<boolean> {
+  return persistUnlinkArtifact(taskId, 'pr', prNumber);
+}
+
+/**
+ * Convenience helper to unlink a tag
+ */
+export async function persistUnlinkTag(taskId: string, tagName: string): Promise<boolean> {
+  return persistUnlinkArtifact(taskId, 'tag', tagName);
+}
+
+// ============================================
+// Task State Detection Helpers
+// ============================================
+
 /**
  * Check if a task is in human_review but has no completed subtasks.
  * This indicates the task crashed/exited before implementation completed

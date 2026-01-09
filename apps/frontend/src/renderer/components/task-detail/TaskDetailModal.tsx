@@ -32,7 +32,17 @@ import {
 } from 'lucide-react';
 import { cn } from '../../lib/utils';
 import { calculateProgress } from '../../lib/utils';
-import { startTask, stopTask, submitReview, recoverStuckTask, deleteTask, useTaskStore } from '../../stores/task-store';
+import {
+  startTask,
+  stopTask,
+  submitReview,
+  recoverStuckTask,
+  deleteTask,
+  useTaskStore,
+  persistUnlinkCommit,
+  persistUnlinkPR,
+  persistUnlinkTag
+} from '../../stores/task-store';
 import { TASK_STATUS_LABELS } from '../../../shared/constants';
 import { TaskEditDialog } from '../TaskEditDialog';
 import { useTaskDetail } from './hooks/useTaskDetail';
@@ -507,25 +517,16 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
                           // Will trigger ArtifactLinkDialog (implemented in 7.2)
                         }}
                         onUnlinkCommit={(commitHash) => {
-                          // Will call task-store update (implemented in 7.3)
-                          const linkedCommits = task.metadata?.linkedCommits?.filter(h => h !== commitHash) || [];
-                          useTaskStore.getState().updateTask(task.id, {
-                            metadata: { ...task.metadata, linkedCommits }
-                          });
+                          // Persist unlink to file and update local state
+                          persistUnlinkCommit(task.id, commitHash);
                         }}
                         onUnlinkPR={(prNumber) => {
-                          // Will call task-store update (implemented in 7.3)
-                          const linkedPRs = task.metadata?.linkedPRs?.filter(n => n !== prNumber) || [];
-                          useTaskStore.getState().updateTask(task.id, {
-                            metadata: { ...task.metadata, linkedPRs }
-                          });
+                          // Persist unlink to file and update local state
+                          persistUnlinkPR(task.id, prNumber);
                         }}
                         onUnlinkTag={(tagName) => {
-                          // Will call task-store update (implemented in 7.3)
-                          const linkedTags = task.metadata?.linkedTags?.filter(t => t !== tagName) || [];
-                          useTaskStore.getState().updateTask(task.id, {
-                            metadata: { ...task.metadata, linkedTags }
-                          });
+                          // Persist unlink to file and update local state
+                          persistUnlinkTag(task.id, tagName);
                         }}
                         disabled={state.isRunning && !state.isStuck}
                       />
