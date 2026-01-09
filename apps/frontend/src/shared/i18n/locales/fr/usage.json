@@ -77,6 +77,40 @@
     "title": "Utilisation par Agent",
     "chartPlaceholder": "Le graphique de repartition par agent sera affiche ici"
   },
+  "agentBreakdown": {
+    "title": "Repartition par Agent",
+    "noData": "Aucune donnee d'utilisation par agent disponible",
+    "totalTokens": "tokens au total",
+    "totalCost": "Cout Total",
+    "detailsTitle": "Details par Agent",
+    "agentNames": {
+      "planner": "Planificateur",
+      "coder": "Codeur",
+      "qa_reviewer": "Reviseur QA",
+      "qa_fixer": "Correcteur QA",
+      "spec_gatherer": "Collecteur Spec",
+      "spec_researcher": "Chercheur Spec",
+      "spec_writer": "Redacteur Spec",
+      "spec_critic": "Critique Spec",
+      "spec_discovery": "Decouverte Spec",
+      "spec_context": "Contexte Spec",
+      "spec_validation": "Validation Spec",
+      "insights": "Insights",
+      "pr_reviewer": "Reviseur PR",
+      "analysis": "Analyse",
+      "unknown": "Inconnu"
+    },
+    "tooltip": {
+      "tokens": "Tokens",
+      "cost": "Cout",
+      "sessions": "Sessions",
+      "percentage": "Part"
+    },
+    "card": {
+      "tokens": "tokens",
+      "sessions": "sessions"
+    }
+  },
   "specs": {
     "title": "Utilisation par Spec",
     "tablePlaceholder": "Le tableau d'utilisation par spec sera affiche ici"

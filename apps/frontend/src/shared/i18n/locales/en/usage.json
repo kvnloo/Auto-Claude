@@ -77,6 +77,40 @@
     "title": "Usage by Agent",
     "chartPlaceholder": "Agent breakdown chart will be displayed here"
   },
+  "agentBreakdown": {
+    "title": "Agent Usage Breakdown",
+    "noData": "No agent usage data available",
+    "totalTokens": "total tokens",
+    "totalCost": "Total Cost",
+    "detailsTitle": "Breakdown by Agent",
+    "agentNames": {
+      "planner": "Planner",
+      "coder": "Coder",
+      "qa_reviewer": "QA Reviewer",
+      "qa_fixer": "QA Fixer",
+      "spec_gatherer": "Spec Gatherer",
+      "spec_researcher": "Spec Researcher",
+      "spec_writer": "Spec Writer",
+      "spec_critic": "Spec Critic",
+      "spec_discovery": "Spec Discovery",
+      "spec_context": "Spec Context",
+      "spec_validation": "Spec Validation",
+      "insights": "Insights",
+      "pr_reviewer": "PR Reviewer",
+      "analysis": "Analysis",
+      "unknown": "Unknown"
+    },
+    "tooltip": {
+      "tokens": "Tokens",
+      "cost": "Cost",
+      "sessions": "Sessions",
+      "percentage": "Share"
+    },
+    "card": {
+      "tokens": "tokens",
+      "sessions": "sessions"
+    }
+  },
   "specs": {
     "title": "Usage by Spec",
     "tablePlaceholder": "Spec usage table will be displayed here"
