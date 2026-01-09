@@ -12,6 +12,7 @@ This module provides data models and utilities for:
 
 Example usage:
     from usage.models import TokenUsageRecord, AgentType, SessionOutcome
+    from usage.cost_calculator import CostCalculator
 
     record = TokenUsageRecord(
         spec_id="025-feature",
@@ -24,6 +25,11 @@ Example usage:
         model_name="claude-sonnet-4-5-20250929",
         outcome=SessionOutcome.SUCCESS,
     )
+
+    # Calculate cost
+    calculator = CostCalculator()
+    cost = calculator.calculate_cost(record)
+    print(calculator.format_cost_display(cost))
 """
 
 from usage.models import (
@@ -39,15 +45,34 @@ from usage.store import (
     FileLockError,
     FileLockTimeout,
 )
+from usage.cost_calculator import (
+    CostCalculator,
+    CostBreakdown,
+    ModelPricing,
+    CLAUDE_PRICING,
+    get_cost_calculator,
+    calculate_cost,
+    format_cost,
+)
 
 __all__ = [
+    # Models
     "AgentType",
     "SessionOutcome",
     "TokenUsageRecord",
     "TokenUsageSummary",
     "AgentUsageBreakdown",
+    # Store
     "TokenUsageStore",
     "TokenUsageStoreError",
     "FileLockError",
     "FileLockTimeout",
+    # Cost Calculator
+    "CostCalculator",
+    "CostBreakdown",
+    "ModelPricing",
+    "CLAUDE_PRICING",
+    "get_cost_calculator",
+    "calculate_cost",
+    "format_cost",
 ]
