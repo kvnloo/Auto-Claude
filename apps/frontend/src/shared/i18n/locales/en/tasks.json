@@ -133,5 +133,22 @@
   },
   "subtasks": {
     "untitled": "Untitled subtask"
+  },
+  "timeline": {
+    "title": "Trajectory Timeline",
+    "today": "Today",
+    "genesis": "Genesis",
+    "firstRelease": "First Release",
+    "nextMilestone": "Next Milestone",
+    "jumpTo": "Jump to",
+    "zoomLevels": {
+      "quarter": "Quarter",
+      "month": "Month",
+      "week": "Week",
+      "day": "Day"
+    },
+    "noEstimate": "No estimate",
+    "dragToSchedule": "Drag to schedule",
+    "linkedArtifacts": "Linked Artifacts"
   }
 }
