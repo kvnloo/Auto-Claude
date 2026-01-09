@@ -1,7 +1,9 @@
 import { memo, useMemo } from 'react';
 import { useTranslation } from 'react-i18next';
 import { cn } from '../lib/utils';
-import type { Task, TaskStatus } from '../../shared/types';
+import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
+import { getTaskDateRange } from '../lib/timeline-utils';
+import type { Task, TaskStatus, Subtask } from '../../shared/types';
 
 /**
  * Props for TimelineTaskBar component
@@ -95,6 +97,39 @@ function getStatusTextColor(status: TaskStatus): string {
 }
 
 /**
+ * Calculate the progress percentage of subtasks
+ * Returns an object with percentage, completed count, and total count
+ */
+function calculateSubtaskProgress(subtasks: Subtask[]): {
+  percent: number;
+  completed: number;
+  total: number;
+} {
+  if (!subtasks || subtasks.length === 0) {
+    return { percent: 0, completed: 0, total: 0 };
+  }
+
+  const completed = subtasks.filter(
+    (subtask) => subtask.status === 'completed'
+  ).length;
+  const total = subtasks.length;
+  const percent = Math.round((completed / total) * 100);
+
+  return { percent, completed, total };
+}
+
+/**
+ * Format a date for display in the tooltip
+ */
+function formatTooltipDate(date: Date): string {
+  return date.toLocaleDateString(undefined, {
+    month: 'short',
+    day: 'numeric',
+    year: 'numeric'
+  });
+}
+
+/**
  * Custom comparator for React.memo - only re-render when relevant props change
  */
 function timelineTaskBarPropsAreEqual(
@@ -117,11 +152,22 @@ function timelineTaskBarPropsAreEqual(
     return true;
   }
 
+  // Compare subtask progress (shallow comparison)
+  const prevProgress = calculateSubtaskProgress(prevTask.subtasks);
+  const nextProgress = calculateSubtaskProgress(nextTask.subtasks);
+  const subtaskProgressEqual =
+    prevProgress.percent === nextProgress.percent &&
+    prevProgress.total === nextProgress.total;
+
   // Compare relevant task fields
   return (
     prevTask.id === nextTask.id &&
     prevTask.status === nextTask.status &&
     prevTask.title === nextTask.title &&
+    prevTask.createdAt === nextTask.createdAt &&
+    prevTask.metadata?.scheduledStartDate === nextTask.metadata?.scheduledStartDate &&
+    prevTask.metadata?.scheduledEndDate === nextTask.metadata?.scheduledEndDate &&
+    subtaskProgressEqual &&
     prevProps.left === nextProps.left &&
     prevProps.width === nextProps.width &&
     prevProps.isSelected === nextProps.isSelected &&
@@ -134,8 +180,9 @@ function timelineTaskBarPropsAreEqual(
  *
  * Visual representation:
  * - Horizontal bar with status-based coloring
- * - Truncated title with full title on hover
- * - Click to open task details
+ * - Truncated title with Tooltip showing full title and date range
+ * - Progress indicator showing completed subtasks %
+ * - Click to open TaskDetailModal
  * - Hover state for linked artifact highlighting
  *
  * Status colors match KanbanBoard column border colors:
@@ -157,6 +204,15 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
 }: TimelineTaskBarProps) {
   const { t } = useTranslation('tasks');
 
+  // Calculate date range for tooltip
+  const dateRange = useMemo(() => getTaskDateRange(task), [task]);
+
+  // Calculate subtask progress
+  const progress = useMemo(
+    () => calculateSubtaskProgress(task.subtasks),
+    [task.subtasks]
+  );
+
   // Memoize class names to prevent recalculation
   const barClasses = useMemo(() => {
     const bgColor = getStatusBackgroundColor(task.status);
@@ -166,7 +222,7 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
     return cn(
       // Base bar styles
       'absolute h-6 rounded-md cursor-pointer transition-all duration-150',
-      'flex items-center px-2 overflow-hidden',
+      'flex items-center overflow-hidden',
       // Status-based background color
       bgColor,
       textColor,
@@ -193,38 +249,107 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
     onClick(task);
   };
 
-  // Minimum width to show any content
-  const showTitle = width > 40;
+  // Minimum width thresholds for content display
+  const showTitle = width > 60;
+  const showProgressBar = width > 40 && progress.total > 0;
+
+  // Format dates for tooltip
+  const startDateStr = formatTooltipDate(dateRange.startDate);
+  const endDateStr = formatTooltipDate(dateRange.endDate);
 
   return (
-    <div
-      className={barClasses}
-      style={{
-        left: `${left}px`,
-        width: `${Math.max(width, 8)}px`, // Minimum 8px for visibility
-        top: '50%',
-        transform: 'translateY(-50%)'
-      }}
-      onClick={handleClick}
-      onMouseEnter={handleMouseEnter}
-      onMouseLeave={handleMouseLeave}
-      role="button"
-      tabIndex={0}
-      onKeyDown={(e) => {
-        if (e.key === 'Enter' || e.key === ' ') {
-          e.preventDefault();
-          handleClick();
-        }
-      }}
-      aria-label={t('timeline.taskBar.ariaLabel', { title: task.title })}
-      title={task.title}
-    >
-      {showTitle && (
-        <span className="truncate text-xs font-medium">
-          {task.title}
-        </span>
-      )}
-    </div>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <div
+          className={barClasses}
+          style={{
+            left: `${left}px`,
+            width: `${Math.max(width, 8)}px`, // Minimum 8px for visibility
+            top: '50%',
+            transform: 'translateY(-50%)'
+          }}
+          onClick={handleClick}
+          onMouseEnter={handleMouseEnter}
+          onMouseLeave={handleMouseLeave}
+          role="button"
+          tabIndex={0}
+          onKeyDown={(e) => {
+            if (e.key === 'Enter' || e.key === ' ') {
+              e.preventDefault();
+              handleClick();
+            }
+          }}
+          aria-label={t('timeline.taskBar.ariaLabel', { title: task.title })}
+        >
+          {/* Progress bar overlay (background) */}
+          {showProgressBar && progress.percent > 0 && (
+            <div
+              className="absolute inset-0 bg-white/20 origin-left"
+              style={{ width: `${progress.percent}%` }}
+            />
+          )}
+
+          {/* Content container - title and optional progress indicator */}
+          <div className="relative flex items-center gap-1 px-2 w-full z-10">
+            {showTitle && (
+              <span className="truncate text-xs font-medium flex-1 min-w-0">
+                {task.title}
+              </span>
+            )}
+
+            {/* Mini progress indicator badge (when bar is wide enough but not for 100% or 0%) */}
+            {showProgressBar && progress.percent > 0 && progress.percent < 100 && width > 80 && (
+              <span className="flex-shrink-0 text-[10px] font-semibold opacity-90 tabular-nums">
+                {progress.percent}%
+              </span>
+            )}
+          </div>
+        </div>
+      </TooltipTrigger>
+      <TooltipContent side="top" className="max-w-xs">
+        <div className="flex flex-col gap-1">
+          {/* Full task title */}
+          <span className="font-semibold text-sm">{task.title}</span>
+
+          {/* Date range */}
+          <span className="text-xs text-muted-foreground">
+            {t('timeline.taskBar.tooltip.dateRange', {
+              startDate: startDateStr,
+              endDate: endDateStr
+            })}
+          </span>
+
+          {/* Progress indicator */}
+          {progress.total > 0 ? (
+            <div className="flex flex-col gap-0.5">
+              <span className="text-xs text-muted-foreground">
+                {t('timeline.taskBar.tooltip.progress', {
+                  percent: progress.percent,
+                  completed: progress.completed,
+                  total: progress.total
+                })}
+              </span>
+              {/* Visual progress bar */}
+              <div className="h-1.5 w-full bg-muted rounded-full overflow-hidden">
+                <div
+                  className="h-full bg-primary rounded-full transition-all duration-300"
+                  style={{ width: `${progress.percent}%` }}
+                />
+              </div>
+            </div>
+          ) : (
+            <span className="text-xs text-muted-foreground italic">
+              {t('timeline.taskBar.tooltip.noSubtasks')}
+            </span>
+          )}
+
+          {/* Click hint */}
+          <span className="text-xs text-muted-foreground/70 mt-1 border-t border-border/50 pt-1">
+            {t('timeline.taskBar.tooltip.clickToOpen')}
+          </span>
+        </div>
+      </TooltipContent>
+    </Tooltip>
   );
 }, timelineTaskBarPropsAreEqual);
 

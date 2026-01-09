@@ -166,7 +166,13 @@
       "loadMore": "Charger plus d'historique"
     },
     "taskBar": {
-      "ariaLabel": "Tâche : {{title}}"
+      "ariaLabel": "Tâche : {{title}}",
+      "tooltip": {
+        "dateRange": "{{startDate}} - {{endDate}}",
+        "progress": "Progression : {{percent}}% ({{completed}}/{{total}} sous-tâches)",
+        "noSubtasks": "Aucune sous-tâche définie",
+        "clickToOpen": "Cliquez pour voir les détails"
+      }
     }
   }
 }

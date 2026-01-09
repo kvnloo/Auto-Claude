@@ -166,7 +166,13 @@
       "loadMore": "Load more history"
     },
     "taskBar": {
-      "ariaLabel": "Task: {{title}}"
+      "ariaLabel": "Task: {{title}}",
+      "tooltip": {
+        "dateRange": "{{startDate}} - {{endDate}}",
+        "progress": "Progress: {{percent}}% ({{completed}}/{{total}} subtasks)",
+        "noSubtasks": "No subtasks defined",
+        "clickToOpen": "Click to view details"
+      }
     }
   }
 }
