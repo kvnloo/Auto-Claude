@@ -557,6 +557,15 @@ class SpecOrchestrator:
         print_key_value("Confidence", f"{assessment.confidence:.0%}")
         print_key_value("Reasoning", assessment.reasoning)
 
+        # Display time estimate if available
+        if (
+            assessment.estimated_duration_minutes is not None
+            and assessment.confidence_min is not None
+            and assessment.confidence_max is not None
+        ):
+            time_range = f"{assessment.confidence_min}-{assessment.confidence_max} minutes"
+            print_key_value("Estimated Time", f"{icon(Icons.CLOCK)} {time_range}")
+
         if assessment.needs_research:
             print(f"  {muted(icon(Icons.ARROW_RIGHT) + ' Research phase enabled')}")
         if assessment.needs_self_critique:

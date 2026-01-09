@@ -11,12 +11,13 @@ Complexity Assessment:
 - AI considers: scope, integrations, infrastructure, knowledge requirements, risk
 - Falls back to heuristic analysis if AI assessment fails
 - Use --no-ai-assessment to skip AI and use heuristics only
+- Displays estimated time with confidence range (e.g., 15-30 minutes) after assessment
 
 Complexity Tiers:
-- SIMPLE (1-2 files): Discovery → Quick Spec → Validate (3 phases)
-- STANDARD (3-10 files): Discovery → Requirements → Context → Spec → Plan → Validate (6 phases)
+- SIMPLE (1-2 files): Discovery → Quick Spec → Validate (3 phases) [~10-20 minutes]
+- STANDARD (3-10 files): Discovery → Requirements → Context → Spec → Plan → Validate (6 phases) [~20-45 minutes]
 - STANDARD + Research: Same as above but with research phase for external dependencies (7 phases)
-- COMPLEX (10+ files/integrations): Full 8-phase pipeline with research and self-critique
+- COMPLEX (10+ files/integrations): Full 8-phase pipeline with research and self-critique [~45-90 minutes]
 
 The AI considers:
 - Number of files/services involved
