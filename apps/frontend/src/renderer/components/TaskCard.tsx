@@ -73,6 +73,9 @@ function taskCardPropsAreEqual(prevProps: TaskCardProps, nextProps: TaskCardProp
     prevTask.subtasks.length === nextTask.subtasks.length &&
     prevTask.metadata?.category === nextTask.metadata?.category &&
     prevTask.metadata?.complexity === nextTask.metadata?.complexity &&
+    prevTask.metadata?.impact === nextTask.metadata?.impact &&
+    prevTask.metadata?.priority === nextTask.metadata?.priority &&
+    prevTask.metadata?.securitySeverity === nextTask.metadata?.securitySeverity &&
     prevTask.metadata?.archivedAt === nextTask.metadata?.archivedAt &&
     prevTask.metadata?.prUrl === nextTask.metadata?.prUrl &&
     // Check if any subtask statuses changed (compare all subtasks)
