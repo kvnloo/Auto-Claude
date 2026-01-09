@@ -105,9 +105,9 @@ export const useTaskStore = create<TaskState>()(
   setTasks: (tasks) => set({ tasks }),
 
   addTask: (task) =>
-    set((state) => ({
-      tasks: [...state.tasks, task]
-    })),
+    set((draft) => {
+      draft.tasks.push(task);
+    }),
 
   updateTask: (taskId, updates) =>
     set((draft) => {
