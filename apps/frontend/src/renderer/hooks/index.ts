@@ -15,3 +15,8 @@ export type {
   UseGitHistoryOptions,
   UseGitHistoryReturn
 } from './useGitHistory';
+export { useProgressiveRender } from './useProgressiveRender';
+export type {
+  UseProgressiveRenderOptions,
+  UseProgressiveRenderReturn
+} from './useProgressiveRender';

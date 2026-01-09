@@ -253,6 +253,13 @@
       "jumpNowKey": "N",
       "jumpMilestone": "Aller au prochain jalon",
       "jumpMilestoneKey": "M"
+    },
+    "loading": {
+      "gitHistory": "Chargement de l'historique Git...",
+      "tasks": "Chargement des tâches...",
+      "taskBars": "Rendu des tâches...",
+      "progressiveRender": "Rendu de {{rendered}} sur {{total}} tâches",
+      "initializing": "Initialisation de la chronologie..."
     }
   }
 }

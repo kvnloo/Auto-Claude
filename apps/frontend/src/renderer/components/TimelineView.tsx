@@ -11,7 +11,14 @@ import {
   type DragMoveEvent
 } from '@dnd-kit/core';
 import { useViewState } from '../contexts/ViewStateContext';
-import { useGitHistory } from '../hooks';
+import { useGitHistory, useProgressiveRender } from '../hooks';
+import {
+  TimelineFullSkeleton,
+  TimelineSidebarSkeleton,
+  GitHistoryLoadingIndicator,
+  GitHistoryLoadingSkeleton,
+  ProgressiveRenderingIndicator
+} from './TimelineSkeletons';
 import {
   AlertTriangle,
   Calendar,
@@ -590,6 +597,8 @@ interface TimelineGridProps {
   draggingTaskId?: string;
   /** Drag preview state for rendering ghost and column highlight */
   dragPreview?: DragPreviewState | null;
+  /** Whether Git history is currently loading */
+  isLoadingGitHistory?: boolean;
 }
 
 function TimelineGrid({
@@ -611,7 +620,8 @@ function TimelineGrid({
   highlightedTags,
   cyclicTaskIds,
   draggingTaskId,
-  dragPreview
+  dragPreview,
+  isLoadingGitHistory
 }: TimelineGridProps) {
   // Calculate total width based on date range and zoom
   const totalColumns = useMemo(() => {
@@ -698,15 +708,19 @@ function TimelineGrid({
           highlightedTags={highlightedTags}
         />
 
-        {/* Commit markers - dots at bottom */}
-        <CommitMarkers
-          commits={commits}
-          zoomLevel={zoomLevel}
-          visibleStartDate={visibleStartDate}
-          visibleEndDate={visibleEndDate}
-          totalWidth={totalWidth}
-          highlightedCommits={highlightedCommits}
-        />
+        {/* Commit markers - dots at bottom (or skeleton while loading) */}
+        {isLoadingGitHistory ? (
+          <GitHistoryLoadingSkeleton markerCount={8} totalWidth={totalWidth} />
+        ) : (
+          <CommitMarkers
+            commits={commits}
+            zoomLevel={zoomLevel}
+            visibleStartDate={visibleStartDate}
+            visibleEndDate={visibleEndDate}
+            totalWidth={totalWidth}
+            highlightedCommits={highlightedCommits}
+          />
+        )}
 
         {/* Now marker */}
         {nowPosition !== null && (
@@ -1463,6 +1477,22 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
     return tasks.filter((t) => !t.metadata?.archivedAt);
   }, [tasks, showArchived]);
 
+  // Progressive rendering for large task lists
+  // Renders tasks in batches to keep the UI responsive
+  const {
+    renderedItems: progressivelyRenderedTasks,
+    renderedCount: renderedTaskCount,
+    totalCount: totalTaskCount,
+    isComplete: isRenderingComplete,
+    isProgressive: isProgressiveRendering
+  } = useProgressiveRender({
+    items: filteredTasks,
+    initialBatchSize: 25,
+    batchSize: 15,
+    threshold: 40,  // Only enable progressive rendering for 40+ tasks
+    enabled: true
+  });
+
   // Calculate visible date range - extends back to git genesis if available
   const { visibleStartDate, visibleEndDate } = useMemo(() => {
     const today = new Date();
@@ -2091,9 +2121,9 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
               scrollLeft={scrollLeft}
             />
 
-            {/* Timeline grid */}
+            {/* Timeline grid - uses progressively rendered tasks for performance */}
             <TimelineGrid
-              tasks={filteredTasks}
+              tasks={progressivelyRenderedTasks}
               zoomLevel={zoomLevel}
               visibleStartDate={visibleStartDate}
               visibleEndDate={visibleEndDate}
@@ -2112,6 +2142,7 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
               cyclicTaskIds={cyclicTaskIds}
               draggingTaskId={draggingTaskId}
               dragPreview={dragPreview}
+              isLoadingGitHistory={isLoadingGit}
             />
           </div>
 
@@ -2138,11 +2169,34 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
       />
 
       {/* Bottom status bar */}
-      <TimelineStatusBar
-        taskCount={filteredTasks.length}
-        visibleStartDate={visibleStartDate}
-        visibleEndDate={visibleEndDate}
-      />
+      <div className="flex items-center justify-between px-4 py-2 border-t border-border bg-card/50 text-xs text-muted-foreground">
+        {/* Left: Date range and loading indicators */}
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Calendar className="h-3.5 w-3.5" />
+            <span>
+              {visibleStartDate.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
+              {' - '}
+              {visibleEndDate.toLocaleDateString(undefined, { month: 'short', year: 'numeric' })}
+            </span>
+          </div>
+          {/* Git history loading indicator */}
+          {isLoadingGit && <GitHistoryLoadingIndicator />}
+          {/* Progressive rendering indicator */}
+          {isProgressiveRendering && !isRenderingComplete && (
+            <ProgressiveRenderingIndicator
+              renderedCount={renderedTaskCount}
+              totalCount={totalTaskCount}
+            />
+          )}
+        </div>
+        {/* Right: Task count */}
+        <div className="flex items-center gap-2">
+          <span>
+            {totalTaskCount} {totalTaskCount === 1 ? 'task' : 'tasks'}
+          </span>
+        </div>
+      </div>
     </div>
   );
 }
