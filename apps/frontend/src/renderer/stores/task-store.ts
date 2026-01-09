@@ -337,17 +337,17 @@ export const useTaskStore = create<TaskState>()(
 
   // Batch append multiple logs at once (single state update instead of N updates)
   batchAppendLogs: (taskId, logs) =>
-    set((state) => {
-      if (logs.length === 0) return state;
-      const index = findTaskIndex(state.tasks, taskId);
-      if (index === -1) return state;
+    set((draft) => {
+      if (logs.length === 0) return;
+      const index = findTaskIndex(draft.tasks, taskId);
+      if (index === -1) return;
 
-      return {
-        tasks: updateTaskAtIndex(state.tasks, index, (t) => ({
-          ...t,
-          logs: [...(t.logs || []), ...logs]
-        }))
-      };
+      // Direct mutation with immer - no need for spread operations
+      const task = draft.tasks[index];
+      if (!task.logs) {
+        task.logs = [];
+      }
+      task.logs.push(...logs);
     }),
 
   selectTask: (taskId) => set({ selectedTaskId: taskId }),
