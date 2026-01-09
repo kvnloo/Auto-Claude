@@ -57,6 +57,7 @@ async def post_session_processing(
     linear_enabled: bool = False,
     status_manager: StatusManager | None = None,
     source_spec_dir: Path | None = None,
+    progress_calculator=None,
 ) -> bool:
     """
     Process session results and update memory automatically.
@@ -109,6 +110,18 @@ async def post_session_processing(
     if subtask_status == "completed":
         # Success! Record the attempt and good commit
         print_status(f"Subtask {subtask_id} completed successfully", "success")
+
+        # Update progress calculator with completed subtask
+        if progress_calculator:
+            try:
+                from implementation_plan import Subtask as SubtaskModel
+                # Convert dict to Subtask object for progress calculator
+                subtask_obj = SubtaskModel.from_dict(subtask)
+                progress_calculator.on_subtask_complete(subtask_obj)
+                print_status("Updated time estimates based on completion", "info")
+            except Exception as e:
+                # Non-fatal: log but continue
+                logger.warning(f"Failed to update progress calculator: {e}")
 
         # Update status file
         if status_manager:

@@ -11,6 +11,8 @@ import os
 from pathlib import Path
 
 from core.client import create_client
+from estimation.progress_calculator import ProgressCalculator
+from implementation_plan import ImplementationPlan
 from linear_updater import (
     LinearTaskState,
     is_linear_enabled,
@@ -194,6 +196,9 @@ async def run_autonomous_agent(
     print(box(content, width=70, style="light"))
     print()
 
+    # Initialize progress calculator for time estimation tracking
+    progress_calculator = None
+
     # Main loop
     iteration = 0
 
@@ -228,6 +233,23 @@ async def run_autonomous_agent(
         subtask_id = next_subtask.get("id") if next_subtask else None
         phase_name = next_subtask.get("phase_name") if next_subtask else None
 
+        # Initialize or update progress calculator with latest plan
+        # This ensures we have fresh data for time estimates
+        try:
+            plan_file = spec_dir / "implementation_plan.json"
+            if plan_file.exists():
+                plan = ImplementationPlan.load(plan_file)
+                if progress_calculator is None:
+                    # First-time initialization
+                    progress_calculator = ProgressCalculator(plan)
+                else:
+                    # Update with fresh plan data (in case plan was modified)
+                    progress_calculator.plan = plan
+                    progress_calculator.invalidate_cache()
+        except Exception as e:
+            logger.warning(f"Could not initialize/update progress calculator: {e}")
+            progress_calculator = None
+
         # Update status for this session
         status_manager.update_session(iteration)
         if phase_name:
@@ -250,6 +272,9 @@ async def run_autonomous_agent(
             attempt=recovery_manager.get_attempt_count(subtask_id) + 1
             if subtask_id
             else 1,
+            estimated_duration_minutes=next_subtask.get("estimated_duration_minutes")
+            if next_subtask
+            else None,
         )
 
         # Capture state before session for post-processing
@@ -385,6 +410,7 @@ async def run_autonomous_agent(
                 linear_enabled=linear_is_enabled,
                 status_manager=status_manager,
                 source_spec_dir=source_spec_dir,
+                progress_calculator=progress_calculator,
             )
 
             # Check for stuck subtasks
