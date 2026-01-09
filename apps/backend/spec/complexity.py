@@ -442,8 +442,20 @@ async def run_ai_complexity_assessment(
 
 def save_assessment(spec_dir: Path, assessment: ComplexityAssessment) -> Path:
     """Save complexity assessment to file."""
+    # Import here to avoid circular dependency
+    from estimation.time_estimator import TimeEstimator
+
     assessment_file = spec_dir / "complexity_assessment.json"
     phases = assessment.phases_to_run()
+
+    # Integrate time estimation
+    estimator = TimeEstimator()
+    time_estimate = estimator.estimate(assessment)
+
+    # Update assessment with time estimation
+    assessment.estimated_duration_minutes = int(time_estimate.estimated_minutes)
+    assessment.confidence_min = int(time_estimate.confidence_min)
+    assessment.confidence_max = int(time_estimate.confidence_max)
 
     with open(assessment_file, "w") as f:
         json.dump(
@@ -459,6 +471,9 @@ def save_assessment(spec_dir: Path, assessment: ComplexityAssessment) -> Path:
                 "phases_to_run": phases,
                 "needs_research": assessment.needs_research,
                 "needs_self_critique": assessment.needs_self_critique,
+                "estimated_duration_minutes": assessment.estimated_duration_minutes,
+                "confidence_min": assessment.confidence_min,
+                "confidence_max": assessment.confidence_max,
                 "created_at": datetime.now().isoformat(),
             },
             f,
