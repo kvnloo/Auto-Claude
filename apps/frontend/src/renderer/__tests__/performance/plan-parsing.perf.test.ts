@@ -548,4 +548,128 @@ describe('Plan Parsing Performance Utilities', () => {
       expect(validatePlanData(invalidPlan)).toBe(false);
     });
   });
+
+  describe('updateTaskFromPlan Baseline Performance', () => {
+    /**
+     * Baseline performance tests to establish metrics before caching optimizations.
+     * These tests measure the complete updateTaskFromPlan flow including:
+     * - Plan validation
+     * - Subtask flattening (flatMap)
+     * - Object creation
+     * - Status flag calculations (every, some)
+     *
+     * Target metrics: <1ms for 10 subtasks, <5ms for 50 subtasks, <10ms for 100 subtasks
+     * After caching, expect 50%+ reduction for repeated calls with unchanged plans
+     */
+
+    it('should measure baseline performance with 10 subtasks', () => {
+      const plan = createMockPlan(2, 5); // 2 phases * 5 subtasks = 10 total
+      const result = measureCombinedOperations(plan, 100);
+
+      expect(result.average).toBeGreaterThan(0);
+      expect(result.median).toBeGreaterThan(0);
+
+      console.log('BASELINE: updateTaskFromPlan with 10 subtasks:', {
+        phases: 2,
+        subtasksPerPhase: 5,
+        totalSubtasks: 10,
+        averageMs: result.average.toFixed(3),
+        medianMs: result.median.toFixed(3),
+        minMs: result.min.toFixed(3),
+        maxMs: result.max.toFixed(3),
+        note: 'Target: <1ms average for cached repeat calls'
+      });
+    });
+
+    it('should measure baseline performance with 50 subtasks', () => {
+      const plan = createMockPlan(5, 10); // 5 phases * 10 subtasks = 50 total
+      const result = measureCombinedOperations(plan, 100);
+
+      expect(result.average).toBeGreaterThan(0);
+      expect(result.median).toBeGreaterThan(0);
+
+      console.log('BASELINE: updateTaskFromPlan with 50 subtasks:', {
+        phases: 5,
+        subtasksPerPhase: 10,
+        totalSubtasks: 50,
+        averageMs: result.average.toFixed(3),
+        medianMs: result.median.toFixed(3),
+        minMs: result.min.toFixed(3),
+        maxMs: result.max.toFixed(3),
+        note: 'Target: <2.5ms average for cached repeat calls (50% reduction)'
+      });
+    });
+
+    it('should measure baseline performance with 100 subtasks', () => {
+      const plan = createMockPlan(10, 10); // 10 phases * 10 subtasks = 100 total
+      const result = measureCombinedOperations(plan, 100);
+
+      expect(result.average).toBeGreaterThan(0);
+      expect(result.median).toBeGreaterThan(0);
+
+      console.log('BASELINE: updateTaskFromPlan with 100 subtasks:', {
+        phases: 10,
+        subtasksPerPhase: 10,
+        totalSubtasks: 100,
+        averageMs: result.average.toFixed(3),
+        medianMs: result.median.toFixed(3),
+        minMs: result.min.toFixed(3),
+        maxMs: result.max.toFixed(3),
+        note: 'Target: <5ms average for cached repeat calls (50% reduction)'
+      });
+    });
+
+    it('should measure repeated calls performance (simulates polling scenario)', () => {
+      const plan = createMockPlan(5, 10); // 50 subtasks - typical real-world scenario
+
+      // Measure first call (cold)
+      const firstCallTime = measureTime(() => {
+        measureCombinedOperations(plan, 1);
+      });
+
+      // Measure repeated calls (should be identical without caching)
+      const repeatedCallsTime = measureAverageTime(() => {
+        measureCombinedOperations(plan, 1);
+      }, 50);
+
+      expect(repeatedCallsTime.average).toBeGreaterThan(0);
+
+      console.log('BASELINE: Repeated updateTaskFromPlan calls (50 subtasks):', {
+        firstCallMs: firstCallTime.toFixed(3),
+        repeatedCallsAvgMs: repeatedCallsTime.average.toFixed(3),
+        repeatedCallsMedianMs: repeatedCallsTime.median.toFixed(3),
+        note: 'Without caching, all calls take the same time. After caching, expect <0.1ms for unchanged plans'
+      });
+    });
+
+    it('should measure memory overhead of object creation', () => {
+      const plans = [
+        createMockPlan(2, 5),   // 10 subtasks
+        createMockPlan(5, 10),  // 50 subtasks
+        createMockPlan(10, 10)  // 100 subtasks
+      ];
+
+      const results = plans.map((plan, idx) => {
+        const subtaskCount = plan.phases.reduce((acc, p) => acc + p.subtasks.length, 0);
+        const timing = measureCombinedOperations(plan, 100);
+
+        return {
+          subtaskCount,
+          avgMs: timing.average,
+          opsPerSecond: Math.round(1000 / timing.average)
+        };
+      });
+
+      console.log('BASELINE: Performance scaling with plan size:', {
+        results,
+        note: 'After caching, cached calls should be O(1) regardless of plan size'
+      });
+
+      // Verify all measurements succeeded
+      results.forEach(result => {
+        expect(result.avgMs).toBeGreaterThan(0);
+        expect(result.opsPerSecond).toBeGreaterThan(0);
+      });
+    });
+  });
 });
