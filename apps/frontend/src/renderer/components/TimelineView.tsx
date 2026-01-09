@@ -375,6 +375,10 @@ interface TimelineGridProps {
   selectedTaskId?: string;
   hoveredTaskId?: string;
   onTaskHover?: (task: Task | null) => void;
+  /** Commit hashes to highlight (from hovered task's linkedCommits) */
+  highlightedCommits?: string[];
+  /** Tag names to highlight (from hovered task's linkedTags) */
+  highlightedTags?: string[];
 }
 
 function TimelineGrid({
@@ -391,7 +395,9 @@ function TimelineGrid({
   milestones,
   selectedTaskId,
   hoveredTaskId,
-  onTaskHover
+  onTaskHover,
+  highlightedCommits,
+  highlightedTags
 }: TimelineGridProps) {
   // Calculate total width based on date range and zoom
   const totalColumns = useMemo(() => {
@@ -465,6 +471,7 @@ function TimelineGrid({
           visibleStartDate={visibleStartDate}
           visibleEndDate={visibleEndDate}
           totalWidth={totalWidth}
+          highlightedTags={highlightedTags}
         />
 
         {/* Commit markers - dots at bottom */}
@@ -474,6 +481,7 @@ function TimelineGrid({
           visibleStartDate={visibleStartDate}
           visibleEndDate={visibleEndDate}
           totalWidth={totalWidth}
+          highlightedCommits={highlightedCommits}
         />
 
         {/* Now marker */}
@@ -584,6 +592,8 @@ interface CommitMarkersProps {
   visibleStartDate: Date;
   visibleEndDate: Date;
   totalWidth: number;
+  /** Commit hashes to highlight (glow effect) when a task is hovered */
+  highlightedCommits?: string[];
 }
 
 function CommitMarkers({
@@ -591,9 +601,29 @@ function CommitMarkers({
   zoomLevel,
   visibleStartDate,
   visibleEndDate,
-  totalWidth
+  totalWidth,
+  highlightedCommits
 }: CommitMarkersProps) {
   const { t } = useTranslation('tasks');
+
+  // Create a Set for O(1) lookup of highlighted commit hashes
+  const highlightedSet = useMemo(() => {
+    if (!highlightedCommits || highlightedCommits.length === 0) return null;
+    return new Set(highlightedCommits);
+  }, [highlightedCommits]);
+
+  // Helper to check if a commit is highlighted (matches by hash prefix or full hash)
+  const isCommitHighlighted = useCallback((commit: TimelineGitCommit): boolean => {
+    if (!highlightedSet) return false;
+    // Check both short hash and full hash for matches
+    return highlightedSet.has(commit.hash) || (commit.fullHash ? highlightedSet.has(commit.fullHash) : false);
+  }, [highlightedSet]);
+
+  // Helper to check if any commit in a cluster is highlighted
+  const isClusterHighlighted = useCallback((clusterCommits: TimelineGitCommit[]): boolean => {
+    if (!highlightedSet) return false;
+    return clusterCommits.some(commit => isCommitHighlighted(commit));
+  }, [highlightedSet, isCommitHighlighted]);
 
   // Calculate position for a date
   const getDatePosition = useCallback((date: Date): number => {
@@ -700,24 +730,30 @@ function CommitMarkers({
         const isCluster = cluster.commits.length > 1;
         const firstCommit = cluster.commits[0];
         const dotSize = getDotSize(cluster.commits.length);
+        const isHighlighted = isClusterHighlighted(cluster.commits);
 
         return (
           <Tooltip key={idx}>
             <TooltipTrigger asChild>
               <div
                 className={cn(
-                  'absolute bottom-2 -translate-x-1/2 pointer-events-auto cursor-pointer transition-transform hover:scale-125',
+                  'absolute bottom-2 -translate-x-1/2 pointer-events-auto cursor-pointer transition-all duration-200 hover:scale-125',
                   dotSize,
                   'rounded-full',
                   isCluster
                     ? 'bg-blue-500/80 border border-blue-400'
-                    : 'bg-blue-400/70'
+                    : 'bg-blue-400/70',
+                  // Glow effect when highlighted (linked to hovered task)
+                  isHighlighted && 'ring-4 ring-blue-400/60 ring-offset-1 ring-offset-background shadow-[0_0_12px_rgba(96,165,250,0.8)] scale-125 z-30'
                 )}
                 style={{ left: cluster.position }}
               >
                 {/* Show count badge for clusters with many commits */}
                 {cluster.commits.length > 3 && (
-                  <span className="absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-medium text-blue-400 whitespace-nowrap">
+                  <span className={cn(
+                    "absolute -top-3 left-1/2 -translate-x-1/2 text-[9px] font-medium whitespace-nowrap",
+                    isHighlighted ? "text-blue-300" : "text-blue-400"
+                  )}>
                     {cluster.commits.length}
                   </span>
                 )}
@@ -776,6 +812,8 @@ interface TagMarkersProps {
   visibleStartDate: Date;
   visibleEndDate: Date;
   totalWidth: number;
+  /** Tag names to highlight (glow effect) when a task is hovered */
+  highlightedTags?: string[];
 }
 
 function TagMarkers({
@@ -784,9 +822,16 @@ function TagMarkers({
   zoomLevel,
   visibleStartDate,
   visibleEndDate,
-  totalWidth
+  totalWidth,
+  highlightedTags
 }: TagMarkersProps) {
   const { t } = useTranslation('tasks');
+
+  // Create a Set for O(1) lookup of highlighted tag names
+  const highlightedSet = useMemo(() => {
+    if (!highlightedTags || highlightedTags.length === 0) return null;
+    return new Set(highlightedTags);
+  }, [highlightedTags]);
 
   // Calculate position for a date
   const getDatePosition = useCallback((date: Date): number => {
@@ -816,39 +861,57 @@ function TagMarkers({
       {visibleMilestones.map((milestone, idx) => {
         const isRelease = milestone.type === 'release';
         const milestoneDate = new Date(milestone.date);
+        // Check if this tag/milestone is highlighted (linked to hovered task)
+        const isHighlighted = highlightedSet?.has(milestone.tagName || milestone.name) ?? false;
 
         return (
           <Tooltip key={milestone.id || idx}>
             <TooltipTrigger asChild>
               <div
-                className="absolute top-0 bottom-0 pointer-events-auto cursor-pointer group"
+                className={cn(
+                  "absolute top-0 bottom-0 pointer-events-auto cursor-pointer group transition-all duration-200",
+                  isHighlighted && "z-30"
+                )}
                 style={{ left: milestone.position }}
               >
                 {/* Vertical dashed line */}
                 <div
                   className={cn(
-                    'absolute top-0 bottom-0 w-px border-l-2 border-dashed',
+                    'absolute top-0 bottom-0 w-px border-l-2 border-dashed transition-all duration-200',
                     isRelease
                       ? 'border-green-500/70 group-hover:border-green-400'
-                      : 'border-amber-500/70 group-hover:border-amber-400'
+                      : 'border-amber-500/70 group-hover:border-amber-400',
+                    // Enhanced visibility when highlighted
+                    isHighlighted && (isRelease
+                      ? 'border-green-400 shadow-[0_0_8px_rgba(34,197,94,0.6)]'
+                      : 'border-amber-400 shadow-[0_0_8px_rgba(245,158,11,0.6)]')
                   )}
                 />
                 {/* Diamond marker at top */}
                 <div
                   className={cn(
-                    'absolute -top-1 -left-1.5 w-3 h-3 rotate-45 transition-transform group-hover:scale-110',
+                    'absolute -top-1 -left-1.5 w-3 h-3 rotate-45 transition-all duration-200 group-hover:scale-110',
                     isRelease
                       ? 'bg-green-500 border border-green-400'
-                      : 'bg-amber-500 border border-amber-400'
+                      : 'bg-amber-500 border border-amber-400',
+                    // Glow effect when highlighted
+                    isHighlighted && 'scale-125',
+                    isHighlighted && (isRelease
+                      ? 'ring-4 ring-green-400/50 shadow-[0_0_12px_rgba(34,197,94,0.8)]'
+                      : 'ring-4 ring-amber-400/50 shadow-[0_0_12px_rgba(245,158,11,0.8)]')
                   )}
                 />
                 {/* Label */}
                 <div
                   className={cn(
-                    'absolute top-4 -left-8 w-16 text-center text-[10px] font-semibold truncate transition-opacity',
+                    'absolute top-4 -left-8 w-16 text-center text-[10px] font-semibold truncate transition-all duration-200',
                     isRelease
                       ? 'text-green-500 group-hover:text-green-400'
-                      : 'text-amber-500 group-hover:text-amber-400'
+                      : 'text-amber-500 group-hover:text-amber-400',
+                    // Brighter label when highlighted
+                    isHighlighted && (isRelease
+                      ? 'text-green-400 font-bold'
+                      : 'text-amber-400 font-bold')
                   )}
                 >
                   {milestone.name}
@@ -1143,6 +1206,21 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     setHoveredTaskId(task?.id);
   }, []);
 
+  // Compute highlighted artifacts from the hovered task
+  const { highlightedCommits, highlightedTags } = useMemo(() => {
+    if (!hoveredTaskId) {
+      return { highlightedCommits: undefined, highlightedTags: undefined };
+    }
+    const hoveredTask = filteredTasks.find((t) => t.id === hoveredTaskId);
+    if (!hoveredTask?.metadata) {
+      return { highlightedCommits: undefined, highlightedTags: undefined };
+    }
+    return {
+      highlightedCommits: hoveredTask.metadata.linkedCommits,
+      highlightedTags: hoveredTask.metadata.linkedTags
+    };
+  }, [hoveredTaskId, filteredTasks]);
+
   const handleZoomIn = useCallback(() => {
     const levels: TimelineZoomLevel[] = ['quarter', 'month', 'week', 'day'];
     const currentIdx = levels.indexOf(zoomLevel);
@@ -1386,6 +1464,8 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
             selectedTaskId={selectedTaskId}
             hoveredTaskId={hoveredTaskId}
             onTaskHover={handleTaskHover}
+            highlightedCommits={highlightedCommits}
+            highlightedTags={highlightedTags}
           />
         </div>
       </div>
