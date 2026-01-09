@@ -228,7 +228,7 @@ function TableHeaderCell({
   column: ColumnConfig;
   sortConfig: SortConfig;
   onSort: (field: SortField) => void;
-  t: (key: string) => string;
+  t: (key: string, options?: Record<string, unknown>) => string;
 }) {
   const isActive = sortConfig.field === column.field;
 
@@ -266,7 +266,7 @@ function SpecRow({
 }: {
   spec: SpecUsageRecord;
   onClick?: (specId: string) => void;
-  t: (key: string) => string;
+  t: (key: string, options?: Record<string, unknown>) => string;
 }) {
   const outcomeDisplay = getOutcomeDisplay(spec);
   const OutcomeIcon = outcomeDisplay.icon;
@@ -347,7 +347,7 @@ function Pagination({
   totalItems: number;
   pageSize: number;
   onPageChange: (page: number) => void;
-  t: (key: string) => string;
+  t: (key: string, options?: Record<string, unknown>) => string;
 }) {
   const startItem = (currentPage - 1) * pageSize + 1;
   const endItem = Math.min(currentPage * pageSize, totalItems);

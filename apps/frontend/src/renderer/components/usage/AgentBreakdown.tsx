@@ -57,6 +57,8 @@ interface ChartDataPoint {
   percentage: number;
   /** Color for the segment */
   color: string;
+  /** Index signature for recharts compatibility */
+  [key: string]: string | number | AgentType;
 }
 
 // ============================================
