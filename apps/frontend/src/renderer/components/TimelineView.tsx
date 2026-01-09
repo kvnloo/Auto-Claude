@@ -1,5 +1,13 @@
 import { useState, useMemo, useRef, useCallback } from 'react';
 import { useTranslation } from 'react-i18next';
+import {
+  DndContext,
+  PointerSensor,
+  useSensor,
+  useSensors,
+  type DragStartEvent,
+  type DragEndEvent
+} from '@dnd-kit/core';
 import { useViewState } from '../contexts/ViewStateContext';
 import { useGitHistory } from '../hooks';
 import {
@@ -38,6 +46,8 @@ interface TimelineViewProps {
   tasks: Task[];
   onTaskClick: (task: Task) => void;
   onNewTaskClick?: () => void;
+  /** Callback when a task's schedule is changed via drag */
+  onTaskScheduleChange?: (taskId: string, newStartDate: Date, newEndDate: Date) => void;
 }
 
 // Column widths for each zoom level (in pixels)
@@ -382,6 +392,8 @@ interface TimelineGridProps {
   highlightedTags?: string[];
   /** Set of task specIds involved in dependency cycles (for warning styling) */
   cyclicTaskIds?: Set<string>;
+  /** ID of the task currently being dragged (for DragOverlay coordination) */
+  draggingTaskId?: string;
 }
 
 function TimelineGrid({
@@ -401,7 +413,8 @@ function TimelineGrid({
   onTaskHover,
   highlightedCommits,
   highlightedTags,
-  cyclicTaskIds
+  cyclicTaskIds,
+  draggingTaskId
 }: TimelineGridProps) {
   // Calculate total width based on date range and zoom
   const totalColumns = useMemo(() => {
@@ -528,6 +541,8 @@ function TimelineGrid({
                     isSelected={selectedTaskId === task.id}
                     isHovered={hoveredTaskId === task.id}
                     isInCycle={isInCycle}
+                    isDraggable={true}
+                    isDragging={draggingTaskId === task.id}
                     onClick={onTaskClick}
                     onHover={onTaskHover}
                   />
@@ -1148,7 +1163,7 @@ function getWeekNumber(date: Date): number {
 /**
  * TimelineView - Main timeline/Gantt view component
  */
-export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineViewProps) {
+export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskScheduleChange }: TimelineViewProps) {
   const { t } = useTranslation(['tasks', 'common']);
   const { showArchived } = useViewState();
 
@@ -1171,9 +1186,22 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
   const [scrollLeft, setScrollLeft] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
   const [hoveredTaskId, setHoveredTaskId] = useState<string | undefined>();
+  // Drag state - tracks which task is being dragged
+  const [draggingTaskId, setDraggingTaskId] = useState<string | undefined>();
 
   // Refs
   const gridScrollRef = useRef<HTMLDivElement>(null);
+
+  // Configure @dnd-kit sensors for horizontal dragging
+  // Using PointerSensor with a small activation distance to distinguish clicks from drags
+  const sensors = useSensors(
+    useSensor(PointerSensor, {
+      activationConstraint: {
+        // Require 5px movement before starting drag (prevents accidental drags on click)
+        distance: 5
+      }
+    })
+  );
 
   // Filter tasks based on archive status
   const filteredTasks = useMemo(() => {
@@ -1319,6 +1347,116 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     scrollToDate(anchor.date, true);
   }, [scrollToDate]);
 
+  /**
+   * Calculate new dates based on pixel offset from drag
+   * Converts horizontal drag distance to date offset
+   */
+  const calculateNewDatesFromDragOffset = useCallback((
+    task: Task,
+    pixelOffset: number,
+    visibleStart: Date,
+    visibleEnd: Date,
+    totalWidth: number
+  ): { newStartDate: Date; newEndDate: Date } => {
+    // Calculate the time per pixel
+    const totalMs = visibleEnd.getTime() - visibleStart.getTime();
+    const msPerPixel = totalMs / totalWidth;
+
+    // Calculate the milliseconds offset
+    const msOffset = pixelOffset * msPerPixel;
+
+    // Get current start and end dates
+    const currentStart = task.metadata?.scheduledStartDate
+      ? new Date(task.metadata.scheduledStartDate)
+      : new Date(task.createdAt);
+
+    const currentEnd = task.metadata?.scheduledEndDate
+      ? new Date(task.metadata.scheduledEndDate)
+      : (() => {
+          // Calculate default end based on duration
+          const duration = 3; // Default 3 days - same as timeline-utils.ts DEFAULT_DURATION_DAYS
+          const end = new Date(currentStart);
+          end.setDate(end.getDate() + duration);
+          return end;
+        })();
+
+    // Calculate new dates by applying the offset (maintaining duration)
+    const newStartDate = new Date(currentStart.getTime() + msOffset);
+    const newEndDate = new Date(currentEnd.getTime() + msOffset);
+
+    return { newStartDate, newEndDate };
+  }, []);
+
+  /**
+   * Handle drag start - track which task is being dragged
+   */
+  const handleDragStart = useCallback((event: DragStartEvent) => {
+    const { active } = event;
+    // Extract task ID from draggable ID (format: 'timeline-task-{taskId}')
+    const taskId = String(active.id).replace('timeline-task-', '');
+    setDraggingTaskId(taskId);
+  }, []);
+
+  /**
+   * Handle drag end - calculate new dates based on drag offset and call schedule change callback
+   */
+  const handleDragEnd = useCallback((event: DragEndEvent) => {
+    const { active, delta } = event;
+
+    if (!active || !delta) {
+      setDraggingTaskId(undefined);
+      return;
+    }
+
+    // Extract task ID from draggable ID
+    const taskId = String(active.id).replace('timeline-task-', '');
+    const task = filteredTasks.find(t => t.id === taskId);
+
+    if (!task || delta.x === 0) {
+      setDraggingTaskId(undefined);
+      return;
+    }
+
+    // Calculate total width for date conversion
+    let totalColumns = 0;
+    const current = new Date(visibleStartDate);
+    while (current <= visibleEndDate) {
+      totalColumns++;
+      switch (zoomLevel) {
+        case 'day':
+          current.setDate(current.getDate() + 1);
+          break;
+        case 'week':
+          current.setDate(current.getDate() + 7);
+          break;
+        case 'month':
+          current.setMonth(current.getMonth() + 1);
+          break;
+        case 'quarter':
+          current.setMonth(current.getMonth() + 3);
+          break;
+      }
+    }
+    const totalWidth = totalColumns * columnWidth;
+
+    // Calculate new dates from drag offset
+    const { newStartDate, newEndDate } = calculateNewDatesFromDragOffset(
+      task,
+      delta.x,
+      visibleStartDate,
+      visibleEndDate,
+      totalWidth
+    );
+
+    // Call the schedule change callback if provided
+    if (onTaskScheduleChange) {
+      onTaskScheduleChange(taskId, newStartDate, newEndDate);
+    }
+
+    // Clear dragging state
+    setDraggingTaskId(undefined);
+  }, [filteredTasks, visibleStartDate, visibleEndDate, zoomLevel, columnWidth, calculateNewDatesFromDragOffset, onTaskScheduleChange]);
+
   // Compute anchor dates from git history and milestones
   const { genesisDate, firstReleaseDate, nextMilestoneDate, nextMilestoneName } = useMemo(() => {
     // Genesis date from git history (earliest commit)
@@ -1463,38 +1601,46 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
           </div>
         </div>
 
-        {/* Timeline area */}
-        <div className="flex-1 flex flex-col overflow-hidden">
-          {/* Timeline header */}
-          <TimelineHeader
-            zoomLevel={zoomLevel}
-            visibleStartDate={visibleStartDate}
-            visibleEndDate={visibleEndDate}
-            columnWidth={columnWidth}
-            scrollLeft={scrollLeft}
-          />
+        {/* Timeline area - wrapped with DndContext for drag-to-schedule */}
+        {/* Note: Horizontal axis restriction is handled in TimelineTaskBar's dragStyle (y: 0) */}
+        <DndContext
+          sensors={sensors}
+          onDragStart={handleDragStart}
+          onDragEnd={handleDragEnd}
+        >
+          <div className="flex-1 flex flex-col overflow-hidden">
+            {/* Timeline header */}
+            <TimelineHeader
+              zoomLevel={zoomLevel}
+              visibleStartDate={visibleStartDate}
+              visibleEndDate={visibleEndDate}
+              columnWidth={columnWidth}
+              scrollLeft={scrollLeft}
+            />
 
-          {/* Timeline grid */}
-          <TimelineGrid
-            tasks={filteredTasks}
-            zoomLevel={zoomLevel}
-            visibleStartDate={visibleStartDate}
-            visibleEndDate={visibleEndDate}
-            columnWidth={columnWidth}
-            onTaskClick={handleTaskClick}
-            onScroll={handleScroll}
-            scrollRef={gridScrollRef}
-            commits={commits}
-            tags={tags}
-            milestones={milestones}
-            selectedTaskId={selectedTaskId}
-            hoveredTaskId={hoveredTaskId}
-            onTaskHover={handleTaskHover}
-            highlightedCommits={highlightedCommits}
-            highlightedTags={highlightedTags}
-            cyclicTaskIds={cyclicTaskIds}
-          />
-        </div>
+            {/* Timeline grid */}
+            <TimelineGrid
+              tasks={filteredTasks}
+              zoomLevel={zoomLevel}
+              visibleStartDate={visibleStartDate}
+              visibleEndDate={visibleEndDate}
+              columnWidth={columnWidth}
+              onTaskClick={handleTaskClick}
+              onScroll={handleScroll}
+              scrollRef={gridScrollRef}
+              commits={commits}
+              tags={tags}
+              milestones={milestones}
+              selectedTaskId={selectedTaskId}
+              hoveredTaskId={hoveredTaskId}
+              onTaskHover={handleTaskHover}
+              highlightedCommits={highlightedCommits}
+              highlightedTags={highlightedTags}
+              cyclicTaskIds={cyclicTaskIds}
+              draggingTaskId={draggingTaskId}
+            />
+          </div>
+        </DndContext>
       </div>
 
       {/* Shallow history indicator */}

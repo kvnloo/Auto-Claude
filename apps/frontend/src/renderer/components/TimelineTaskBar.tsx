@@ -1,6 +1,8 @@
-import { memo, useMemo } from 'react';
+import { memo, useMemo, forwardRef } from 'react';
 import { useTranslation } from 'react-i18next';
-import { AlertTriangle } from 'lucide-react';
+import { useDraggable } from '@dnd-kit/core';
+import { CSS } from '@dnd-kit/utilities';
+import { AlertTriangle, GripVertical } from 'lucide-react';
 import { cn } from '../lib/utils';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { getTaskDateRange } from '../lib/timeline-utils';
@@ -22,6 +24,10 @@ export interface TimelineTaskBarProps {
   isHovered?: boolean;
   /** Whether this task is part of a dependency cycle */
   isInCycle?: boolean;
+  /** Whether dragging is enabled for this task bar */
+  isDraggable?: boolean;
+  /** Whether this task is currently being dragged */
+  isDragging?: boolean;
   /** Callback when task is clicked */
   onClick: (task: Task) => void;
   /** Callback when task is hovered */
@@ -150,6 +156,8 @@ function timelineTaskBarPropsAreEqual(
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.isHovered === nextProps.isHovered &&
     prevProps.isInCycle === nextProps.isInCycle &&
+    prevProps.isDraggable === nextProps.isDraggable &&
+    prevProps.isDragging === nextProps.isDragging &&
     prevProps.onClick === nextProps.onClick &&
     prevProps.onHover === nextProps.onHover
   ) {
@@ -176,7 +184,9 @@ function timelineTaskBarPropsAreEqual(
     prevProps.width === nextProps.width &&
     prevProps.isSelected === nextProps.isSelected &&
     prevProps.isHovered === nextProps.isHovered &&
-    prevProps.isInCycle === nextProps.isInCycle
+    prevProps.isInCycle === nextProps.isInCycle &&
+    prevProps.isDraggable === nextProps.isDraggable &&
+    prevProps.isDragging === nextProps.isDragging
   );
 }
 
@@ -189,6 +199,7 @@ function timelineTaskBarPropsAreEqual(
  * - Progress indicator showing completed subtasks %
  * - Click to open TaskDetailModal
  * - Hover state for linked artifact highlighting
+ * - Horizontal drag support for rescheduling tasks
  *
  * Status colors match KanbanBoard column border colors:
  * - backlog: muted gray
@@ -205,10 +216,35 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
   isSelected = false,
   isHovered = false,
   isInCycle = false,
+  isDraggable = true,
+  isDragging: isDraggingProp = false,
   onClick,
   onHover
 }: TimelineTaskBarProps) {
   const { t } = useTranslation('tasks');
+
+  // Setup draggable functionality using @dnd-kit/core
+  // We use a unique ID that includes task ID to ensure each bar is uniquely identifiable
+  const {
+    attributes,
+    listeners,
+    setNodeRef,
+    transform,
+    isDragging: isDraggingInternal
+  } = useDraggable({
+    id: `timeline-task-${task.id}`,
+    data: {
+      type: 'timeline-task',
+      task,
+      // Include original position for delta calculation during drag
+      originalLeft: left,
+      originalWidth: width
+    },
+    disabled: !isDraggable
+  });
+
+  // Use internal drag state or prop (for DragOverlay coordination)
+  const isDragging = isDraggingInternal || isDraggingProp;
 
   // Calculate date range for tooltip
   const dateRange = useMemo(() => getTaskDateRange(task), [task]);
@@ -218,6 +254,22 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
     () => calculateSubtaskProgress(task.subtasks),
     [task.subtasks]
   );
+
+  // Compute the visual transform style for dragging
+  // Only apply horizontal (x) translation to maintain row position
+  const dragStyle = useMemo(() => {
+    if (!transform) return {};
+    return {
+      transform: CSS.Transform.toString({
+        x: transform.x,
+        y: 0, // Lock vertical movement - only horizontal dragging allowed
+        scaleX: 1,
+        scaleY: 1
+      }),
+      // Elevate during drag for visual feedback
+      zIndex: isDragging ? 100 : undefined
+    };
+  }, [transform, isDragging]);
 
   // Memoize class names to prevent recalculation
   const barClasses = useMemo(() => {
@@ -235,26 +287,39 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
       // Border for selected/hovered states
       'border',
       isSelected ? `${borderColor} border-2 shadow-md` : 'border-transparent',
-      // Hover effects
-      'hover:brightness-110 hover:shadow-sm',
+      // Hover effects (disabled during drag)
+      !isDragging && 'hover:brightness-110 hover:shadow-sm',
       // Highlight when linked artifacts are being viewed
-      isHovered && 'ring-2 ring-primary/50 ring-offset-1 ring-offset-background',
+      isHovered && !isDragging && 'ring-2 ring-primary/50 ring-offset-1 ring-offset-background',
       // Warning ring for tasks in dependency cycles
-      isInCycle && 'ring-2 ring-red-500/70 ring-offset-1 ring-offset-background'
+      isInCycle && !isDragging && 'ring-2 ring-red-500/70 ring-offset-1 ring-offset-background',
+      // Drag state styling
+      isDragging && 'opacity-90 shadow-lg ring-2 ring-primary/70 cursor-grabbing',
+      // Draggable cursor when enabled
+      isDraggable && !isDragging && 'cursor-grab',
+      // Touch handling for mobile
+      'touch-none'
     );
-  }, [task.status, isSelected, isHovered, isInCycle]);
+  }, [task.status, isSelected, isHovered, isInCycle, isDragging, isDraggable]);
 
   // Handle mouse events for linked artifact highlighting
   const handleMouseEnter = () => {
-    onHover?.(task);
+    if (!isDragging) {
+      onHover?.(task);
+    }
   };
 
   const handleMouseLeave = () => {
-    onHover?.(null);
+    if (!isDragging) {
+      onHover?.(null);
+    }
   };
 
   const handleClick = () => {
-    onClick(task);
+    // Don't trigger click when dragging (user might have just finished dragging)
+    if (!isDragging) {
+      onClick(task);
+    }
   };
 
   // Minimum width thresholds for content display
@@ -262,6 +327,8 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
   const showProgressBar = width > 40 && progress.total > 0;
   // Show cycle badge when bar is wide enough and task is in a cycle
   const showCycleBadge = isInCycle && width > 50;
+  // Show drag handle when bar is wide enough and dragging is enabled
+  const showDragHandle = isDraggable && width > 30;
 
   // Format dates for tooltip
   const startDateStr = formatTooltipDate(dateRange.startDate);
@@ -271,12 +338,14 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
     <Tooltip>
       <TooltipTrigger asChild>
         <div
+          ref={setNodeRef}
           className={barClasses}
           style={{
             left: `${left}px`,
             width: `${Math.max(width, 8)}px`, // Minimum 8px for visibility
             top: '50%',
-            transform: 'translateY(-50%)'
+            transform: 'translateY(-50%)',
+            ...dragStyle
           }}
           onClick={handleClick}
           onMouseEnter={handleMouseEnter}
@@ -290,6 +359,9 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
             }
           }}
           aria-label={t('timeline.taskBar.ariaLabel', { title: task.title })}
+          aria-grabbed={isDragging}
+          {...attributes}
+          {...listeners}
         >
           {/* Progress bar overlay (background) */}
           {showProgressBar && progress.percent > 0 && (
@@ -301,6 +373,16 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
 
           {/* Content container - title and optional progress indicator */}
           <div className="relative flex items-center gap-1 px-2 w-full z-10">
+            {/* Drag handle indicator (subtle visual cue) */}
+            {showDragHandle && (
+              <GripVertical
+                className={cn(
+                  'h-3 w-3 flex-shrink-0 opacity-40 transition-opacity',
+                  isDragging ? 'opacity-70' : 'group-hover:opacity-60'
+                )}
+              />
+            )}
+
             {/* Cycle warning badge - positioned at start of bar */}
             {showCycleBadge && (
               <Tooltip>
@@ -382,6 +464,13 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
           ) : (
             <span className="text-xs text-muted-foreground italic">
               {t('timeline.taskBar.tooltip.noSubtasks')}
+            </span>
+          )}
+
+          {/* Drag hint when draggable */}
+          {isDraggable && (
+            <span className="text-xs text-primary/70 mt-0.5">
+              {t('timeline.dragToSchedule')}
             </span>
           )}
 
