@@ -512,5 +512,12 @@ export const IPC_CHANNELS = {
   // Sentry error reporting
   SENTRY_STATE_CHANGED: 'sentry:state-changed',  // Notify main process when setting changes
   GET_SENTRY_DSN: 'sentry:get-dsn',              // Get DSN from main process (env var)
-  GET_SENTRY_CONFIG: 'sentry:get-config'         // Get full Sentry config (DSN + sample rates)
+  GET_SENTRY_CONFIG: 'sentry:get-config',        // Get full Sentry config (DSN + sample rates)
+
+  // Token Usage & Cost Dashboard operations
+  USAGE_GET_SUMMARY: 'usage:getSummary',           // Get aggregated usage summary with trends
+  USAGE_GET_BY_DATE_RANGE: 'usage:getByDateRange', // Get usage for specific date range
+  USAGE_GET_BY_AGENT: 'usage:getByAgent',          // Get usage breakdown by agent type
+  USAGE_GET_BY_SPEC: 'usage:getBySpec',            // Get usage breakdown by spec
+  USAGE_EXPORT_REPORT: 'usage:exportReport'        // Export usage data to CSV
 } as const;
