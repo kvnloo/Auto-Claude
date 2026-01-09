@@ -5,6 +5,7 @@ import { ScrollArea } from '../ui/scroll-area';
 import { Tooltip, TooltipContent, TooltipTrigger } from '../ui/tooltip';
 import { cn, calculateProgress } from '../../lib/utils';
 import type { Task } from '../../../shared/types';
+import { TimeEstimate } from './TimeEstimate';
 
 interface TaskSubtasksProps {
   task: Task;
@@ -21,6 +22,18 @@ function getSubtaskStatusIcon(status: string) {
     default:
       return <AlertCircle className="h-4 w-4 text-muted-foreground" />;
   }
+}
+
+function formatRemainingTime(minutes: number): string {
+  if (minutes < 60) {
+    return `${Math.round(minutes)}m remaining`;
+  }
+  const hours = Math.floor(minutes / 60);
+  const mins = Math.round(minutes % 60);
+  if (mins === 0) {
+    return `${hours}h remaining`;
+  }
+  return `${hours}h ${mins}m remaining`;
 }
 
 export function TaskSubtasks({ task }: TaskSubtasksProps) {
@@ -41,9 +54,39 @@ export function TaskSubtasks({ task }: TaskSubtasksProps) {
         ) : (
           <>
             {/* Progress summary */}
-            <div className="flex items-center justify-between text-xs text-muted-foreground pb-2 border-b border-border/50">
-              <span>{task.subtasks.filter(c => c.status === 'completed').length} of {task.subtasks.length} completed</span>
-              <span className="tabular-nums">{progress}%</span>
+            <div className="flex flex-col gap-2 pb-2 border-b border-border/50">
+              <div className="flex items-center justify-between text-xs text-muted-foreground">
+                <span>{task.subtasks.filter(c => c.status === 'completed').length} of {task.subtasks.length} completed</span>
+                <span className="tabular-nums">{progress}%</span>
+              </div>
+
+              {/* Time estimates */}
+              <div className="flex items-center gap-3 text-xs">
+                {/* Overall estimated time */}
+                {(task.metadata?.estimatedDurationMinutes || task.executionProgress?.estimatedDuration) && (
+                  <TimeEstimate
+                    estimatedDurationMinutes={task.metadata?.estimatedDurationMinutes || task.executionProgress?.estimatedDuration}
+                    confidenceMin={task.metadata?.confidenceMin}
+                    confidenceMax={task.metadata?.confidenceMax}
+                    variant="compact"
+                  />
+                )}
+
+                {/* Remaining time */}
+                {task.executionProgress?.remainingTime !== undefined && task.executionProgress.remainingTime > 0 && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <Badge variant="secondary" className="text-xs cursor-help bg-info/10 text-info border-info/20">
+                        <Clock className="h-3 w-3 mr-1" />
+                        {formatRemainingTime(task.executionProgress.remainingTime)}
+                      </Badge>
+                    </TooltipTrigger>
+                    <TooltipContent side="top">
+                      <p className="text-xs">Time remaining based on current progress</p>
+                    </TooltipContent>
+                  </Tooltip>
+                )}
+              </div>
             </div>
             {task.subtasks.map((subtask, index) => (
               <div
@@ -109,6 +152,16 @@ export function TaskSubtasks({ task }: TaskSubtasksProps) {
                             </TooltipContent>
                           </Tooltip>
                         ))}
+                      </div>
+                    )}
+
+                    {/* Subtask time estimate */}
+                    {subtask.estimatedDurationMinutes && (
+                      <div className="mt-2">
+                        <TimeEstimate
+                          estimatedDurationMinutes={subtask.estimatedDurationMinutes}
+                          variant="compact"
+                        />
                       </div>
                     )}
                   </div>
