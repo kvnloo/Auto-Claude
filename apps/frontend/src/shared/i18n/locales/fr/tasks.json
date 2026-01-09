@@ -132,6 +132,24 @@
     }
   },
   "subtasks": {
-    "untitled": "Sous-tâche sans titre"
+    "untitled": "Sous-tâche sans titre",
+    "noSubtasksDefined": "Aucune sous-tâche définie",
+    "noSubtasksHint": "Les sous-tâches d'implémentation apparaîtront ici après la planification",
+    "completedOf": "sur",
+    "completedLabel": "terminées"
+  },
+  "timeEstimation": {
+    "estimatedTimeRange": "Plage de temps estimée",
+    "estimatedDuration": "Durée estimée",
+    "historicalAccuracy": "Précision historique",
+    "remaining": "restant",
+    "timeRemainingTooltip": "Temps restant basé sur la progression actuelle",
+    "reliability": {
+      "excellent": "excellente",
+      "veryGood": "très bonne",
+      "good": "bonne",
+      "fair": "acceptable",
+      "needsImprovement": "nécessite amélioration"
+    }
   }
 }

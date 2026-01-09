@@ -132,6 +132,24 @@
     }
   },
   "subtasks": {
-    "untitled": "Untitled subtask"
+    "untitled": "Untitled subtask",
+    "noSubtasksDefined": "No subtasks defined",
+    "noSubtasksHint": "Implementation subtasks will appear here after planning",
+    "completedOf": "of",
+    "completedLabel": "completed"
+  },
+  "timeEstimation": {
+    "estimatedTimeRange": "Estimated time range",
+    "estimatedDuration": "Estimated duration",
+    "historicalAccuracy": "Historical accuracy",
+    "remaining": "remaining",
+    "timeRemainingTooltip": "Time remaining based on current progress",
+    "reliability": {
+      "excellent": "excellent",
+      "veryGood": "very good",
+      "good": "good",
+      "fair": "fair",
+      "needsImprovement": "needs improvement"
+    }
   }
 }
