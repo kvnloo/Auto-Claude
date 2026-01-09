@@ -291,53 +291,53 @@ export const DependencyArrows = memo(function DependencyArrows({
       className="absolute inset-0 pointer-events-none overflow-visible"
       style={{ width: totalWidth, height: tasks.length * rowHeight }}
     >
-      {/* Define arrow markers */}
+      {/* Define arrow markers - theme-aware colors */}
       <defs>
-        {/* Default arrow marker - semi-transparent blue */}
+        {/* Default arrow marker - semi-transparent, theme-matching */}
         <marker
           id={ARROW_MARKER_ID}
-          markerWidth="8"
-          markerHeight="8"
-          refX="7"
-          refY="4"
+          markerWidth="10"
+          markerHeight="10"
+          refX="9"
+          refY="5"
           orient="auto"
           markerUnits="strokeWidth"
         >
           <path
-            d="M 0 0 L 8 4 L 0 8 L 2 4 Z"
-            className="fill-blue-400/60"
+            d="M 0 0 L 10 5 L 0 10 L 2 5 Z"
+            className="fill-blue-400/50 dark:fill-blue-400/60"
           />
         </marker>
 
-        {/* Highlighted arrow marker - brighter blue */}
+        {/* Highlighted arrow marker - brighter, more visible */}
         <marker
           id={ARROW_MARKER_HIGHLIGHT_ID}
-          markerWidth="8"
-          markerHeight="8"
-          refX="7"
-          refY="4"
+          markerWidth="10"
+          markerHeight="10"
+          refX="9"
+          refY="5"
           orient="auto"
           markerUnits="strokeWidth"
         >
           <path
-            d="M 0 0 L 8 4 L 0 8 L 2 4 Z"
-            className="fill-blue-500"
+            d="M 0 0 L 10 5 L 0 10 L 2 5 Z"
+            className="fill-blue-500 dark:fill-blue-400"
           />
         </marker>
 
-        {/* Cyclic dependency arrow marker - red/warning */}
+        {/* Cyclic dependency arrow marker - red/warning color */}
         <marker
           id={ARROW_MARKER_CYCLIC_ID}
-          markerWidth="8"
-          markerHeight="8"
-          refX="7"
-          refY="4"
+          markerWidth="10"
+          markerHeight="10"
+          refX="9"
+          refY="5"
           orient="auto"
           markerUnits="strokeWidth"
         >
           <path
-            d="M 0 0 L 8 4 L 0 8 L 2 4 Z"
-            className="fill-red-500/80"
+            d="M 0 0 L 10 5 L 0 10 L 2 5 Z"
+            className="fill-red-500/90 dark:fill-red-400/90"
           />
         </marker>
       </defs>
@@ -370,27 +370,40 @@ export const DependencyArrows = memo(function DependencyArrows({
           markerId = ARROW_MARKER_HIGHLIGHT_ID;
         }
 
+        // Determine whether other arrows are being highlighted (fade non-highlighted arrows)
+        const hasActiveHighlight = !!(selectedTaskId || hoveredTaskId);
+        const shouldFade = hasActiveHighlight && !isHighlighted;
+
         return (
           <path
             key={`${connection.fromTaskId}-${connection.toTaskId}-${idx}`}
             d={pathD}
             className={cn(
-              'transition-all duration-200',
-              // Default state - semi-transparent
-              !isHighlighted && !isCyclic && 'stroke-blue-400/40',
-              // Highlighted state - brighter with glow effect
-              isHighlighted && !isCyclic && 'stroke-blue-500 filter drop-shadow-sm',
-              // Cyclic dependency - red/warning color
-              isCyclic && 'stroke-red-500/70',
-              // Even brighter when cyclic and highlighted
-              isCyclic && isHighlighted && 'stroke-red-500 filter drop-shadow-md'
+              // Smooth transitions for all state changes
+              'transition-all duration-200 ease-out',
+              // Default state - semi-transparent, theme-aware
+              !isHighlighted && !isCyclic && 'stroke-blue-400/40 dark:stroke-blue-400/50',
+              // Highlighted state - brighter with enhanced visibility
+              isHighlighted && !isCyclic && 'stroke-blue-500 dark:stroke-blue-400',
+              // Cyclic dependency - red/warning color for visibility
+              isCyclic && !isHighlighted && 'stroke-red-500/60 dark:stroke-red-400/70',
+              // Cyclic + highlighted - full intensity warning color
+              isCyclic && isHighlighted && 'stroke-red-500 dark:stroke-red-400'
             )}
             fill="none"
             strokeWidth={isHighlighted ? 2.5 : 2}
+            strokeLinecap="round"
+            strokeLinejoin="round"
             markerEnd={`url(#${markerId})`}
             style={{
-              // Lower z-index for non-highlighted arrows
-              opacity: !isHighlighted && (selectedTaskId || hoveredTaskId) ? 0.3 : 1
+              // Fade non-highlighted arrows when another task is focused
+              opacity: shouldFade ? 0.25 : 1,
+              // Add subtle filter effect for highlighted arrows
+              filter: isHighlighted
+                ? isCyclic
+                  ? 'drop-shadow(0 0 3px rgba(239, 68, 68, 0.5))'
+                  : 'drop-shadow(0 0 3px rgba(59, 130, 246, 0.4))'
+                : 'none'
             }}
           />
         );

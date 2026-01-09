@@ -24,9 +24,10 @@ import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Separator } from './ui/separator';
 import { cn } from '../lib/utils';
-import { calculateTaskBarPosition, isTaskBarVisible } from '../lib/timeline-utils';
+import { calculateTaskBarPosition, isTaskBarVisible, detectDependencyCycles } from '../lib/timeline-utils';
 import type { TaskBarPosition } from '../lib/timeline-utils';
 import { TimelineTaskBar } from './TimelineTaskBar';
+import { DependencyArrows } from './DependencyArrows';
 import type { Task } from '../../shared/types';
 import type { TimelineGitCommit, TimelineGitTag, TimelineMilestone } from '../../shared/types/git';
 
@@ -379,6 +380,8 @@ interface TimelineGridProps {
   highlightedCommits?: string[];
   /** Tag names to highlight (from hovered task's linkedTags) */
   highlightedTags?: string[];
+  /** Set of task specIds involved in dependency cycles (for warning styling) */
+  cyclicTaskIds?: Set<string>;
 }
 
 function TimelineGrid({
@@ -397,7 +400,8 @@ function TimelineGrid({
   hoveredTaskId,
   onTaskHover,
   highlightedCommits,
-  highlightedTags
+  highlightedTags,
+  cyclicTaskIds
 }: TimelineGridProps) {
   // Calculate total width based on date range and zoom
   const totalColumns = useMemo(() => {
@@ -506,6 +510,9 @@ function TimelineGrid({
             // Check if task bar is visible in the timeline viewport
             const isVisible = isTaskBarVisible(position, totalWidth);
 
+            // Check if this task is in a dependency cycle
+            const isInCycle = cyclicTaskIds?.has(task.specId) ?? false;
+
             return (
               <div
                 key={task.id}
@@ -520,6 +527,7 @@ function TimelineGrid({
                     width={position.width}
                     isSelected={selectedTaskId === task.id}
                     isHovered={hoveredTaskId === task.id}
+                    isInCycle={isInCycle}
                     onClick={onTaskClick}
                     onHover={onTaskHover}
                   />
@@ -528,6 +536,18 @@ function TimelineGrid({
             );
           })}
         </div>
+
+        {/* Dependency arrows overlay - renders SVG bezier curves between dependent tasks */}
+        <DependencyArrows
+          tasks={tasks}
+          visibleStartDate={visibleStartDate}
+          visibleEndDate={visibleEndDate}
+          totalWidth={totalWidth}
+          rowHeight={TASK_ROW_HEIGHT}
+          selectedTaskId={selectedTaskId}
+          hoveredTaskId={hoveredTaskId}
+          cyclicTaskIds={cyclicTaskIds}
+        />
       </div>
     </div>
   );
@@ -1221,6 +1241,12 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     };
   }, [hoveredTaskId, filteredTasks]);
 
+  // Detect dependency cycles among tasks
+  const cyclicTaskIds = useMemo(() => {
+    const result = detectDependencyCycles(filteredTasks);
+    return result.cyclicTaskIdSet;
+  }, [filteredTasks]);
+
   const handleZoomIn = useCallback(() => {
     const levels: TimelineZoomLevel[] = ['quarter', 'month', 'week', 'day'];
     const currentIdx = levels.indexOf(zoomLevel);
@@ -1466,6 +1492,7 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
             onTaskHover={handleTaskHover}
             highlightedCommits={highlightedCommits}
             highlightedTags={highlightedTags}
+            cyclicTaskIds={cyclicTaskIds}
           />
         </div>
       </div>
