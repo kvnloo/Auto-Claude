@@ -32,15 +32,20 @@ import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Separator } from './ui/separator';
 import { cn } from '../lib/utils';
-import { calculateTaskBarPosition, isTaskBarVisible, detectDependencyCycles } from '../lib/timeline-utils';
-import type { TaskBarPosition } from '../lib/timeline-utils';
+import {
+  calculateTaskBarPosition,
+  isTaskBarVisible,
+  detectDependencyCycles,
+  snapDatesToGrid
+} from '../lib/timeline-utils';
+import type { TaskBarPosition, TimelineZoomLevel } from '../lib/timeline-utils';
 import { TimelineTaskBar } from './TimelineTaskBar';
 import { DependencyArrows } from './DependencyArrows';
 import type { Task } from '../../shared/types';
 import type { TimelineGitCommit, TimelineGitTag, TimelineMilestone } from '../../shared/types/git';
 
-// Zoom level type
-export type TimelineZoomLevel = 'quarter' | 'month' | 'week' | 'day';
+// Re-export TimelineZoomLevel for external use
+export type { TimelineZoomLevel };
 
 interface TimelineViewProps {
   tasks: Task[];
@@ -1398,7 +1403,13 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
   }, []);
 
   /**
-   * Handle drag end - calculate new dates based on drag offset and call schedule change callback
+   * Handle drag end - calculate new dates based on drag offset, apply snap-to-grid,
+   * and call schedule change callback
+   *
+   * Snap behavior varies by zoom level:
+   * - Day/Week views: snap to day boundaries
+   * - Month view: snap to week boundaries (Monday)
+   * - Quarter view: snap to month boundaries (1st)
    */
   const handleDragEnd = useCallback((event: DragEndEvent) => {
     const { active, delta } = event;
@@ -1439,7 +1450,7 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
     }
     const totalWidth = totalColumns * columnWidth;
 
-    // Calculate new dates from drag offset
+    // Calculate new dates from drag offset (before snapping)
     const { newStartDate, newEndDate } = calculateNewDatesFromDragOffset(
       task,
       delta.x,
@@ -1448,9 +1459,20 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
       totalWidth
     );
 
-    // Call the schedule change callback if provided
+    // Apply snap-to-grid based on current zoom level
+    // This ensures dates align to appropriate boundaries:
+    // - day/week views: day boundaries
+    // - month view: week boundaries (Monday)
+    // - quarter view: month boundaries (1st of month)
+    const { snappedStartDate, snappedEndDate } = snapDatesToGrid(
+      newStartDate,
+      newEndDate,
+      zoomLevel
+    );
+
+    // Call the schedule change callback with snapped dates
     if (onTaskScheduleChange) {
-      onTaskScheduleChange(taskId, newStartDate, newEndDate);
+      onTaskScheduleChange(taskId, snappedStartDate, snappedEndDate);
     }
 
     // Clear dragging state

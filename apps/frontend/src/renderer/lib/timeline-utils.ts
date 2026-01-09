@@ -4,7 +4,7 @@
  * Helper functions for timeline/Gantt view calculations and operations.
  */
 
-import type { Task, TaskComplexity } from '../../../shared/types/task';
+import type { Task, TaskComplexity } from '../../shared/types/task';
 
 /**
  * Duration mapping for task complexity levels (in days)
@@ -672,4 +672,252 @@ export function formatCycleDescriptions(
     // Close the cycle by adding the first element at the end
     return [...labels, labels[0]].join(' → ');
   });
+}
+
+/**
+ * Timeline zoom level type
+ * Defines the granularity at which the timeline is displayed
+ */
+export type TimelineZoomLevel = 'quarter' | 'month' | 'week' | 'day';
+
+/**
+ * Snap grid configuration for each zoom level
+ * Defines what boundary dates should snap to during drag operations
+ */
+export interface SnapGridConfig {
+  /** The unit of time to snap to */
+  unit: 'day' | 'week' | 'month';
+  /** Human-readable description for tooltips */
+  description: string;
+}
+
+/**
+ * Get the snap grid configuration for a zoom level.
+ *
+ * Snap behavior:
+ * - Day view: snap to day boundaries
+ * - Week view: snap to day boundaries
+ * - Month view: snap to week boundaries (start of week)
+ * - Quarter view: snap to month boundaries (1st of month)
+ *
+ * @param zoomLevel The current timeline zoom level
+ * @returns Configuration for the snap grid
+ */
+export function getSnapGridConfig(zoomLevel: TimelineZoomLevel): SnapGridConfig {
+  switch (zoomLevel) {
+    case 'day':
+    case 'week':
+      return { unit: 'day', description: 'Snapping to day' };
+    case 'month':
+      return { unit: 'week', description: 'Snapping to week' };
+    case 'quarter':
+      return { unit: 'month', description: 'Snapping to month' };
+    default:
+      return { unit: 'day', description: 'Snapping to day' };
+  }
+}
+
+/**
+ * Snap a date to the nearest grid boundary based on the zoom level.
+ *
+ * Snap behavior:
+ * - Day/Week view: snaps to nearest day boundary (midnight)
+ * - Month view: snaps to nearest Monday (start of week)
+ * - Quarter view: snaps to nearest 1st of month
+ *
+ * @param date The date to snap
+ * @param zoomLevel The current timeline zoom level
+ * @returns The date snapped to the nearest grid boundary
+ *
+ * @example
+ * ```ts
+ * // Day/Week view - snaps to day boundaries
+ * snapDateToGrid(new Date('2024-03-15T14:30:00'), 'day')
+ * // Returns: 2024-03-15T00:00:00 or 2024-03-16T00:00:00
+ *
+ * // Month view - snaps to week start (Monday)
+ * snapDateToGrid(new Date('2024-03-15'), 'month')
+ * // Returns: 2024-03-11T00:00:00 (previous Monday) or 2024-03-18T00:00:00
+ *
+ * // Quarter view - snaps to 1st of month
+ * snapDateToGrid(new Date('2024-03-15'), 'quarter')
+ * // Returns: 2024-03-01T00:00:00 or 2024-04-01T00:00:00
+ * ```
+ */
+export function snapDateToGrid(date: Date, zoomLevel: TimelineZoomLevel): Date {
+  const config = getSnapGridConfig(zoomLevel);
+  const result = new Date(date);
+
+  switch (config.unit) {
+    case 'day':
+      // Snap to nearest day boundary (midnight)
+      // If past noon, snap to next day; otherwise snap to current day
+      result.setHours(0, 0, 0, 0);
+      if (date.getHours() >= 12) {
+        result.setDate(result.getDate() + 1);
+      }
+      break;
+
+    case 'week':
+      // Snap to nearest Monday (start of week)
+      // First, get to the start of the current day
+      result.setHours(0, 0, 0, 0);
+
+      // Get day of week (0 = Sunday, 1 = Monday, ..., 6 = Saturday)
+      const dayOfWeek = result.getDay();
+
+      // Calculate days to previous Monday (week starts on Monday in ISO standard)
+      // If Sunday (0), previous Monday is 6 days back
+      // If Monday (1), we're already there
+      // If Tuesday (2), previous Monday is 1 day back
+      // etc.
+      const daysToPreviousMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+      const previousMonday = new Date(result);
+      previousMonday.setDate(result.getDate() - daysToPreviousMonday);
+
+      // Calculate next Monday
+      const daysToNextMonday = dayOfWeek === 0 ? 1 : (8 - dayOfWeek);
+      const nextMonday = new Date(result);
+      nextMonday.setDate(result.getDate() + daysToNextMonday);
+
+      // Choose the closer Monday (if exactly in the middle, prefer previous)
+      const distToPrevious = Math.abs(date.getTime() - previousMonday.getTime());
+      const distToNext = Math.abs(nextMonday.getTime() - date.getTime());
+
+      if (distToPrevious <= distToNext) {
+        result.setTime(previousMonday.getTime());
+      } else {
+        result.setTime(nextMonday.getTime());
+      }
+      break;
+
+    case 'month':
+      // Snap to nearest 1st of month
+      result.setHours(0, 0, 0, 0);
+
+      // Get current day of month
+      const dayOfMonth = result.getDate();
+      const totalDaysInMonth = new Date(result.getFullYear(), result.getMonth() + 1, 0).getDate();
+
+      // Calculate distance to start of current month
+      const currentMonthStart = new Date(result.getFullYear(), result.getMonth(), 1);
+
+      // Calculate distance to start of next month
+      const nextMonthStart = new Date(result.getFullYear(), result.getMonth() + 1, 1);
+
+      // Choose the closer 1st (if past the middle of the month, go to next)
+      if (dayOfMonth <= totalDaysInMonth / 2) {
+        result.setTime(currentMonthStart.getTime());
+      } else {
+        result.setTime(nextMonthStart.getTime());
+      }
+      break;
+  }
+
+  return result;
+}
+
+/**
+ * Snap both start and end dates to grid boundaries while maintaining the original duration.
+ *
+ * This is useful for drag operations where the entire task is moved and we want
+ * to snap the start position while keeping the task duration the same.
+ *
+ * @param startDate The proposed start date (after drag)
+ * @param endDate The proposed end date (after drag)
+ * @param zoomLevel The current timeline zoom level
+ * @returns Object with snapped start and end dates, plus the snap delta in milliseconds
+ *
+ * @example
+ * ```ts
+ * const { snappedStartDate, snappedEndDate, snapDeltaMs } = snapDatesToGrid(
+ *   new Date('2024-03-15T14:30:00'),
+ *   new Date('2024-03-18T14:30:00'),
+ *   'day'
+ * );
+ * // snappedStartDate: 2024-03-16T00:00:00
+ * // snappedEndDate: 2024-03-19T00:00:00
+ * // snapDeltaMs: adjustment applied (positive = moved forward)
+ * ```
+ */
+export function snapDatesToGrid(
+  startDate: Date,
+  endDate: Date,
+  zoomLevel: TimelineZoomLevel
+): {
+  snappedStartDate: Date;
+  snappedEndDate: Date;
+  snapDeltaMs: number;
+} {
+  // Calculate original duration
+  const durationMs = endDate.getTime() - startDate.getTime();
+
+  // Snap the start date
+  const snappedStartDate = snapDateToGrid(startDate, zoomLevel);
+
+  // Apply the same offset to the end date to maintain duration
+  const snapDeltaMs = snappedStartDate.getTime() - startDate.getTime();
+  const snappedEndDate = new Date(endDate.getTime() + snapDeltaMs);
+
+  return {
+    snappedStartDate,
+    snappedEndDate,
+    snapDeltaMs
+  };
+}
+
+/**
+ * Get the snap boundary dates visible in the current viewport.
+ * Useful for rendering visual snap guides during drag operations.
+ *
+ * @param visibleStartDate Start of visible timeline range
+ * @param visibleEndDate End of visible timeline range
+ * @param zoomLevel Current zoom level
+ * @returns Array of dates representing snap boundaries
+ */
+export function getSnapBoundaries(
+  visibleStartDate: Date,
+  visibleEndDate: Date,
+  zoomLevel: TimelineZoomLevel
+): Date[] {
+  const boundaries: Date[] = [];
+  const config = getSnapGridConfig(zoomLevel);
+
+  // Start from a snapped boundary before the visible start
+  let current = snapDateToGrid(new Date(visibleStartDate), zoomLevel);
+  // Ensure we start at or before the visible start
+  if (current > visibleStartDate) {
+    // Go back one unit
+    switch (config.unit) {
+      case 'day':
+        current.setDate(current.getDate() - 1);
+        break;
+      case 'week':
+        current.setDate(current.getDate() - 7);
+        break;
+      case 'month':
+        current.setMonth(current.getMonth() - 1);
+        break;
+    }
+  }
+
+  // Iterate through the visible range
+  while (current <= visibleEndDate) {
+    boundaries.push(new Date(current));
+
+    // Advance to next boundary
+    switch (config.unit) {
+      case 'day':
+        current.setDate(current.getDate() + 1);
+        break;
+      case 'week':
+        current.setDate(current.getDate() + 7);
+        break;
+      case 'month':
+        current.setMonth(current.getMonth() + 1);
+        break;
+    }
+  }
+
+  return boundaries;
 }
