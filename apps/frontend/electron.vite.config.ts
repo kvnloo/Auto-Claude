@@ -40,6 +40,12 @@ export default defineConfig({
       rollupOptions: {
         input: {
           index: resolve(__dirname, 'src/renderer/index.html')
+        },
+        output: {
+          manualChunks: {
+            // Split D3 and all its submodules into a separate chunk for lazy loading
+            'd3': ['d3']
+          }
         }
       }
     },
