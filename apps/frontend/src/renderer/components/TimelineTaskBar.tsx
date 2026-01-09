@@ -229,17 +229,9 @@ export const TimelineTaskBar = memo(function TimelineTaskBar({
 }, timelineTaskBarPropsAreEqual);
 
 /**
- * Helper type for task bar positioning calculation
- * Used by timeline-utils.ts (subtask 4.4)
- */
-export interface TaskBarPosition {
-  left: number;
-  width: number;
-  taskId: string;
-}
-
-/**
  * Export color utility functions for use in other timeline components
  * (e.g., legend, status indicators)
  */
 export { getStatusBackgroundColor, getStatusBorderColor, getStatusTextColor };
+
+// Note: TaskBarPosition type is now defined in timeline-utils.ts with full implementation

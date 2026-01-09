@@ -24,6 +24,9 @@ import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Separator } from './ui/separator';
 import { cn } from '../lib/utils';
+import { calculateTaskBarPosition, isTaskBarVisible } from '../lib/timeline-utils';
+import type { TaskBarPosition } from '../lib/timeline-utils';
+import { TimelineTaskBar } from './TimelineTaskBar';
 import type { Task } from '../../shared/types';
 import type { TimelineGitCommit, TimelineGitTag, TimelineMilestone } from '../../shared/types/git';
 
@@ -369,6 +372,9 @@ interface TimelineGridProps {
   commits: TimelineGitCommit[];
   tags: TimelineGitTag[];
   milestones: TimelineMilestone[];
+  selectedTaskId?: string;
+  hoveredTaskId?: string;
+  onTaskHover?: (task: Task | null) => void;
 }
 
 function TimelineGrid({
@@ -382,7 +388,10 @@ function TimelineGrid({
   scrollRef,
   commits,
   tags,
-  milestones
+  milestones,
+  selectedTaskId,
+  hoveredTaskId,
+  onTaskHover
 }: TimelineGridProps) {
   // Calculate total width based on date range and zoom
   const totalColumns = useMemo(() => {
@@ -475,17 +484,41 @@ function TimelineGrid({
           />
         )}
 
-        {/* Task rows (placeholder - actual bars implemented in later subtask) */}
+        {/* Task rows with positioned task bars */}
         <div className="relative z-20">
-          {tasks.map((task, idx) => (
-            <div
-              key={task.id}
-              className="border-b border-border/20"
-              style={{ height: TASK_ROW_HEIGHT }}
-            >
-              {/* Task bar placeholder - to be implemented in subtask 4.1 */}
-            </div>
-          ))}
+          {tasks.map((task) => {
+            // Calculate task bar position based on dates and timeline scale
+            const position = calculateTaskBarPosition(
+              task,
+              visibleStartDate,
+              visibleEndDate,
+              totalWidth
+            );
+
+            // Check if task bar is visible in the timeline viewport
+            const isVisible = isTaskBarVisible(position, totalWidth);
+
+            return (
+              <div
+                key={task.id}
+                className="relative border-b border-border/20"
+                style={{ height: TASK_ROW_HEIGHT }}
+              >
+                {/* Only render task bar if it's visible in the viewport */}
+                {isVisible && (
+                  <TimelineTaskBar
+                    task={task}
+                    left={position.left}
+                    width={position.width}
+                    isSelected={selectedTaskId === task.id}
+                    isHovered={hoveredTaskId === task.id}
+                    onClick={onTaskClick}
+                    onHover={onTaskHover}
+                  />
+                )}
+              </div>
+            );
+          })}
         </div>
       </div>
     </div>
@@ -1054,6 +1087,7 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
   const [zoomLevel, setZoomLevel] = useState<TimelineZoomLevel>('month');
   const [scrollLeft, setScrollLeft] = useState(0);
   const [selectedTaskId, setSelectedTaskId] = useState<string | undefined>();
+  const [hoveredTaskId, setHoveredTaskId] = useState<string | undefined>();
 
   // Refs
   const gridScrollRef = useRef<HTMLDivElement>(null);
@@ -1103,6 +1137,10 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
 
   const handleScroll = useCallback((newScrollLeft: number) => {
     setScrollLeft(newScrollLeft);
+  }, []);
+
+  const handleTaskHover = useCallback((task: Task | null) => {
+    setHoveredTaskId(task?.id);
   }, []);
 
   const handleZoomIn = useCallback(() => {
@@ -1345,6 +1383,9 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
             commits={commits}
             tags={tags}
             milestones={milestones}
+            selectedTaskId={selectedTaskId}
+            hoveredTaskId={hoveredTaskId}
+            onTaskHover={handleTaskHover}
           />
         </div>
       </div>
