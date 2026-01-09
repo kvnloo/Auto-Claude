@@ -68,6 +68,12 @@ from usage.aggregator import (
     EfficiencyScore,
     get_usage_aggregator,
 )
+from usage.exporter import (
+    UsageExporter,
+    get_usage_exporter,
+    export_usage_to_csv,
+    CSV_HEADERS,
+)
 
 __all__ = [
     # Models
@@ -101,4 +107,9 @@ __all__ = [
     "UsageTrend",
     "EfficiencyScore",
     "get_usage_aggregator",
+    # Exporter
+    "UsageExporter",
+    "get_usage_exporter",
+    "export_usage_to_csv",
+    "CSV_HEADERS",
 ]
