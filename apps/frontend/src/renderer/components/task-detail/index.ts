@@ -8,4 +8,5 @@ export { TaskSubtasks } from './TaskSubtasks';
 export { TaskLogs } from './TaskLogs';
 export { TaskReview } from './TaskReview';
 export { LinkedArtifactsSection } from './LinkedArtifactsSection';
+export { SuggestedArtifactsSection } from './SuggestedArtifactsSection';
 export { useTaskDetail } from './hooks/useTaskDetail';

@@ -143,7 +143,15 @@
     "unlinkPR": "Unlink pull request",
     "unlinkTag": "Unlink tag",
     "noLinkedArtifacts": "No linked artifacts. Click + buttons to link commits, PRs, or tags.",
-    "viewOnGitHub": "View on GitHub"
+    "viewOnGitHub": "View on GitHub",
+    "suggestions": {
+      "title": "Suggested Links",
+      "description": "These commits mention this task's ID or spec name and may be related.",
+      "linkAll": "Link all",
+      "linkAllTooltip": "Link all {{count}} suggested commits",
+      "linkAllTooltip_one": "Link the suggested commit",
+      "linkAllTooltip_other": "Link all {{count}} suggested commits"
+    }
   },
   "artifactLinkDialog": {
     "title": "Link Git Artifacts",

@@ -41,7 +41,9 @@ import {
   useTaskStore,
   persistUnlinkCommit,
   persistUnlinkPR,
-  persistUnlinkTag
+  persistUnlinkTag,
+  persistLinkCommit,
+  persistLinkArtifacts
 } from '../../stores/task-store';
 import { TASK_STATUS_LABELS } from '../../../shared/constants';
 import { TaskEditDialog } from '../TaskEditDialog';
@@ -53,6 +55,7 @@ import { TaskLogs } from './TaskLogs';
 import { TaskFiles } from './TaskFiles';
 import { TaskReview } from './TaskReview';
 import { LinkedArtifactsSection } from './LinkedArtifactsSection';
+import { SuggestedArtifactsSection } from './SuggestedArtifactsSection';
 import type { Task, WorktreeCreatePROptions } from '../../../shared/types';
 
 interface TaskDetailModalProps {
@@ -527,6 +530,20 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
                         onUnlinkTag={(tagName) => {
                           // Persist unlink to file and update local state
                           persistUnlinkTag(task.id, tagName);
+                        }}
+                        disabled={state.isRunning && !state.isStuck}
+                      />
+
+                      {/* Suggested Artifacts Section - auto-link suggestions */}
+                      <SuggestedArtifactsSection
+                        task={task}
+                        onLinkCommit={(commitHash) => {
+                          // Persist link to file and update local state
+                          persistLinkCommit(task.id, commitHash);
+                        }}
+                        onLinkMultipleCommits={(commitHashes) => {
+                          // Persist multiple commits at once
+                          persistLinkArtifacts(task.id, { commits: commitHashes });
                         }}
                         disabled={state.isRunning && !state.isStuck}
                       />

@@ -143,7 +143,15 @@
     "unlinkPR": "Délier la pull request",
     "unlinkTag": "Délier le tag",
     "noLinkedArtifacts": "Aucun artefact lié. Cliquez sur les boutons + pour lier des commits, PRs ou tags.",
-    "viewOnGitHub": "Voir sur GitHub"
+    "viewOnGitHub": "Voir sur GitHub",
+    "suggestions": {
+      "title": "Liens suggérés",
+      "description": "Ces commits mentionnent l'ID ou le nom du spec de cette tâche et peuvent être liés.",
+      "linkAll": "Tout lier",
+      "linkAllTooltip": "Lier les {{count}} commits suggérés",
+      "linkAllTooltip_one": "Lier le commit suggéré",
+      "linkAllTooltip_other": "Lier les {{count}} commits suggérés"
+    }
   },
   "artifactLinkDialog": {
     "title": "Lier des artefacts Git",
