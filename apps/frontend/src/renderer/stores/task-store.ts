@@ -188,7 +188,8 @@ export const useTaskStore = create<TaskState>((set, get) => ({
                 description,
                 status,
                 files: [],
-                verification: subtask.verification as Subtask['verification']
+                verification: subtask.verification as Subtask['verification'],
+                estimatedDurationMinutes: subtask.estimatedDurationMinutes
               };
             })
           );
@@ -262,12 +263,21 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             anyCompleted
           });
 
+          // Update execution progress with time tracking fields from plan
+          const executionProgress = t.executionProgress ? {
+            ...t.executionProgress,
+            ...(plan.totalEstimatedMinutes !== undefined && { estimatedDuration: plan.totalEstimatedMinutes }),
+            ...(plan.elapsedMinutes !== undefined && { elapsedTime: plan.elapsedMinutes }),
+            ...(plan.remainingMinutes !== undefined && { remainingTime: plan.remainingMinutes })
+          } : t.executionProgress;
+
           return {
             ...t,
             title: plan.feature || t.title,
             subtasks,
             status,
             reviewReason,
+            executionProgress,
             updatedAt: new Date()
           };
         })
