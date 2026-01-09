@@ -6,6 +6,7 @@ Tracks historical task completion data to improve time estimation accuracy
 over time. Records actual completion times and calculates estimation accuracy.
 """
 
+import json
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -106,6 +107,111 @@ class HistoricalTracker:
 
         # Ensure directory exists
         self.data_file.parent.mkdir(parents=True, exist_ok=True)
+
+        # Load existing records
+        self.load_records()
+
+    def load_records(self) -> None:
+        """
+        Load completion records from JSON file.
+
+        If the file doesn't exist or is invalid, starts with an empty record list.
+        """
+        if not self.data_file.exists():
+            return
+
+        try:
+            with open(self.data_file, "r") as f:
+                data = json.load(f)
+
+            # Load records from JSON
+            if isinstance(data, dict) and "records" in data:
+                records_data = data["records"]
+            elif isinstance(data, list):
+                # Support legacy format (direct list)
+                records_data = data
+            else:
+                records_data = []
+
+            self.records = [
+                CompletionRecord.from_dict(record) for record in records_data
+            ]
+
+        except (json.JSONDecodeError, KeyError, ValueError) as e:
+            # If file is corrupted, start fresh
+            self.records = []
+
+    def save_records(self) -> None:
+        """
+        Save completion records to JSON file.
+
+        Persists all records in the tracker to the configured data file.
+        """
+        data = {
+            "version": "1.0",
+            "updated_at": datetime.now().isoformat(),
+            "total_records": len(self.records),
+            "records": [record.to_dict() for record in self.records],
+        }
+
+        with open(self.data_file, "w") as f:
+            json.dump(data, f, indent=2)
+
+    def record_completion(
+        self,
+        task_id: str,
+        task_description: str,
+        complexity: Complexity,
+        estimated_minutes: float,
+        actual_minutes: float,
+        services_involved: Optional[list[str]] = None,
+        files_modified: int = 0,
+        external_integrations: Optional[list[str]] = None,
+    ) -> CompletionRecord:
+        """
+        Record a new task completion with actual duration and calculate accuracy metrics.
+
+        Args:
+            task_id: Unique identifier for the task/spec
+            task_description: Brief description of what was completed
+            complexity: Task complexity level
+            estimated_minutes: Original time estimate
+            actual_minutes: Actual time taken to complete
+            services_involved: Optional list of services touched
+            files_modified: Number of files changed
+            external_integrations: Optional list of integrations used
+
+        Returns:
+            The created CompletionRecord instance
+        """
+        # Calculate accuracy metrics
+        if estimated_minutes > 0:
+            accuracy_ratio = actual_minutes / estimated_minutes
+            estimation_error = ((actual_minutes - estimated_minutes) / estimated_minutes) * 100
+        else:
+            accuracy_ratio = 1.0
+            estimation_error = 0.0
+
+        # Create completion record
+        record = CompletionRecord(
+            task_id=task_id,
+            task_description=task_description,
+            complexity=complexity,
+            estimated_minutes=estimated_minutes,
+            actual_minutes=actual_minutes,
+            accuracy_ratio=accuracy_ratio,
+            estimation_error=estimation_error,
+            completed_at=datetime.now().isoformat(),
+            services_involved=services_involved or [],
+            files_modified=files_modified,
+            external_integrations=external_integrations or [],
+        )
+
+        # Add to records and persist
+        self.records.append(record)
+        self.save_records()
+
+        return record
 
     def get_records_by_complexity(self, complexity: Complexity) -> list[CompletionRecord]:
         """
