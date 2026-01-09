@@ -2,13 +2,19 @@
  * Toast UI Components
  *
  * Based on Radix UI Toast for non-intrusive notifications.
+ * Enhanced with spring-based animations via motion/react.
  */
 import * as React from 'react';
 import * as ToastPrimitives from '@radix-ui/react-toast';
 import { cva, type VariantProps } from 'class-variance-authority';
 import { X } from 'lucide-react';
+import { motion, AnimatePresence } from 'motion/react';
 
 import { cn } from '../../lib/utils';
+import {
+  toastVariants as toastMotionVariants,
+  useReducedMotion,
+} from '../../lib/animation-utils';
 
 const ToastProvider = ToastPrimitives.Provider;
 
@@ -27,8 +33,8 @@ const ToastViewport = React.forwardRef<
 ));
 ToastViewport.displayName = ToastPrimitives.Viewport.displayName;
 
-const toastVariants = cva(
-  'group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden rounded-md border p-6 pr-8 shadow-lg transition-all data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none data-[state=open]:animate-in data-[state=closed]:animate-out data-[swipe=end]:animate-out data-[state=closed]:fade-out-80 data-[state=closed]:slide-out-to-right-full data-[state=open]:slide-in-from-top-full data-[state=open]:sm:slide-in-from-bottom-full',
+const toastStyleVariants = cva(
+  'group pointer-events-auto relative flex w-full items-center justify-between space-x-4 overflow-hidden rounded-md border p-6 pr-8 shadow-lg data-[swipe=cancel]:translate-x-0 data-[swipe=end]:translate-x-[var(--radix-toast-swipe-end-x)] data-[swipe=move]:translate-x-[var(--radix-toast-swipe-move-x)] data-[swipe=move]:transition-none',
   {
     variants: {
       variant: {
@@ -42,16 +48,57 @@ const toastVariants = cva(
   }
 );
 
+/**
+ * Toast component with spring-based slide-in/out animations.
+ * Uses motion/react for smooth physics-based transitions.
+ * Respects user's reduced motion preferences.
+ */
 const Toast = React.forwardRef<
   React.ElementRef<typeof ToastPrimitives.Root>,
-  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root> & VariantProps<typeof toastVariants>
->(({ className, variant, ...props }, ref) => {
+  React.ComponentPropsWithoutRef<typeof ToastPrimitives.Root> & VariantProps<typeof toastStyleVariants>
+>(({ className, variant, open, onOpenChange, children, ...props }, ref) => {
+  const reducedMotion = useReducedMotion();
+  const [isPresent, setIsPresent] = React.useState(open ?? true);
+
+  // Sync internal state with controlled open prop
+  React.useEffect(() => {
+    if (open !== undefined) {
+      setIsPresent(open);
+    }
+  }, [open]);
+
+  // Handle open change from Radix (e.g., swipe dismiss, auto-close)
+  const handleOpenChange = React.useCallback(
+    (newOpen: boolean) => {
+      setIsPresent(newOpen);
+      onOpenChange?.(newOpen);
+    },
+    [onOpenChange]
+  );
+
   return (
-    <ToastPrimitives.Root
-      ref={ref}
-      className={cn(toastVariants({ variant }), className)}
-      {...props}
-    />
+    <AnimatePresence mode="wait">
+      {isPresent && (
+        <ToastPrimitives.Root
+          ref={ref}
+          open={isPresent}
+          onOpenChange={handleOpenChange}
+          forceMount
+          asChild
+          {...props}
+        >
+          <motion.div
+            className={cn(toastStyleVariants({ variant }), className)}
+            variants={reducedMotion ? undefined : toastMotionVariants}
+            initial={reducedMotion ? undefined : 'hidden'}
+            animate={reducedMotion ? undefined : 'visible'}
+            exit={reducedMotion ? undefined : 'exit'}
+          >
+            {children}
+          </motion.div>
+        </ToastPrimitives.Root>
+      )}
+    </AnimatePresence>
   );
 });
 Toast.displayName = ToastPrimitives.Root.displayName;
