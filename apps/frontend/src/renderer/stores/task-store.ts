@@ -277,49 +277,48 @@ export const useTaskStore = create<TaskState>()(
     }),
 
   updateExecutionProgress: (taskId, progress) =>
-    set((state) => {
-      const index = findTaskIndex(state.tasks, taskId);
-      if (index === -1) return state;
+    set((draft) => {
+      const index = findTaskIndex(draft.tasks, taskId);
+      if (index === -1) return;
 
-      return {
-        tasks: updateTaskAtIndex(state.tasks, index, (t) => {
-          const existingProgress = t.executionProgress || {
-            phase: 'idle' as ExecutionPhase,
-            phaseProgress: 0,
-            overallProgress: 0,
-            sequenceNumber: 0
-          };
+      const task = draft.tasks[index];
 
-          const incomingSeq = progress.sequenceNumber ?? 0;
-          const currentSeq = existingProgress.sequenceNumber ?? 0;
-          if (incomingSeq > 0 && currentSeq > 0 && incomingSeq < currentSeq) {
-            // FIX (ACS-55): Log when updates are dropped due to sequence numbers
-            // This helps debug phase transition issues
-            console.warn('[updateExecutionProgress] Dropping out-of-order update:', {
-              taskId,
-              incomingSeq,
-              currentSeq,
-              incomingPhase: progress.phase,
-              currentPhase: existingProgress.phase
-            });
-            return t; // Skip out-of-order update
-          }
-
-          // Only update updatedAt on phase transitions (not on every progress tick)
-          // This prevents unnecessary re-renders from the memo comparator
-          const phaseChanged = progress.phase && progress.phase !== existingProgress.phase;
-
-          return {
-            ...t,
-            executionProgress: {
-              ...existingProgress,
-              ...progress
-            },
-            // Only set updatedAt on phase changes to reduce re-renders
-            ...(phaseChanged ? { updatedAt: new Date() } : {})
-          };
-        })
+      const existingProgress = task.executionProgress || {
+        phase: 'idle' as ExecutionPhase,
+        phaseProgress: 0,
+        overallProgress: 0,
+        sequenceNumber: 0
       };
+
+      const incomingSeq = progress.sequenceNumber ?? 0;
+      const currentSeq = existingProgress.sequenceNumber ?? 0;
+      if (incomingSeq > 0 && currentSeq > 0 && incomingSeq < currentSeq) {
+        // FIX (ACS-55): Log when updates are dropped due to sequence numbers
+        // This helps debug phase transition issues
+        console.warn('[updateExecutionProgress] Dropping out-of-order update:', {
+          taskId,
+          incomingSeq,
+          currentSeq,
+          incomingPhase: progress.phase,
+          currentPhase: existingProgress.phase
+        });
+        return; // Skip out-of-order update
+      }
+
+      // Only update updatedAt on phase transitions (not on every progress tick)
+      // This prevents unnecessary re-renders from the memo comparator
+      const phaseChanged = progress.phase && progress.phase !== existingProgress.phase;
+
+      // Direct mutation with immer - no need for spread operations
+      task.executionProgress = {
+        ...existingProgress,
+        ...progress
+      };
+
+      // Only set updatedAt on phase changes to reduce re-renders
+      if (phaseChanged) {
+        task.updatedAt = new Date();
+      }
     }),
 
   appendLog: (taskId, log) =>
