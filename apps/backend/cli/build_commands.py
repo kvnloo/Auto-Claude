@@ -3,6 +3,11 @@ Build Commands
 ==============
 
 CLI commands for building specs and handling the main build flow.
+
+Build completion displays:
+- Total time taken
+- Time accuracy metrics (via AccuracyReporter in core/progress.py)
+- Next steps for review and merge
 """
 
 import asyncio

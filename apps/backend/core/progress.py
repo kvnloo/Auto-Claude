@@ -49,6 +49,25 @@ def _get_progress_calculator(spec_dir: Path):
         return None
 
 
+def _get_accuracy_reporter(spec_dir: Path):
+    """
+    Helper to get an AccuracyReporter for displaying estimation accuracy.
+
+    Returns None if the module can't be imported or data can't be loaded.
+    """
+    try:
+        from estimation.accuracy_reporter import AccuracyReporter
+
+        # Get project directory (parent of .auto-claude dir)
+        project_dir = spec_dir.parent.parent.parent
+        data_file = project_dir / ".auto-claude" / "estimation_data.json"
+
+        return AccuracyReporter(data_file=data_file)
+    except (ImportError, OSError, Exception):
+        # If imports fail or data can't be loaded, return None
+        return None
+
+
 def format_time_estimate(minutes: float) -> str:
     """
     Format time estimate in human-readable form.
@@ -324,7 +343,7 @@ def print_progress_summary(spec_dir: Path, show_next: bool = True) -> None:
 
 
 def print_build_complete_banner(spec_dir: Path) -> None:
-    """Print a completion banner with total time taken."""
+    """Print a completion banner with total time taken and accuracy metrics."""
     content = [
         success(f"{icon(Icons.SUCCESS)} BUILD COMPLETE!"),
         "",
@@ -354,6 +373,18 @@ def print_build_complete_banner(spec_dir: Path) -> None:
                     content.append(muted(f"({accuracy_msg})"))
         except Exception:
             # If time calculation fails, continue without time info
+            pass
+
+    # Add historical accuracy metrics if available
+    accuracy_reporter = _get_accuracy_reporter(spec_dir)
+    if accuracy_reporter:
+        try:
+            accuracy_display = accuracy_reporter.format_accuracy_display()
+            if accuracy_display != "No historical data yet":
+                content.append("")
+                content.append(f"{icon(Icons.CHART)} Estimation accuracy: {accuracy_display}")
+        except Exception:
+            # If accuracy calculation fails, continue without accuracy info
             pass
 
     content.extend([

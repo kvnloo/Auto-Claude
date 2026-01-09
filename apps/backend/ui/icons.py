@@ -50,6 +50,7 @@ class Icons:
     WORKER = ("⚡", "W")
     SESSION = ("▸", ">")
     CLOCK = ("⏱", "[T]")
+    CHART = ("📊", "[%]")
 
     # Menu
     EDIT = ("✏️", "[E]")
