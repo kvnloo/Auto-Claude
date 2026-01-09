@@ -9,6 +9,8 @@ import logging
 from pathlib import Path
 
 from core.client import create_client
+from estimation.historical_tracker import HistoricalTracker
+from estimation.time_estimator import TimeEstimator
 from phase_config import get_phase_model, get_phase_thinking_budget
 from phase_event import ExecutionPhase, emit_phase
 from task_logger import (
@@ -30,6 +32,55 @@ from ui import (
 from .session import run_agent_session
 
 logger = logging.getLogger(__name__)
+
+
+def _populate_subtask_time_estimates(plan, project_dir: Path) -> None:
+    """
+    Populate time estimates for subtasks that don't have them yet.
+
+    Uses TimeEstimator to estimate completion time based on subtask description,
+    number of files, and service. Historical data is loaded to improve accuracy.
+
+    Args:
+        plan: ImplementationPlan instance to update
+        project_dir: Project root directory for loading historical data
+    """
+    # Load historical data for improved estimates
+    auto_claude_dir = project_dir / ".auto-claude"
+    tracker = HistoricalTracker(data_file=auto_claude_dir / "estimation_data.json")
+    historical_data = tracker.get_historical_data()
+
+    # Create time estimator with historical context
+    estimator = TimeEstimator(historical_data=historical_data)
+
+    # Track how many estimates we populate
+    estimates_added = 0
+
+    # Iterate through all subtasks in all phases
+    for phase in plan.phases:
+        for subtask in phase.subtasks:
+            # Skip if already has an estimate
+            if subtask.estimated_duration_minutes is not None:
+                continue
+
+            # Count files to modify/create
+            files_count = len(subtask.files_to_modify) + len(subtask.files_to_create)
+            # Default to 1 file if none specified (investigation/manual tasks)
+            files_count = max(files_count, 1)
+
+            # Estimate time for this subtask
+            time_estimate = estimator.estimate_subtask(
+                description=subtask.description,
+                files_count=files_count,
+                service=subtask.service,
+            )
+
+            # Set the estimated duration (rounded to nearest minute)
+            subtask.estimated_duration_minutes = round(time_estimate.estimated_minutes)
+            estimates_added += 1
+
+    if estimates_added > 0:
+        logger.info(f"Populated time estimates for {estimates_added} subtasks")
 
 
 async def run_followup_planner(
@@ -139,6 +190,9 @@ async def run_followup_planner(
             pending_subtasks = [c for c in all_subtasks if c.status.value == "pending"]
 
             if pending_subtasks:
+                # Populate time estimates for subtasks that don't have them
+                _populate_subtask_time_estimates(plan, project_dir)
+
                 # Reset the plan status to in_progress (in case planner didn't)
                 plan.reset_for_followup()
                 plan.save(plan_file)
