@@ -164,6 +164,9 @@
       "title": "Historique incomplet",
       "description": "L'historique Git peut être incomplet. Cela peut se produire avec des clones superficiels ou lorsque la limite de commits est atteinte.",
       "loadMore": "Charger plus d'historique"
+    },
+    "taskBar": {
+      "ariaLabel": "Tâche : {{title}}"
     }
   }
 }
