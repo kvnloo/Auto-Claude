@@ -38,14 +38,19 @@ const ZOOM_COLUMN_WIDTHS: Record<TimelineZoomLevel, number> = {
 // Task row height
 const TASK_ROW_HEIGHT = 36;
 
-// Header height for timeline header
-const TIMELINE_HEADER_HEIGHT = 48;
+// Header height for timeline header (two rows: primary + secondary)
+const TIMELINE_HEADER_PRIMARY_HEIGHT = 24;
+const TIMELINE_HEADER_SECONDARY_HEIGHT = 28;
+const TIMELINE_HEADER_HEIGHT = TIMELINE_HEADER_PRIMARY_HEIGHT + TIMELINE_HEADER_SECONDARY_HEIGHT;
 
 // Left sidebar width
 const SIDEBAR_WIDTH = 240;
 
 /**
  * TimelineHeader - Renders the date columns with grid lines and month/week labels
+ * Uses a two-row structure:
+ * - Primary row: Higher-level grouping (months for day/week view, years for month/quarter view)
+ * - Secondary row: Specific date labels (day numbers, week numbers, month names, quarter labels)
  */
 interface TimelineHeaderProps {
   zoomLevel: TimelineZoomLevel;
@@ -53,6 +58,25 @@ interface TimelineHeaderProps {
   visibleEndDate: Date;
   columnWidth: number;
   scrollLeft: number;
+}
+
+/**
+ * Column data for secondary header row
+ */
+interface ColumnData {
+  date: Date;
+  label: string;
+  isToday: boolean;
+  isWeekend?: boolean;
+}
+
+/**
+ * Group data for primary header row
+ */
+interface GroupData {
+  label: string;
+  startIndex: number;
+  columnCount: number;
 }
 
 function TimelineHeader({
@@ -65,8 +89,8 @@ function TimelineHeader({
   const { t } = useTranslation('tasks');
 
   // Generate date columns based on zoom level
-  const columns = useMemo(() => {
-    const cols: { date: Date; label: string; isToday: boolean }[] = [];
+  const columns = useMemo((): ColumnData[] => {
+    const cols: ColumnData[] = [];
     const today = new Date();
     today.setHours(0, 0, 0, 0);
 
@@ -78,6 +102,9 @@ function TimelineHeader({
         current.getFullYear() === today.getFullYear() &&
         current.getMonth() === today.getMonth() &&
         current.getDate() === today.getDate();
+
+      const dayOfWeek = current.getDay();
+      const isWeekend = dayOfWeek === 0 || dayOfWeek === 6;
 
       let label = '';
       switch (zoomLevel) {
@@ -91,11 +118,11 @@ function TimelineHeader({
           label = current.toLocaleDateString(undefined, { month: 'short' });
           break;
         case 'quarter':
-          label = `Q${Math.floor(current.getMonth() / 3) + 1} ${current.getFullYear()}`;
+          label = `Q${Math.floor(current.getMonth() / 3) + 1}`;
           break;
       }
 
-      cols.push({ date: new Date(current), label, isToday });
+      cols.push({ date: new Date(current), label, isToday, isWeekend });
 
       // Advance to next period
       switch (zoomLevel) {
@@ -117,6 +144,58 @@ function TimelineHeader({
     return cols;
   }, [zoomLevel, visibleStartDate, visibleEndDate]);
 
+  // Generate primary header groups (higher-level grouping)
+  const groups = useMemo((): GroupData[] => {
+    const groupList: GroupData[] = [];
+    let currentGroupLabel = '';
+    let currentGroupStartIndex = 0;
+    let currentGroupCount = 0;
+
+    columns.forEach((col, idx) => {
+      let groupLabel = '';
+      switch (zoomLevel) {
+        case 'day':
+        case 'week':
+          // Group by month for day/week views
+          groupLabel = col.date.toLocaleDateString(undefined, { month: 'long', year: 'numeric' });
+          break;
+        case 'month':
+        case 'quarter':
+          // Group by year for month/quarter views
+          groupLabel = col.date.getFullYear().toString();
+          break;
+      }
+
+      if (groupLabel !== currentGroupLabel) {
+        // Save previous group if exists
+        if (currentGroupCount > 0) {
+          groupList.push({
+            label: currentGroupLabel,
+            startIndex: currentGroupStartIndex,
+            columnCount: currentGroupCount
+          });
+        }
+        // Start new group
+        currentGroupLabel = groupLabel;
+        currentGroupStartIndex = idx;
+        currentGroupCount = 1;
+      } else {
+        currentGroupCount++;
+      }
+    });
+
+    // Add final group
+    if (currentGroupCount > 0) {
+      groupList.push({
+        label: currentGroupLabel,
+        startIndex: currentGroupStartIndex,
+        columnCount: currentGroupCount
+      });
+    }
+
+    return groupList;
+  }, [columns, zoomLevel]);
+
   // Calculate 'Now' marker position
   const nowPosition = useMemo(() => {
     const now = new Date();
@@ -131,38 +210,93 @@ function TimelineHeader({
     return position;
   }, [columns.length, columnWidth, visibleStartDate, visibleEndDate]);
 
+  const totalWidth = columns.length * columnWidth;
+
   return (
     <div
-      className="relative border-b border-border bg-card/50"
+      className="relative border-b border-border bg-card/50 flex flex-col"
       style={{ height: TIMELINE_HEADER_HEIGHT }}
     >
-      {/* Date columns */}
+      {/* Primary header row - higher-level grouping (months/years) */}
       <div
-        className="flex h-full"
-        style={{ transform: `translateX(-${scrollLeft}px)` }}
+        className="relative border-b border-border/30 overflow-hidden"
+        style={{ height: TIMELINE_HEADER_PRIMARY_HEIGHT }}
       >
-        {columns.map((col, idx) => (
-          <div
-            key={idx}
-            className={cn(
-              'flex-shrink-0 border-r border-border/50 flex items-center justify-center text-xs font-medium',
-              col.isToday && 'bg-primary/10 text-primary'
-            )}
-            style={{ width: columnWidth }}
-          >
-            {col.label}
-          </div>
-        ))}
+        <div
+          className="absolute top-0 bottom-0 flex"
+          style={{
+            width: totalWidth,
+            transform: `translateX(-${scrollLeft}px)`
+          }}
+        >
+          {groups.map((group, idx) => (
+            <div
+              key={idx}
+              className="absolute top-0 bottom-0 border-r border-border/50 flex items-center justify-center text-xs font-semibold text-muted-foreground bg-muted/30"
+              style={{
+                width: group.columnCount * columnWidth,
+                left: group.startIndex * columnWidth
+              }}
+            >
+              <span className="truncate px-1">{group.label}</span>
+            </div>
+          ))}
+        </div>
       </div>
 
-      {/* Now marker */}
-      {nowPosition !== null && (
+      {/* Secondary header row - specific date labels */}
+      <div
+        className="relative overflow-hidden"
+        style={{ height: TIMELINE_HEADER_SECONDARY_HEIGHT }}
+      >
         <div
-          className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-10"
-          style={{ left: nowPosition - scrollLeft }}
+          className="absolute top-0 bottom-0 flex"
+          style={{
+            width: totalWidth,
+            transform: `translateX(-${scrollLeft}px)`
+          }}
         >
-          <div className="absolute -top-1 -left-1.5 w-3 h-3 rounded-full bg-red-500" />
+          {columns.map((col, idx) => (
+            <div
+              key={idx}
+              className={cn(
+                'flex-shrink-0 border-r border-border/40 flex items-center justify-center text-xs font-medium',
+                col.isToday && 'bg-primary/15 text-primary font-semibold',
+                col.isWeekend && zoomLevel === 'day' && !col.isToday && 'bg-muted/20 text-muted-foreground'
+              )}
+              style={{ width: columnWidth }}
+            >
+              <span className="truncate px-0.5">{col.label}</span>
+            </div>
+          ))}
         </div>
+      </div>
+
+      {/* Now marker - vertical red line with label */}
+      {nowPosition !== null && (
+        <Tooltip>
+          <TooltipTrigger asChild>
+            <div
+              className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-20 cursor-pointer hover:bg-red-400 transition-colors"
+              style={{ left: nowPosition - scrollLeft }}
+            >
+              {/* Top marker dot */}
+              <div className="absolute -top-0.5 -left-1 w-2.5 h-2.5 rounded-full bg-red-500 border-2 border-background shadow-sm" />
+              {/* Now label badge */}
+              <div className="absolute top-3 -left-4 px-1.5 py-0.5 bg-red-500 text-white text-[10px] font-semibold rounded shadow-sm whitespace-nowrap">
+                {t('timeline.today')}
+              </div>
+            </div>
+          </TooltipTrigger>
+          <TooltipContent side="bottom">
+            <span>{new Date().toLocaleDateString(undefined, {
+              weekday: 'long',
+              year: 'numeric',
+              month: 'long',
+              day: 'numeric'
+            })}</span>
+          </TooltipContent>
+        </Tooltip>
       )}
     </div>
   );
