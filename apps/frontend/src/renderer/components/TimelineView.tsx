@@ -6,8 +6,12 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock,
+  Flag,
+  GitBranch,
   Inbox,
+  Milestone,
   Plus,
+  Tag,
   ZoomIn,
   ZoomOut
 } from 'lucide-react';
@@ -498,6 +502,114 @@ function TimelineStatusBar({ taskCount, visibleStartDate, visibleEndDate }: Time
 }
 
 /**
+ * Timeline anchor data for jump navigation
+ */
+interface TimelineAnchor {
+  id: 'genesis' | 'firstRelease' | 'now' | 'nextMilestone';
+  labelKey: string;
+  icon: React.ReactNode;
+  date: Date | null;
+  description?: string;
+}
+
+/**
+ * JumpAnchorsBar - Navigation bar with buttons to jump to key timeline positions
+ * Buttons: Genesis (earliest commit), First Release, Now, Next Milestone
+ */
+interface JumpAnchorsBarProps {
+  onJumpTo: (anchor: TimelineAnchor) => void;
+  genesisDate?: Date;
+  firstReleaseDate?: Date;
+  nextMilestoneDate?: Date;
+  nextMilestoneName?: string;
+}
+
+function JumpAnchorsBar({
+  onJumpTo,
+  genesisDate,
+  firstReleaseDate,
+  nextMilestoneDate,
+  nextMilestoneName
+}: JumpAnchorsBarProps) {
+  const { t } = useTranslation('tasks');
+
+  // Define the anchor points
+  const anchors: TimelineAnchor[] = useMemo(() => [
+    {
+      id: 'genesis',
+      labelKey: 'timeline.genesis',
+      icon: <GitBranch className="h-3.5 w-3.5 mr-1.5" />,
+      date: genesisDate ?? null,
+      description: genesisDate
+        ? genesisDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+        : undefined
+    },
+    {
+      id: 'firstRelease',
+      labelKey: 'timeline.firstRelease',
+      icon: <Tag className="h-3.5 w-3.5 mr-1.5" />,
+      date: firstReleaseDate ?? null,
+      description: firstReleaseDate
+        ? firstReleaseDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+        : undefined
+    },
+    {
+      id: 'now',
+      labelKey: 'timeline.today',
+      icon: <Flag className="h-3.5 w-3.5 mr-1.5" />,
+      date: new Date(),
+      description: new Date().toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+    },
+    {
+      id: 'nextMilestone',
+      labelKey: 'timeline.nextMilestone',
+      icon: <Milestone className="h-3.5 w-3.5 mr-1.5" />,
+      date: nextMilestoneDate ?? null,
+      description: nextMilestoneName ?? (nextMilestoneDate
+        ? nextMilestoneDate.toLocaleDateString(undefined, { year: 'numeric', month: 'short', day: 'numeric' })
+        : undefined)
+    }
+  ], [genesisDate, firstReleaseDate, nextMilestoneDate, nextMilestoneName]);
+
+  return (
+    <div className="flex items-center gap-1">
+      {anchors.map((anchor) => (
+        <Tooltip key={anchor.id}>
+          <TooltipTrigger asChild>
+            <Button
+              variant="ghost"
+              size="sm"
+              onClick={() => onJumpTo(anchor)}
+              disabled={anchor.date === null}
+              className={cn(
+                'text-xs h-7 px-2',
+                anchor.date === null && 'opacity-50 cursor-not-allowed'
+              )}
+            >
+              {anchor.icon}
+              {t(anchor.labelKey)}
+            </Button>
+          </TooltipTrigger>
+          <TooltipContent>
+            <div className="flex flex-col gap-0.5">
+              <span>
+                {t('timeline.jumpTo')} {t(anchor.labelKey)}
+              </span>
+              {anchor.description && (
+                <span className="text-xs text-muted-foreground">{anchor.description}</span>
+              )}
+              {anchor.date === null && (
+                <span className="text-xs text-yellow-500">Not available yet</span>
+              )}
+            </div>
+          </TooltipContent>
+        </Tooltip>
+      ))}
+    </div>
+  );
+}
+
+/**
  * Helper function to get week number
  */
 function getWeekNumber(date: Date): number {
@@ -577,15 +689,19 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     }
   }, [zoomLevel]);
 
-  const scrollToNow = useCallback(() => {
+  /**
+   * Scroll to a specific date with smooth animation
+   * Centers the date in the viewport
+   */
+  const scrollToDate = useCallback((targetDate: Date, smooth = true) => {
     if (!gridScrollRef.current) return;
 
-    const now = new Date();
     const startMs = visibleStartDate.getTime();
     const endMs = visibleEndDate.getTime();
-    const nowMs = now.getTime();
+    const targetMs = targetDate.getTime();
 
-    if (nowMs < startMs || nowMs > endMs) return;
+    // If target is outside visible range, scroll to nearest edge
+    const clampedTargetMs = Math.max(startMs, Math.min(endMs, targetMs));
 
     // Calculate total width
     let totalColumns = 0;
@@ -609,12 +725,53 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
     }
 
     const totalWidth = totalColumns * columnWidth;
-    const position = ((nowMs - startMs) / (endMs - startMs)) * totalWidth;
+    const position = ((clampedTargetMs - startMs) / (endMs - startMs)) * totalWidth;
 
-    // Center the 'Now' position in the viewport
+    // Center the position in the viewport with smooth animation
     const viewportWidth = gridScrollRef.current.clientWidth;
-    gridScrollRef.current.scrollLeft = Math.max(0, position - viewportWidth / 2);
+    const targetScrollLeft = Math.max(0, position - viewportWidth / 2);
+
+    gridScrollRef.current.scrollTo({
+      left: targetScrollLeft,
+      behavior: smooth ? 'smooth' : 'auto'
+    });
   }, [visibleStartDate, visibleEndDate, zoomLevel, columnWidth]);
+
+  /**
+   * Handle jump to anchor navigation
+   */
+  const handleJumpTo = useCallback((anchor: TimelineAnchor) => {
+    if (!anchor.date) return;
+    scrollToDate(anchor.date, true);
+  }, [scrollToDate]);
+
+  // Placeholder dates for anchors - will be populated by git history in Phase 3
+  // For now, use earliest task date as genesis and latest task date as milestone
+  const { genesisDate, firstReleaseDate, nextMilestoneDate } = useMemo(() => {
+    // Find earliest task creation date as placeholder for genesis
+    let earliest: Date | undefined;
+    let latest: Date | undefined;
+
+    for (const task of filteredTasks) {
+      const createdAt = new Date(task.createdAt);
+      if (!earliest || createdAt < earliest) {
+        earliest = createdAt;
+      }
+      if (!latest || createdAt > latest) {
+        latest = createdAt;
+      }
+    }
+
+    // Placeholder: genesis is earliest task, no first release, milestone is 1 month from now
+    const nextMilestone = new Date();
+    nextMilestone.setMonth(nextMilestone.getMonth() + 1);
+
+    return {
+      genesisDate: earliest,
+      firstReleaseDate: undefined, // Will be set when git tags are loaded
+      nextMilestoneDate: nextMilestone
+    };
+  }, [filteredTasks]);
 
   return (
     <div className="flex h-full flex-col bg-background">
@@ -625,22 +782,13 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick }: TimelineVie
         </div>
 
         <div className="flex items-center gap-2">
-          {/* Jump anchors */}
-          <div className="flex items-center gap-1 mr-2">
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={scrollToNow}
-                  className="text-xs"
-                >
-                  {t('tasks:timeline.today')}
-                </Button>
-              </TooltipTrigger>
-              <TooltipContent>{t('tasks:timeline.jumpTo')} {t('tasks:timeline.today')}</TooltipContent>
-            </Tooltip>
-          </div>
+          {/* Jump anchors bar */}
+          <JumpAnchorsBar
+            onJumpTo={handleJumpTo}
+            genesisDate={genesisDate}
+            firstReleaseDate={firstReleaseDate}
+            nextMilestoneDate={nextMilestoneDate}
+          />
 
           <Separator orientation="vertical" className="h-6" />
 
