@@ -32,6 +32,11 @@ class ImplementationPlan:
     updated_at: str | None = None
     spec_file: str | None = None
 
+    # Time Tracking
+    total_estimated_minutes: int | None = None
+    elapsed_minutes: int | None = None
+    remaining_minutes: int | None = None
+
     # Task status (synced with UI)
     # status: backlog, in_progress, ai_review, human_review, done
     # planStatus: pending, in_progress, review, completed
@@ -52,6 +57,13 @@ class ImplementationPlan:
             "updated_at": self.updated_at,
             "spec_file": self.spec_file,
         }
+        # Include time tracking fields if set
+        if self.total_estimated_minutes is not None:
+            result["total_estimated_minutes"] = self.total_estimated_minutes
+        if self.elapsed_minutes is not None:
+            result["elapsed_minutes"] = self.elapsed_minutes
+        if self.remaining_minutes is not None:
+            result["remaining_minutes"] = self.remaining_minutes
         # Include status fields if set (synced with UI)
         if self.status:
             result["status"] = self.status
@@ -92,6 +104,9 @@ class ImplementationPlan:
             created_at=data.get("created_at"),
             updated_at=data.get("updated_at"),
             spec_file=data.get("spec_file"),
+            total_estimated_minutes=data.get("total_estimated_minutes"),
+            elapsed_minutes=data.get("elapsed_minutes"),
+            remaining_minutes=data.get("remaining_minutes"),
             status=data.get("status"),
             planStatus=data.get("planStatus"),
             recoveryNote=data.get("recoveryNote"),
