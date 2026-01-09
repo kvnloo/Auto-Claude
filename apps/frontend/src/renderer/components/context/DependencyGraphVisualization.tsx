@@ -5,30 +5,11 @@ import { Card, CardContent } from '../ui/card';
 import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import { cn } from '../../lib/utils';
+import type { DependencyNode, DependencyEdge, DependencyGraph } from '../../../shared/types/project';
 
 // ============================================
 // TypeScript Types
 // ============================================
-
-export interface DependencyNode {
-  id: string;
-  name: string;
-  version?: string;
-  type: 'direct' | 'dev' | 'peer' | 'optional';
-  group?: number;
-}
-
-export interface DependencyEdge {
-  source: string;
-  target: string;
-  type?: 'requires' | 'devRequires' | 'peerRequires' | 'optionalRequires';
-}
-
-export interface DependencyGraph {
-  nodes: DependencyNode[];
-  edges: DependencyEdge[];
-  projectName?: string;
-}
 
 interface DependencyGraphVisualizationProps {
   data: DependencyGraph | null;

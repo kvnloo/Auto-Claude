@@ -469,3 +469,47 @@ export interface FileNode {
   name: string;
   isDirectory: boolean;
 }
+
+// ============================================
+// Dependency Graph Types
+// ============================================
+
+/**
+ * Represents a single node in the dependency graph.
+ */
+export interface DependencyNode {
+  /** Unique identifier for the node (package name) */
+  id: string;
+  /** Display name of the package */
+  name: string;
+  /** Version of the package (if available) */
+  version?: string;
+  /** Type of dependency */
+  type: 'direct' | 'dev' | 'peer' | 'optional';
+  /** Optional group identifier for visual clustering */
+  group?: number;
+}
+
+/**
+ * Represents an edge (relationship) between two nodes in the dependency graph.
+ */
+export interface DependencyEdge {
+  /** Source node ID (package that has the dependency) */
+  source: string;
+  /** Target node ID (package that is depended upon) */
+  target: string;
+  /** Type of relationship */
+  type?: 'requires' | 'devRequires' | 'peerRequires' | 'optionalRequires';
+}
+
+/**
+ * Complete dependency graph structure with nodes and edges.
+ */
+export interface DependencyGraph {
+  /** List of all dependency nodes */
+  nodes: DependencyNode[];
+  /** List of all dependency relationships */
+  edges: DependencyEdge[];
+  /** Optional project name for display */
+  projectName?: string;
+}

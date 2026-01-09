@@ -2,7 +2,7 @@ import { lazy, Suspense, Component, ReactNode } from 'react';
 import { RefreshCw, AlertCircle, Network } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
-import type { DependencyGraph } from './DependencyGraphVisualization';
+import type { DependencyGraph } from '../../../shared/types/project';
 
 // Lazy-load the DependencyGraphVisualization component
 // This delays loading D3 (~80KB) until the Dependencies tab is accessed
