@@ -145,7 +145,7 @@ export const useTaskStore = create<TaskState>()(
     }),
 
   updateTaskFromPlan: (taskId, plan) =>
-    set((state) => {
+    set((draft) => {
       // FIX (PR Review): Gate debug logging to prevent production console clutter
       debugLog('[updateTaskFromPlan] called with plan:', {
         taskId,
@@ -155,10 +155,10 @@ export const useTaskStore = create<TaskState>()(
         // Note: planData removed to avoid verbose output in logs
       });
 
-      const index = findTaskIndex(state.tasks, taskId);
+      const index = findTaskIndex(draft.tasks, taskId);
       if (index === -1) {
         console.log('[updateTaskFromPlan] Task not found:', taskId);
-        return state;
+        return;
       }
 
       // Validate plan data before processing
@@ -167,113 +167,109 @@ export const useTaskStore = create<TaskState>()(
           taskId,
           plan
         });
-        return state;
+        return;
       }
 
-      return {
-        tasks: updateTaskAtIndex(state.tasks, index, (t) => {
-          const subtasks: Subtask[] = plan.phases.flatMap((phase) =>
-            phase.subtasks.map((subtask) => {
-              // Ensure all required fields have valid values to prevent UI issues
-              // Use crypto.randomUUID() for stronger randomness when available
-              const id = subtask.id || (typeof crypto !== 'undefined' && crypto.randomUUID
-                ? crypto.randomUUID()
-                : `subtask-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
-              // Defensive fallback: validatePlanData() ensures description exists, but kept for safety
-              const description = subtask.description || 'No description available';
-              const title = description; // Title and description are the same for subtasks
-              const status = (subtask.status as SubtaskStatus) || 'pending';
+      const task = draft.tasks[index];
 
-              return {
-                id,
-                title,
-                description,
-                status,
-                files: [],
-                verification: subtask.verification as Subtask['verification']
-              };
-            })
-          );
-
-          debugLog('[updateTaskFromPlan] Created subtasks:', {
-            taskId,
-            subtaskCount: subtasks.length,
-            subtasks: subtasks.map(s => ({
-              id: s.id,
-              title: s.title,
-              status: s.status
-            }))
-          });
-
-          const allCompleted = subtasks.every((s) => s.status === 'completed');
-          const anyFailed = subtasks.some((s) => s.status === 'failed');
-          const anyInProgress = subtasks.some((s) => s.status === 'in_progress');
-          const anyCompleted = subtasks.some((s) => s.status === 'completed');
-
-          let status: TaskStatus = t.status;
-          let reviewReason: ReviewReason | undefined = t.reviewReason;
-
-          // RACE CONDITION FIX: Don't let stale plan data override status during active execution
-          const activePhases: ExecutionPhase[] = ['planning', 'coding', 'qa_review', 'qa_fixing'];
-          const isInActivePhase = t.executionProgress?.phase && activePhases.includes(t.executionProgress.phase);
-
-          // FIX (Flip-Flop Bug): Terminal phases should NOT trigger status recalculation
-          // When phase is 'complete' or 'failed', the task has finished and status should be stable
-          const terminalPhases: ExecutionPhase[] = ['complete', 'failed'];
-          const isInTerminalPhase = t.executionProgress?.phase && terminalPhases.includes(t.executionProgress.phase);
-
-          // FIX (Flip-Flop Bug): Respect explicit human_review status from plan file
-          // When the plan explicitly says 'human_review', don't override it with calculated status
-          // Note: ImplementationPlan type already defines status?: TaskStatus
-          const planStatus = plan.status;
-          const isExplicitHumanReview = planStatus === 'human_review';
-
-          // Only recalculate status if:
-          // 1. NOT in an active execution phase (planning, coding, qa_review, qa_fixing)
-          // 2. NOT in a terminal phase (complete, failed) - status should be stable
-          // 3. Plan doesn't explicitly say human_review
-          if (!isInActivePhase && !isInTerminalPhase && !isExplicitHumanReview) {
-            if (allCompleted) {
-              // FIX (Flip-Flop Bug): Don't downgrade from terminal statuses to ai_review
-              // Once a task reaches human_review, pr_created, or done, it should stay there
-              // unless explicitly changed (these are finalized workflow states)
-              const terminalStatuses: TaskStatus[] = ['human_review', 'pr_created', 'done'];
-              if (!terminalStatuses.includes(t.status)) {
-                status = 'ai_review';
-              }
-            } else if (anyFailed) {
-              status = 'human_review';
-              reviewReason = 'errors';
-            } else if (anyInProgress || anyCompleted) {
-              status = 'in_progress';
-            }
-          }
-
-          debugLog('[updateTaskFromPlan] Status computation:', {
-            taskId,
-            currentStatus: t.status,
-            newStatus: status,
-            isInActivePhase,
-            isInTerminalPhase,
-            isExplicitHumanReview,
-            planStatus,
-            currentPhase: t.executionProgress?.phase,
-            allCompleted,
-            anyFailed,
-            anyInProgress,
-            anyCompleted
-          });
+      const subtasks: Subtask[] = plan.phases.flatMap((phase) =>
+        phase.subtasks.map((subtask) => {
+          // Ensure all required fields have valid values to prevent UI issues
+          // Use crypto.randomUUID() for stronger randomness when available
+          const id = subtask.id || (typeof crypto !== 'undefined' && crypto.randomUUID
+            ? crypto.randomUUID()
+            : `subtask-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+          // Defensive fallback: validatePlanData() ensures description exists, but kept for safety
+          const description = subtask.description || 'No description available';
+          const title = description; // Title and description are the same for subtasks
+          const status = (subtask.status as SubtaskStatus) || 'pending';
 
           return {
-            ...t,
-            title: plan.feature || t.title,
-            subtasks,
+            id,
+            title,
+            description,
             status,
-            reviewReason,
-            updatedAt: new Date()
+            files: [],
+            verification: subtask.verification as Subtask['verification']
           };
         })
-      };
+      );
+
+      debugLog('[updateTaskFromPlan] Created subtasks:', {
+        taskId,
+        subtaskCount: subtasks.length,
+        subtasks: subtasks.map(s => ({
+          id: s.id,
+          title: s.title,
+          status: s.status
+        }))
+      });
+
+      const allCompleted = subtasks.every((s) => s.status === 'completed');
+      const anyFailed = subtasks.some((s) => s.status === 'failed');
+      const anyInProgress = subtasks.some((s) => s.status === 'in_progress');
+      const anyCompleted = subtasks.some((s) => s.status === 'completed');
+
+      let status: TaskStatus = task.status;
+      let reviewReason: ReviewReason | undefined = task.reviewReason;
+
+      // RACE CONDITION FIX: Don't let stale plan data override status during active execution
+      const activePhases: ExecutionPhase[] = ['planning', 'coding', 'qa_review', 'qa_fixing'];
+      const isInActivePhase = task.executionProgress?.phase && activePhases.includes(task.executionProgress.phase);
+
+      // FIX (Flip-Flop Bug): Terminal phases should NOT trigger status recalculation
+      // When phase is 'complete' or 'failed', the task has finished and status should be stable
+      const terminalPhases: ExecutionPhase[] = ['complete', 'failed'];
+      const isInTerminalPhase = task.executionProgress?.phase && terminalPhases.includes(task.executionProgress.phase);
+
+      // FIX (Flip-Flop Bug): Respect explicit human_review status from plan file
+      // When the plan explicitly says 'human_review', don't override it with calculated status
+      // Note: ImplementationPlan type already defines status?: TaskStatus
+      const planStatus = plan.status;
+      const isExplicitHumanReview = planStatus === 'human_review';
+
+      // Only recalculate status if:
+      // 1. NOT in an active execution phase (planning, coding, qa_review, qa_fixing)
+      // 2. NOT in a terminal phase (complete, failed) - status should be stable
+      // 3. Plan doesn't explicitly say human_review
+      if (!isInActivePhase && !isInTerminalPhase && !isExplicitHumanReview) {
+        if (allCompleted) {
+          // FIX (Flip-Flop Bug): Don't downgrade from terminal statuses to ai_review
+          // Once a task reaches human_review, pr_created, or done, it should stay there
+          // unless explicitly changed (these are finalized workflow states)
+          const terminalStatuses: TaskStatus[] = ['human_review', 'pr_created', 'done'];
+          if (!terminalStatuses.includes(task.status)) {
+            status = 'ai_review';
+          }
+        } else if (anyFailed) {
+          status = 'human_review';
+          reviewReason = 'errors';
+        } else if (anyInProgress || anyCompleted) {
+          status = 'in_progress';
+        }
+      }
+
+      debugLog('[updateTaskFromPlan] Status computation:', {
+        taskId,
+        currentStatus: task.status,
+        newStatus: status,
+        isInActivePhase,
+        isInTerminalPhase,
+        isExplicitHumanReview,
+        planStatus,
+        currentPhase: task.executionProgress?.phase,
+        allCompleted,
+        anyFailed,
+        anyInProgress,
+        anyCompleted
+      });
+
+      // Direct mutation with immer - no need for spread operations
+      task.title = plan.feature || task.title;
+      task.subtasks = subtasks;
+      task.status = status;
+      task.reviewReason = reviewReason;
+      task.updatedAt = new Date();
     }),
 
   updateExecutionProgress: (taskId, progress) =>
