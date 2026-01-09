@@ -119,28 +119,29 @@ export const useTaskStore = create<TaskState>()(
     }),
 
   updateTaskStatus: (taskId, status) =>
-    set((state) => {
-      const index = findTaskIndex(state.tasks, taskId);
-      if (index === -1) return state;
+    set((draft) => {
+      const index = findTaskIndex(draft.tasks, taskId);
+      if (index === -1) return;
 
-      return {
-        tasks: updateTaskAtIndex(state.tasks, index, (t) => {
-          // Determine execution progress based on status transition
-          let executionProgress = t.executionProgress;
+      const task = draft.tasks[index];
 
-          if (status === 'backlog') {
-            // When status goes to backlog, reset execution progress to idle
-            // This ensures the planning/coding animation stops when task is stopped
-            executionProgress = { phase: 'idle' as ExecutionPhase, phaseProgress: 0, overallProgress: 0 };
-          } else if (status === 'in_progress' && !t.executionProgress?.phase) {
-            // When starting a task and no phase is set yet, default to planning
-            // This prevents the "no active phase" UI state during startup race condition
-            executionProgress = { phase: 'planning' as ExecutionPhase, phaseProgress: 0, overallProgress: 0 };
-          }
+      // Determine execution progress based on status transition
+      let executionProgress = task.executionProgress;
 
-          return { ...t, status, executionProgress, updatedAt: new Date() };
-        })
-      };
+      if (status === 'backlog') {
+        // When status goes to backlog, reset execution progress to idle
+        // This ensures the planning/coding animation stops when task is stopped
+        executionProgress = { phase: 'idle' as ExecutionPhase, phaseProgress: 0, overallProgress: 0 };
+      } else if (status === 'in_progress' && !task.executionProgress?.phase) {
+        // When starting a task and no phase is set yet, default to planning
+        // This prevents the "no active phase" UI state during startup race condition
+        executionProgress = { phase: 'planning' as ExecutionPhase, phaseProgress: 0, overallProgress: 0 };
+      }
+
+      // Direct mutation with immer - no need for spread operations
+      task.status = status;
+      task.executionProgress = executionProgress;
+      task.updatedAt = new Date();
     }),
 
   updateTaskFromPlan: (taskId, plan) =>
