@@ -236,6 +236,23 @@
       "newDates": "{{startDate}} → {{endDate}}",
       "dropHere": "Release to schedule",
       "snapTo": "Snapping to {{unit}}"
+    },
+    "shortcuts": {
+      "title": "Keyboard Shortcuts",
+      "zoomIn": "Zoom In",
+      "zoomInKey": "+",
+      "zoomOut": "Zoom Out",
+      "zoomOutKey": "-",
+      "scrollLeft": "Scroll Left",
+      "scrollLeftKey": "←",
+      "scrollRight": "Scroll Right",
+      "scrollRightKey": "→",
+      "jumpGenesis": "Jump to Genesis",
+      "jumpGenesisKey": "G",
+      "jumpNow": "Jump to Now",
+      "jumpNowKey": "N",
+      "jumpMilestone": "Jump to Next Milestone",
+      "jumpMilestoneKey": "M"
     }
   }
 }

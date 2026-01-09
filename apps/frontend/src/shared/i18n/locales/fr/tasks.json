@@ -236,6 +236,23 @@
       "newDates": "{{startDate}} → {{endDate}}",
       "dropHere": "Relâcher pour planifier",
       "snapTo": "Alignement sur {{unit}}"
+    },
+    "shortcuts": {
+      "title": "Raccourcis clavier",
+      "zoomIn": "Zoom avant",
+      "zoomInKey": "+",
+      "zoomOut": "Zoom arrière",
+      "zoomOutKey": "-",
+      "scrollLeft": "Défiler à gauche",
+      "scrollLeftKey": "←",
+      "scrollRight": "Défiler à droite",
+      "scrollRightKey": "→",
+      "jumpGenesis": "Aller à la genèse",
+      "jumpGenesisKey": "G",
+      "jumpNow": "Aller à maintenant",
+      "jumpNowKey": "N",
+      "jumpMilestone": "Aller au prochain jalon",
+      "jumpMilestoneKey": "M"
     }
   }
 }

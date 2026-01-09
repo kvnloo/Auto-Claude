@@ -1,4 +1,4 @@
-import { useState, useMemo, useRef, useCallback } from 'react';
+import { useState, useMemo, useRef, useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 import {
   DndContext,
@@ -1815,6 +1815,119 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
     setDraggingTaskId(undefined);
     setDragPreview(null);
   }, [filteredTasks, visibleStartDate, visibleEndDate, zoomLevel, columnWidth, calculateNewDatesFromDragOffset, onTaskScheduleChange]);
+
+  /**
+   * Keyboard shortcuts for timeline navigation and zoom
+   * - +/= for zoom in (= is + without shift on most keyboards)
+   * - - for zoom out
+   * - Arrow Left/Right for scrolling the timeline
+   * - G for jumping to Genesis (earliest commit)
+   * - N for jumping to Now (today)
+   * - M for jumping to next Milestone
+   *
+   * Note: G, N, M overlap with global navigation shortcuts in Sidebar, but when
+   * the timeline is active these take precedence for timeline-specific navigation.
+   */
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Don't trigger shortcuts when typing in inputs
+      if (
+        e.target instanceof HTMLInputElement ||
+        e.target instanceof HTMLTextAreaElement ||
+        e.target instanceof HTMLSelectElement ||
+        (e.target as HTMLElement)?.isContentEditable
+      ) {
+        return;
+      }
+
+      // Skip if any modifier keys are pressed (Ctrl/Cmd/Alt)
+      // Allow Shift for + key (Shift + =)
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      const key = e.key;
+
+      // Zoom controls: + (or =) for zoom in, - for zoom out
+      if (key === '+' || key === '=') {
+        e.preventDefault();
+        handleZoomIn();
+        return;
+      }
+
+      if (key === '-' || key === '_') {
+        e.preventDefault();
+        handleZoomOut();
+        return;
+      }
+
+      // Arrow keys for scrolling the timeline
+      if (key === 'ArrowLeft') {
+        e.preventDefault();
+        if (gridScrollRef.current) {
+          // Scroll left by one column width
+          gridScrollRef.current.scrollBy({
+            left: -columnWidth,
+            behavior: 'smooth'
+          });
+        }
+        return;
+      }
+
+      if (key === 'ArrowRight') {
+        e.preventDefault();
+        if (gridScrollRef.current) {
+          // Scroll right by one column width
+          gridScrollRef.current.scrollBy({
+            left: columnWidth,
+            behavior: 'smooth'
+          });
+        }
+        return;
+      }
+
+      // Jump anchors: G for Genesis, N for Now, M for next Milestone
+      // These only work when there's no Shift key (to avoid conflicts)
+      if (!e.shiftKey) {
+        const upperKey = key.toUpperCase();
+
+        if (upperKey === 'G' && gitGenesisDate) {
+          e.preventDefault();
+          e.stopPropagation(); // Prevent Sidebar's navigation shortcut
+          scrollToDate(gitGenesisDate, true);
+          return;
+        }
+
+        if (upperKey === 'N') {
+          e.preventDefault();
+          e.stopPropagation(); // Prevent Sidebar's navigation shortcut
+          scrollToDate(new Date(), true);
+          return;
+        }
+
+        if (upperKey === 'M') {
+          e.preventDefault();
+          e.stopPropagation(); // Prevent Sidebar's navigation shortcut
+          // Find next milestone date
+          const now = new Date();
+          const futureMilestones = milestones
+            .filter(m => new Date(m.date) > now)
+            .sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
+
+          if (futureMilestones.length > 0) {
+            scrollToDate(new Date(futureMilestones[0].date), true);
+          } else {
+            // Fallback to 1 month from now if no future milestones
+            const fallbackDate = new Date();
+            fallbackDate.setMonth(fallbackDate.getMonth() + 1);
+            scrollToDate(fallbackDate, true);
+          }
+          return;
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown, true); // Use capture phase to intercept before Sidebar
+    return () => window.removeEventListener('keydown', handleKeyDown, true);
+  }, [handleZoomIn, handleZoomOut, columnWidth, gitGenesisDate, milestones, scrollToDate]);
 
   // Compute anchor dates from git history and milestones
   const { genesisDate, firstReleaseDate, nextMilestoneDate, nextMilestoneName } = useMemo(() => {
