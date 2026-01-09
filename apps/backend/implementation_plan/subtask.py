@@ -26,6 +26,9 @@ class Subtask:
     service: str | None = None  # Which service (backend, frontend, worker)
     all_services: bool = False  # True for integration subtasks
 
+    # Time Estimation
+    estimated_duration_minutes: int | None = None
+
     # Files
     files_to_modify: list[str] = field(default_factory=list)
     files_to_create: list[str] = field(default_factory=list)
@@ -57,6 +60,8 @@ class Subtask:
             result["service"] = self.service
         if self.all_services:
             result["all_services"] = True
+        if self.estimated_duration_minutes is not None:
+            result["estimated_duration_minutes"] = self.estimated_duration_minutes
         if self.files_to_modify:
             result["files_to_modify"] = self.files_to_modify
         if self.files_to_create:
@@ -92,6 +97,7 @@ class Subtask:
             status=SubtaskStatus(data.get("status", "pending")),
             service=data.get("service"),
             all_services=data.get("all_services", False),
+            estimated_duration_minutes=data.get("estimated_duration_minutes"),
             files_to_modify=data.get("files_to_modify", []),
             files_to_create=data.get("files_to_create", []),
             patterns_from=data.get("patterns_from", []),
