@@ -111,9 +111,10 @@ async def run_followup_planner(
     try:
         # Run single planning session
         async with client:
-            status, response = await run_agent_session(
+            status, response, _usage_info = await run_agent_session(
                 client, prompt, spec_dir, verbose, phase=LogPhase.PLANNING
             )
+            # Note: usage_info could be recorded for planner sessions too if needed
 
         # End planning phase in task logger
         if task_logger:

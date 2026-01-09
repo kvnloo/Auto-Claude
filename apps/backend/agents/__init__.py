@@ -30,6 +30,7 @@ __all__ = [
     # Session
     "run_agent_session",
     "post_session_processing",
+    "SessionUsageInfo",
     # Utils
     "get_latest_commit",
     "get_commit_count",
@@ -71,8 +72,8 @@ def __getattr__(name):
         from .planner import run_followup_planner
 
         return run_followup_planner
-    elif name in ("post_session_processing", "run_agent_session"):
-        from .session import post_session_processing, run_agent_session
+    elif name in ("post_session_processing", "run_agent_session", "SessionUsageInfo"):
+        from .session import SessionUsageInfo, post_session_processing, run_agent_session
 
         return locals()[name]
     elif name in (

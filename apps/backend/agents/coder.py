@@ -264,11 +264,12 @@ async def run_autonomous_agent(
 
         # Create client (fresh context) with phase-specific model and thinking
         # Use appropriate agent_type for correct tool permissions and thinking budget
+        current_agent_type = "planner" if first_run else "coder"
         client = create_client(
             project_dir,
             spec_dir,
             phase_model,
-            agent_type="planner" if first_run else "coder",
+            agent_type=current_agent_type,
             max_thinking_tokens=phase_thinking_budget,
         )
 
@@ -365,7 +366,7 @@ async def run_autonomous_agent(
 
         # Run session with async context manager
         async with client:
-            status, response = await run_agent_session(
+            status, response, usage_info = await run_agent_session(
                 client, prompt, spec_dir, verbose, phase=current_log_phase
             )
 
@@ -385,6 +386,9 @@ async def run_autonomous_agent(
                 linear_enabled=linear_is_enabled,
                 status_manager=status_manager,
                 source_spec_dir=source_spec_dir,
+                usage_info=usage_info,
+                agent_type=current_agent_type,
+                model_name=phase_model,
             )
 
             # Check for stuck subtasks

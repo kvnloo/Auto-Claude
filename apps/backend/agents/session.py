@@ -3,11 +3,15 @@ Agent Session Management
 ========================
 
 Handles running agent sessions and post-session processing including
-memory updates, recovery tracking, and Linear integration.
+memory updates, recovery tracking, Linear integration, and token usage tracking.
 """
 
 import logging
+import time
+import uuid
+from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from claude_agent_sdk import ClaudeSDKClient
 from debug import debug, debug_detailed, debug_error, debug_section, debug_success
@@ -46,6 +50,129 @@ from .utils import (
 logger = logging.getLogger(__name__)
 
 
+@dataclass
+class SessionUsageInfo:
+    """
+    Token usage information from a completed agent session.
+
+    This is extracted from SDK response messages and passed to
+    post_session_processing for storage.
+    """
+
+    session_id: str
+    input_tokens: int = 0
+    output_tokens: int = 0
+    thinking_tokens: int = 0
+    cache_hit_tokens: int = 0
+    duration_seconds: float | None = None
+    message_count: int = 0
+    tool_count: int = 0
+
+
+def _extract_usage_from_messages(messages: list[Any]) -> dict[str, int]:
+    """
+    Extract token usage from Claude SDK response messages.
+
+    The SDK may expose usage in different ways depending on version.
+    This function tries multiple approaches to extract the data.
+
+    Args:
+        messages: List of messages from client.receive_response()
+
+    Returns:
+        Dictionary with input_tokens, output_tokens, thinking_tokens, cache_hit_tokens
+    """
+    usage = {
+        "input_tokens": 0,
+        "output_tokens": 0,
+        "thinking_tokens": 0,
+        "cache_hit_tokens": 0,
+    }
+
+    for msg in messages:
+        # Check for usage attribute on the message
+        if hasattr(msg, "usage"):
+            msg_usage = msg.usage
+            if hasattr(msg_usage, "input_tokens"):
+                usage["input_tokens"] = max(usage["input_tokens"], msg_usage.input_tokens)
+            if hasattr(msg_usage, "output_tokens"):
+                usage["output_tokens"] = max(usage["output_tokens"], msg_usage.output_tokens)
+            # Extended thinking tokens
+            if hasattr(msg_usage, "thinking_tokens"):
+                usage["thinking_tokens"] = max(usage["thinking_tokens"], msg_usage.thinking_tokens)
+            # Cache hits (may be named differently in different SDK versions)
+            if hasattr(msg_usage, "cache_read_input_tokens"):
+                usage["cache_hit_tokens"] = max(
+                    usage["cache_hit_tokens"], msg_usage.cache_read_input_tokens
+                )
+            elif hasattr(msg_usage, "cache_hit_tokens"):
+                usage["cache_hit_tokens"] = max(
+                    usage["cache_hit_tokens"], msg_usage.cache_hit_tokens
+                )
+
+        # Some SDK versions expose usage at message level
+        if hasattr(msg, "input_tokens"):
+            usage["input_tokens"] = max(usage["input_tokens"], msg.input_tokens)
+        if hasattr(msg, "output_tokens"):
+            usage["output_tokens"] = max(usage["output_tokens"], msg.output_tokens)
+
+    return usage
+
+
+def _record_token_usage(
+    spec_dir: Path,
+    project_dir: Path,
+    usage_info: SessionUsageInfo,
+    agent_type: str,
+    model_name: str,
+    outcome: str,
+    subtask_id: str | None = None,
+) -> None:
+    """
+    Record token usage for a completed session.
+
+    Args:
+        spec_dir: Spec directory path
+        project_dir: Project root directory
+        usage_info: Session usage information
+        agent_type: Type of agent (coder, planner, qa_reviewer, etc.)
+        model_name: Claude model used
+        outcome: Session outcome (success, failed, retry, abandoned)
+        subtask_id: Subtask ID if applicable
+    """
+    try:
+        from usage.tracker import UsageTracker
+
+        tracker = UsageTracker(project_dir, spec_dir)
+        record = tracker.record_session(
+            session_id=usage_info.session_id,
+            agent_type=agent_type,
+            model_name=model_name,
+            outcome=outcome,
+            input_tokens=usage_info.input_tokens,
+            output_tokens=usage_info.output_tokens,
+            thinking_tokens=usage_info.thinking_tokens,
+            cache_hit_tokens=usage_info.cache_hit_tokens,
+            duration_seconds=usage_info.duration_seconds,
+            subtask_id=subtask_id,
+        )
+
+        if record:
+            total_tokens = record.total_tokens
+            logger.debug(
+                f"Recorded token usage: {total_tokens:,} total "
+                f"({usage_info.input_tokens:,} in, {usage_info.output_tokens:,} out)"
+            )
+        else:
+            logger.warning("Failed to record token usage")
+
+    except ImportError:
+        logger.debug("Usage tracking module not available")
+    except Exception as e:
+        # Don't let usage tracking failures break the main flow
+        logger.warning(f"Error recording token usage: {e}")
+
+
 async def post_session_processing(
     spec_dir: Path,
     project_dir: Path,
@@ -57,6 +184,9 @@ async def post_session_processing(
     linear_enabled: bool = False,
     status_manager: StatusManager | None = None,
     source_spec_dir: Path | None = None,
+    usage_info: SessionUsageInfo | None = None,
+    agent_type: str = "coder",
+    model_name: str = "claude-sonnet-4-5-20250929",
 ) -> bool:
     """
     Process session results and update memory automatically.
@@ -74,6 +204,9 @@ async def post_session_processing(
         linear_enabled: Whether Linear integration is enabled
         status_manager: Optional status manager for ccstatusline
         source_spec_dir: Original spec directory (for syncing back from worktree)
+        usage_info: Token usage information from the session (optional)
+        agent_type: Type of agent that ran the session (for usage tracking)
+        model_name: Claude model used (for usage tracking)
 
     Returns:
         True if subtask was completed successfully
@@ -191,6 +324,24 @@ async def post_session_processing(
             logger.warning(f"Error saving session memory: {e}")
             print_status("Memory save failed", "warning")
 
+        # Record token usage (for cost tracking dashboard)
+        if usage_info:
+            _record_token_usage(
+                spec_dir=spec_dir,
+                project_dir=project_dir,
+                usage_info=usage_info,
+                agent_type=agent_type,
+                model_name=model_name,
+                outcome="success",
+                subtask_id=subtask_id,
+            )
+            if usage_info.input_tokens > 0 or usage_info.output_tokens > 0:
+                print_status(
+                    f"Token usage recorded: {usage_info.input_tokens:,} in, "
+                    f"{usage_info.output_tokens:,} out",
+                    "success",
+                )
+
         return True
 
     elif subtask_status == "in_progress":
@@ -252,6 +403,18 @@ async def post_session_processing(
         except Exception as e:
             logger.debug(f"Failed to save incomplete session memory: {e}")
 
+        # Record token usage even for incomplete sessions (still consumed tokens)
+        if usage_info:
+            _record_token_usage(
+                spec_dir=spec_dir,
+                project_dir=project_dir,
+                usage_info=usage_info,
+                agent_type=agent_type,
+                model_name=model_name,
+                outcome="in_progress",
+                subtask_id=subtask_id,
+            )
+
         return False
 
     else:
@@ -308,6 +471,18 @@ async def post_session_processing(
         except Exception as e:
             logger.debug(f"Failed to save failed session memory: {e}")
 
+        # Record token usage even for failed sessions (still consumed tokens)
+        if usage_info:
+            _record_token_usage(
+                spec_dir=spec_dir,
+                project_dir=project_dir,
+                usage_info=usage_info,
+                agent_type=agent_type,
+                model_name=model_name,
+                outcome="failed",
+                subtask_id=subtask_id,
+            )
+
         return False
 
 
@@ -317,7 +492,7 @@ async def run_agent_session(
     spec_dir: Path,
     verbose: bool = False,
     phase: LogPhase = LogPhase.CODING,
-) -> tuple[str, str]:
+) -> tuple[str, str, SessionUsageInfo | None]:
     """
     Run a single agent session using Claude Agent SDK.
 
@@ -329,10 +504,11 @@ async def run_agent_session(
         phase: Current execution phase for logging
 
     Returns:
-        (status, response_text) where status is:
+        (status, response_text, usage_info) where status is:
         - "continue" if agent should continue working
         - "complete" if all subtasks complete
         - "error" if an error occurred
+        And usage_info contains token usage metrics (or None if unavailable)
     """
     debug_section("session", f"Agent Session - {phase.value}")
     debug(
@@ -351,6 +527,11 @@ async def run_agent_session(
     message_count = 0
     tool_count = 0
 
+    # Track session for usage metrics
+    session_id = f"session-{uuid.uuid4().hex[:12]}"
+    session_start = time.time()
+    collected_messages: list[Any] = []
+
     try:
         # Send the query
         debug("session", "Sending query to Claude SDK...")
@@ -363,6 +544,7 @@ async def run_agent_session(
         async for msg in client.receive_response():
             msg_type = type(msg).__name__
             message_count += 1
+            collected_messages.append(msg)  # Collect for usage extraction
             debug_detailed(
                 "session",
                 f"Received message #{message_count}",
@@ -520,6 +702,31 @@ async def run_agent_session(
 
         print("\n" + "-" * 70 + "\n")
 
+        # Calculate session duration and extract usage metrics
+        session_duration = time.time() - session_start
+        usage_data = _extract_usage_from_messages(collected_messages)
+
+        usage_info = SessionUsageInfo(
+            session_id=session_id,
+            input_tokens=usage_data["input_tokens"],
+            output_tokens=usage_data["output_tokens"],
+            thinking_tokens=usage_data["thinking_tokens"],
+            cache_hit_tokens=usage_data["cache_hit_tokens"],
+            duration_seconds=session_duration,
+            message_count=message_count,
+            tool_count=tool_count,
+        )
+
+        debug(
+            "session",
+            "Usage metrics extracted",
+            input_tokens=usage_info.input_tokens,
+            output_tokens=usage_info.output_tokens,
+            thinking_tokens=usage_info.thinking_tokens,
+            cache_hit_tokens=usage_info.cache_hit_tokens,
+            duration_seconds=f"{session_duration:.1f}",
+        )
+
         # Check if build is complete
         if is_build_complete(spec_dir):
             debug_success(
@@ -529,7 +736,7 @@ async def run_agent_session(
                 tool_count=tool_count,
                 response_length=len(response_text),
             )
-            return "complete", response_text
+            return "complete", response_text, usage_info
 
         debug_success(
             "session",
@@ -538,7 +745,7 @@ async def run_agent_session(
             tool_count=tool_count,
             response_length=len(response_text),
         )
-        return "continue", response_text
+        return "continue", response_text, usage_info
 
     except Exception as e:
         debug_error(
@@ -551,4 +758,19 @@ async def run_agent_session(
         print(f"Error during agent session: {e}")
         if task_logger:
             task_logger.log_error(f"Session error: {e}", phase)
-        return "error", str(e)
+
+        # Calculate partial usage for error case
+        session_duration = time.time() - session_start
+        usage_data = _extract_usage_from_messages(collected_messages)
+        error_usage_info = SessionUsageInfo(
+            session_id=session_id,
+            input_tokens=usage_data["input_tokens"],
+            output_tokens=usage_data["output_tokens"],
+            thinking_tokens=usage_data["thinking_tokens"],
+            cache_hit_tokens=usage_data["cache_hit_tokens"],
+            duration_seconds=session_duration,
+            message_count=message_count,
+            tool_count=tool_count,
+        )
+
+        return "error", str(e), error_usage_info

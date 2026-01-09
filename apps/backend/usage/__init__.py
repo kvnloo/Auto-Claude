@@ -54,6 +54,12 @@ from usage.cost_calculator import (
     calculate_cost,
     format_cost,
 )
+from usage.tracker import (
+    UsageTracker,
+    SessionUsageContext,
+    create_usage_tracker,
+    extract_usage_from_sdk_response,
+)
 
 __all__ = [
     # Models
@@ -75,4 +81,9 @@ __all__ = [
     "get_cost_calculator",
     "calculate_cost",
     "format_cost",
+    # Tracker
+    "UsageTracker",
+    "SessionUsageContext",
+    "create_usage_tracker",
+    "extract_usage_from_sdk_response",
 ]
