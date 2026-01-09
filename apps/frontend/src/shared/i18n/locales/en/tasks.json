@@ -134,6 +134,17 @@
   "subtasks": {
     "untitled": "Untitled subtask"
   },
+  "linkedArtifacts": {
+    "title": "Linked Artifacts",
+    "linkCommit": "Link commit",
+    "linkPR": "Link pull request",
+    "linkTag": "Link tag",
+    "unlinkCommit": "Unlink commit",
+    "unlinkPR": "Unlink pull request",
+    "unlinkTag": "Unlink tag",
+    "noLinkedArtifacts": "No linked artifacts. Click + buttons to link commits, PRs, or tags.",
+    "viewOnGitHub": "View on GitHub"
+  },
   "timeline": {
     "title": "Trajectory Timeline",
     "today": "Today",

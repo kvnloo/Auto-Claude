@@ -42,6 +42,7 @@ import { TaskSubtasks } from './TaskSubtasks';
 import { TaskLogs } from './TaskLogs';
 import { TaskFiles } from './TaskFiles';
 import { TaskReview } from './TaskReview';
+import { LinkedArtifactsSection } from './LinkedArtifactsSection';
 import type { Task, WorktreeCreatePROptions } from '../../../shared/types';
 
 interface TaskDetailModalProps {
@@ -490,6 +491,44 @@ function TaskDetailModalContent({ open, task, onOpenChange, onSwitchToTerminals,
                     <div className="p-5 space-y-5 overflow-x-hidden max-w-full">
                       {/* Metadata */}
                       <TaskMetadata task={task} />
+
+                      {/* Linked Artifacts Section */}
+                      <Separator />
+                      <LinkedArtifactsSection
+                        task={task}
+                        onLinkCommit={() => {
+                          // Will trigger ArtifactLinkDialog (implemented in 7.2)
+                          // For now, placeholder - dialog will be added later
+                        }}
+                        onLinkPR={() => {
+                          // Will trigger ArtifactLinkDialog (implemented in 7.2)
+                        }}
+                        onLinkTag={() => {
+                          // Will trigger ArtifactLinkDialog (implemented in 7.2)
+                        }}
+                        onUnlinkCommit={(commitHash) => {
+                          // Will call task-store update (implemented in 7.3)
+                          const linkedCommits = task.metadata?.linkedCommits?.filter(h => h !== commitHash) || [];
+                          useTaskStore.getState().updateTask(task.id, {
+                            metadata: { ...task.metadata, linkedCommits }
+                          });
+                        }}
+                        onUnlinkPR={(prNumber) => {
+                          // Will call task-store update (implemented in 7.3)
+                          const linkedPRs = task.metadata?.linkedPRs?.filter(n => n !== prNumber) || [];
+                          useTaskStore.getState().updateTask(task.id, {
+                            metadata: { ...task.metadata, linkedPRs }
+                          });
+                        }}
+                        onUnlinkTag={(tagName) => {
+                          // Will call task-store update (implemented in 7.3)
+                          const linkedTags = task.metadata?.linkedTags?.filter(t => t !== tagName) || [];
+                          useTaskStore.getState().updateTask(task.id, {
+                            metadata: { ...task.metadata, linkedTags }
+                          });
+                        }}
+                        disabled={state.isRunning && !state.isStuck}
+                      />
 
                       {/* Human Review Section */}
                       {state.needsReview && (

@@ -134,6 +134,17 @@
   "subtasks": {
     "untitled": "Sous-tâche sans titre"
   },
+  "linkedArtifacts": {
+    "title": "Artefacts liés",
+    "linkCommit": "Lier un commit",
+    "linkPR": "Lier une pull request",
+    "linkTag": "Lier un tag",
+    "unlinkCommit": "Délier le commit",
+    "unlinkPR": "Délier la pull request",
+    "unlinkTag": "Délier le tag",
+    "noLinkedArtifacts": "Aucun artefact lié. Cliquez sur les boutons + pour lier des commits, PRs ou tags.",
+    "viewOnGitHub": "Voir sur GitHub"
+  },
   "timeline": {
     "title": "Chronologie du Projet",
     "today": "Aujourd'hui",
