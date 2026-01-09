@@ -1,6 +1,7 @@
 import { create } from 'zustand';
 import type { Task, TaskStatus, SubtaskStatus, ImplementationPlan, Subtask, TaskMetadata, ExecutionProgress, ExecutionPhase, ReviewReason, TaskDraft } from '../../shared/types';
 import { debugLog } from '../../shared/utils/debug-logger';
+import { planCache, getPlanHash, getCachedValidation, getCachedSubtasks } from './plan-cache';
 
 interface TaskState {
   tasks: Task[];
@@ -144,14 +145,13 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   updateTaskFromPlan: (taskId, plan) =>
     set((state) => {
-      // PERF BOTTLENECK SUMMARY:
-      // This function is called frequently during task execution (polling updates from implementation_plan.json)
-      // Current implementation does NOT check if plan actually changed - all operations run on EVERY call:
-      // 1. JSON structure validation (O(n*m) for phases*subtasks)
-      // 2. Array flattening + object creation (20+ new objects per call)
-      // 3. Multiple array iterations for status flags (4x O(n) = O(4n))
-      // 4. Complex status calculation with array allocations
-      // Solution: Cache parsed plan structure and use hash-based change detection (see implementation plan)
+      // CACHE: Use plan hash to detect if plan content actually changed
+      // Early exit if plan is identical to last processed version (avoids all expensive operations below)
+      // This optimization eliminates:
+      // 1. Redundant JSON structure validation (O(n*m) for phases*subtasks)
+      // 2. Unnecessary array flattening + object creation (20+ new objects per call)
+      // 3. Redundant array iterations for status flags (4x O(n) = O(4n))
+      // 4. Unnecessary status calculation and state updates
 
       // FIX (PR Review): Gate debug logging to prevent production console clutter
       debugLog('[updateTaskFromPlan] called with plan:', {
@@ -168,11 +168,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         return state;
       }
 
-      // PERF: validatePlanData is called on EVERY update, even if plan hasn't changed
-      // This iterates through all phases and subtasks to validate structure (O(n*m) where n=phases, m=subtasks per phase)
-      // For a plan with 6 phases and 20 subtasks, this means ~120+ property checks per call
-      // Validate plan data before processing
-      if (!validatePlanData(plan)) {
+      // CACHE: Compute plan hash for change detection
+      const currentPlanHash = getPlanHash(plan);
+      const cachedData = planCache.get(plan);
+
+      // CACHE: Early exit if plan hasn't changed since last processing
+      // Check if we have cached data with matching hash - if so, plan is identical
+      if (cachedData && cachedData.hash === currentPlanHash) {
+        debugLog('[updateTaskFromPlan] Plan unchanged (cache hit), skipping update:', {
+          taskId,
+          hash: currentPlanHash
+        });
+        return state; // No changes needed, plan is identical
+      }
+
+      debugLog('[updateTaskFromPlan] Plan changed (cache miss), processing update:', {
+        taskId,
+        hash: currentPlanHash,
+        hadCachedData: !!cachedData
+      });
+
+      // CACHE: Use cached validation instead of direct validatePlanData call
+      // This avoids redundant validation when plan hasn't changed
+      if (!getCachedValidation(plan, validatePlanData, planCache)) {
         console.error('[updateTaskFromPlan] Invalid plan data, skipping update:', {
           taskId,
           plan
@@ -182,34 +200,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
       return {
         tasks: updateTaskAtIndex(state.tasks, index, (t) => {
-          // PERF: flatMap creates a new array on EVERY call by flattening all phases
-          // Each subtask.map() creates a new object with 6+ properties (id, title, description, status, files, verification)
-          // For a plan with 20 subtasks, this creates 20 new objects + 1 array, all temporary (GC pressure)
-          // This happens even if the plan content is identical to the previous call
-          const subtasks: Subtask[] = plan.phases.flatMap((phase) =>
-            phase.subtasks.map((subtask) => {
-              // PERF: Conditional logic and string concatenation executed for EVERY subtask
-              // crypto.randomUUID() or Date.now() + random string generation runs even if subtask already has an ID
-              // Ensure all required fields have valid values to prevent UI issues
-              // Use crypto.randomUUID() for stronger randomness when available
-              const id = subtask.id || (typeof crypto !== 'undefined' && crypto.randomUUID
-                ? crypto.randomUUID()
-                : `subtask-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
-              // Defensive fallback: validatePlanData() ensures description exists, but kept for safety
-              const description = subtask.description || 'No description available';
-              const title = description; // Title and description are the same for subtasks
-              const status = (subtask.status as SubtaskStatus) || 'pending';
-
-              return {
-                id,
-                title,
-                description,
-                status,
-                files: [],
-                verification: subtask.verification as Subtask['verification']
-              };
-            })
-          );
+          // CACHE: Use cached subtasks instead of flatMap + map operations
+          // This avoids creating 20+ new objects on every call when plan hasn't changed
+          // getCachedSubtasks handles: validation, flattening, ID generation, and caching
+          const subtasks: Subtask[] = getCachedSubtasks(plan, planCache);
 
           debugLog('[updateTaskFromPlan] Created subtasks:', {
             taskId,
@@ -221,13 +215,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             }))
           });
 
-          // PERF: Four separate array iterations over all subtasks (O(n) each = O(4n) total)
-          // For 20 subtasks, this means 80 status comparisons per update
-          // These computed flags are recalculated even if no subtask status changed
-          const allCompleted = subtasks.every((s) => s.status === 'completed');
-          const anyFailed = subtasks.some((s) => s.status === 'failed');
-          const anyInProgress = subtasks.some((s) => s.status === 'in_progress');
-          const anyCompleted = subtasks.some((s) => s.status === 'completed');
+          // CACHE: Get status flags from cached data (computed by getCachedSubtasks)
+          // This avoids four separate array iterations over all subtasks
+          const cachedDataAfterSubtasks = planCache.get(plan);
+          const { allCompleted, anyFailed, anyInProgress, anyCompleted } = cachedDataAfterSubtasks!.statusFlags;
 
           let status: TaskStatus = t.status;
           let reviewReason: ReviewReason | undefined = t.reviewReason;
