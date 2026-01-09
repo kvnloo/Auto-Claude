@@ -298,7 +298,146 @@ const browserMockAPI: ElectronAPI = {
   openLogsFolder: async () => ({ success: false, error: 'Not available in browser mode' }),
   copyDebugInfo: async () => ({ success: false, error: 'Not available in browser mode' }),
   getRecentErrors: async () => [],
-  listLogFiles: async () => []
+  listLogFiles: async () => [],
+
+  // Token Usage & Cost Dashboard Operations
+  getUsageSummary: async () => ({
+    success: true,
+    data: {
+      summary: {
+        total_input_tokens: 50000,
+        total_output_tokens: 25000,
+        total_thinking_tokens: 10000,
+        total_cache_hit_tokens: 15000,
+        total_cost_usd: 0.75,
+        session_count: 10,
+        success_count: 8,
+        failure_count: 2
+      },
+      efficiency: {
+        success_rate: 80,
+        avg_tokens_per_session: 8500,
+        avg_cost_per_session: 0.075,
+        cache_hit_rate: 30,
+        score: 75,
+        rating: 'good'
+      },
+      trends: {
+        cost: {
+          period: 'week',
+          change_percent: -5,
+          direction: 'down' as const
+        },
+        tokens: {
+          period: 'week',
+          change_percent: 10,
+          direction: 'up' as const
+        }
+      }
+    }
+  }),
+  getUsageByDateRange: async () => ({
+    success: true,
+    data: {
+      date_range: {
+        start: new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString().split('T')[0],
+        end: new Date().toISOString().split('T')[0]
+      },
+      daily: [
+        { date: new Date().toISOString().split('T')[0], total_tokens: 8500, total_cost_usd: 0.08, session_count: 1 },
+        { date: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString().split('T')[0], total_tokens: 12000, total_cost_usd: 0.12, session_count: 2 }
+      ],
+      weekly: {},
+      monthly: {},
+      by_spec: [
+        { spec_id: '001', spec_name: 'Sample Task', total_tokens: 20000, total_cost_usd: 0.20, session_count: 3 }
+      ],
+      total_cost: 0.75
+    }
+  }),
+  getUsageByAgent: async () => ({
+    success: true,
+    data: {
+      breakdown: {
+        planner: {
+          agent_type: 'planner',
+          total_tokens: 15000,
+          total_cost_usd: 0.15,
+          session_count: 3,
+          success_count: 3,
+          failure_count: 0
+        },
+        coder: {
+          agent_type: 'coder',
+          total_tokens: 50000,
+          total_cost_usd: 0.50,
+          session_count: 5,
+          success_count: 4,
+          failure_count: 1
+        },
+        qa_reviewer: {
+          agent_type: 'qa_reviewer',
+          total_tokens: 10000,
+          total_cost_usd: 0.10,
+          session_count: 2,
+          success_count: 1,
+          failure_count: 1
+        }
+      },
+      totals: {
+        tokens: 75000,
+        cost_usd: 0.75,
+        sessions: 10
+      }
+    }
+  }),
+  getUsageBySpec: async () => ({
+    success: true,
+    data: {
+      specs: [
+        {
+          spec_id: '001',
+          spec_name: 'Add User Authentication',
+          total_tokens: 35000,
+          total_cost_usd: 0.35,
+          session_count: 4,
+          success_count: 3,
+          failure_count: 1,
+          last_session_at: new Date().toISOString()
+        },
+        {
+          spec_id: '002',
+          spec_name: 'Fix Sidebar Bug',
+          total_tokens: 15000,
+          total_cost_usd: 0.15,
+          session_count: 2,
+          success_count: 2,
+          failure_count: 0,
+          last_session_at: new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString()
+        }
+      ],
+      total_specs: 2
+    }
+  }),
+  exportUsageReport: async () => ({
+    success: true,
+    data: {
+      csv_content: 'date,spec_id,spec_name,agent_type,input_tokens,output_tokens,cost_usd\n2024-01-15,001,Sample,coder,1000,500,0.02',
+      record_count: 1,
+      message: 'Export successful'
+    }
+  }),
+
+  // Git Operations
+  initializeGit: async () => ({
+    success: true,
+    data: {
+      success: true,
+      initialized: true,
+      alreadyInitialized: false,
+      message: 'Git repository initialized'
+    }
+  })
 };
 
 /**
