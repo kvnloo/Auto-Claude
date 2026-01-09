@@ -593,3 +593,85 @@ def format_duration(seconds: float) -> str:
     else:
         hours = seconds / 3600
         return f"{hours:.1f}h"
+
+
+def write_build_progress(
+    spec_dir: Path,
+    message: str,
+    percentage: float,
+    estimated_minutes: Optional[float] = None,
+) -> None:
+    """
+    Write or append to build-progress.txt with progress information including time estimates.
+
+    Args:
+        spec_dir: Directory containing build-progress.txt
+        message: Progress message to write
+        percentage: Progress percentage (0-100)
+        estimated_minutes: Optional estimated remaining minutes (for backwards compatibility)
+    """
+    from datetime import datetime
+
+    progress_file = spec_dir / "build-progress.txt"
+
+    # Get time estimates from ProgressCalculator
+    calculator = _get_progress_calculator(spec_dir)
+    time_info = []
+
+    if calculator:
+        try:
+            snapshot = calculator.calculate_progress()
+
+            # Add remaining time
+            remaining_time = snapshot.adjusted_remaining_minutes or snapshot.remaining_estimated_minutes
+            if remaining_time and remaining_time > 0:
+                time_str = format_time_estimate(remaining_time)
+                time_info.append(f"Remaining: {time_str}")
+
+            # Add estimated completion time
+            completion_time = calculator.get_estimated_completion_time()
+            if completion_time:
+                # Format as relative time (e.g., "in 2 hours")
+                time_info.append(f"ETA: {completion_time.strftime('%H:%M')}")
+
+            # Add velocity info
+            if snapshot.velocity_ratio is not None:
+                velocity = snapshot.velocity_ratio
+                if velocity < 0.9:
+                    time_info.append("(ahead of schedule)")
+                elif velocity > 1.1:
+                    time_info.append("(behind schedule)")
+                else:
+                    time_info.append("(on schedule)")
+
+        except Exception:
+            # If time calculation fails, fall back to estimated_minutes parameter
+            pass
+
+    # Fall back to estimated_minutes parameter if provided and no calculator data
+    if not time_info and estimated_minutes is not None and estimated_minutes > 0:
+        time_str = format_time_estimate(estimated_minutes)
+        time_info.append(f"Estimated: {time_str}")
+
+    # Build progress entry
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    entry_lines = [
+        f"\n[{timestamp}] Progress Update",
+        f"Status: {message}",
+        f"Progress: {percentage:.1f}%",
+    ]
+
+    if time_info:
+        entry_lines.append(f"Time: {' • '.join(time_info)}")
+
+    entry_lines.append("")  # Blank line separator
+
+    # Append to file
+    entry = "\n".join(entry_lines)
+
+    try:
+        with open(progress_file, "a") as f:
+            f.write(entry)
+    except OSError:
+        # If file doesn't exist or can't be written, fail silently
+        pass
