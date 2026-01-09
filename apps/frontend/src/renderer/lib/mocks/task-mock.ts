@@ -29,7 +29,7 @@ export const taskMock = {
 
   deleteTask: async () => ({ success: true }),
 
-  updateTask: async (_taskId: string, updates: { title?: string; description?: string }) => ({
+  updateTask: async (_taskId: string, updates: { title?: string; description?: string; metadata?: Record<string, unknown> }) => ({
     success: true,
     data: {
       id: _taskId,
@@ -40,6 +40,7 @@ export const taskMock = {
       status: 'backlog' as const,
       subtasks: [],
       logs: [],
+      metadata: updates.metadata,
       createdAt: new Date(),
       updatedAt: new Date()
     }

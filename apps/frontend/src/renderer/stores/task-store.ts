@@ -1,5 +1,5 @@
 import { create } from 'zustand';
-import type { Task, TaskStatus, SubtaskStatus, ImplementationPlan, Subtask, TaskMetadata, ExecutionProgress, ExecutionPhase, ReviewReason, TaskDraft } from '../../shared/types';
+import type { Task, TaskStatus, SubtaskStatus, ImplementationPlan, Subtask, TaskMetadata, ExecutionProgress, ExecutionPhase, ReviewReason, TaskDraft, ScheduleHistoryEntry } from '../../shared/types';
 import { debugLog } from '../../shared/utils/debug-logger';
 
 interface TaskState {
@@ -733,16 +733,30 @@ export function getTaskByGitHubIssue(issueNumber: number): Task | undefined {
 
 /**
  * Persist task schedule dates (scheduledStartDate and scheduledEndDate) to file
- * Used by timeline drag-to-schedule and resize functionality
+ * Used by timeline drag-to-schedule and resize functionality.
+ * Also maintains a scheduleHistory audit trail of all schedule changes.
  */
 export async function persistTaskSchedule(
   taskId: string,
   scheduledStartDate: string | null,
-  scheduledEndDate: string | null
+  scheduledEndDate: string | null,
+  /** Optional reason for the schedule change (for audit trail) */
+  reason?: ScheduleHistoryEntry['reason']
 ): Promise<boolean> {
   const store = useTaskStore.getState();
 
   try {
+    // Find the current task to get existing schedule dates for history
+    const task = store.tasks.find(t => t.id === taskId || t.specId === taskId);
+    const currentMetadata = task?.metadata || {};
+    const previousStartDate = currentMetadata.scheduledStartDate ?? null;
+    const previousEndDate = currentMetadata.scheduledEndDate ?? null;
+
+    // Check if dates are actually changing (avoid redundant history entries)
+    const startDateChanging = previousStartDate !== scheduledStartDate;
+    const endDateChanging = previousEndDate !== scheduledEndDate;
+    const isActualChange = startDateChanging || endDateChanging;
+
     // Build metadata update with only defined values
     const metadataUpdate: Partial<TaskMetadata> = {};
 
@@ -752,6 +766,22 @@ export async function persistTaskSchedule(
     }
     if (scheduledEndDate !== undefined) {
       metadataUpdate.scheduledEndDate = scheduledEndDate ?? undefined;
+    }
+
+    // Add history entry if dates are actually changing
+    if (isActualChange) {
+      const historyEntry: ScheduleHistoryEntry = {
+        changedAt: new Date().toISOString(),
+        previousStartDate,
+        previousEndDate,
+        newStartDate: scheduledStartDate,
+        newEndDate: scheduledEndDate,
+        reason: reason || 'manual'
+      };
+
+      // Append to existing history or create new array
+      const existingHistory = currentMetadata.scheduleHistory || [];
+      metadataUpdate.scheduleHistory = [...existingHistory, historyEntry];
     }
 
     // Call the IPC to persist changes to spec files

@@ -168,6 +168,25 @@ export type TaskCategory =
   | 'infrastructure'
   | 'testing';
 
+/**
+ * Schedule history entry for audit trail
+ * Tracks when task schedule dates are changed (via drag-to-reschedule or resize)
+ */
+export interface ScheduleHistoryEntry {
+  /** ISO timestamp when the change was made */
+  changedAt: string;
+  /** Previous scheduled start date (ISO string, or null if not set) */
+  previousStartDate: string | null;
+  /** Previous scheduled end date (ISO string, or null if not set) */
+  previousEndDate: string | null;
+  /** New scheduled start date (ISO string, or null if cleared) */
+  newStartDate: string | null;
+  /** New scheduled end date (ISO string, or null if cleared) */
+  newEndDate: string | null;
+  /** Optional reason or source of the change */
+  reason?: 'drag' | 'resize' | 'manual' | 'api';
+}
+
 export interface TaskMetadata {
   // Origin tracking
   sourceType?: 'ideation' | 'manual' | 'imported' | 'insights' | 'roadmap' | 'linear' | 'github' | 'gitlab';
@@ -210,6 +229,7 @@ export interface TaskMetadata {
   linkedPRs?: number[];  // Array of PR numbers linked to this task
   linkedTags?: string[];  // Array of tag names linked to this task
   dependsOnTaskIds?: string[];  // Task IDs (specIds) this task depends on - for timeline dependency arrows
+  scheduleHistory?: ScheduleHistoryEntry[];  // Audit trail of schedule changes
 
   // Type-specific metadata (from different idea types)
   securitySeverity?: 'low' | 'medium' | 'high' | 'critical';
