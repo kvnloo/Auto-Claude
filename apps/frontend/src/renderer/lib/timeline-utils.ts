@@ -237,3 +237,252 @@ export function isTaskBarVisible(position: TaskBarPosition, totalWidth: number):
   // Task is visible if its right edge is past 0 AND its left edge is before total width
   return rightEdge > 0 && position.left < totalWidth;
 }
+
+/**
+ * Options for calculating a dependency path
+ */
+export interface DependencyPathOptions {
+  /** Position of the source task bar (the task being depended on) */
+  sourcePosition: TaskBarPosition;
+  /** Position of the target task bar (the task that depends on the source) */
+  targetPosition: TaskBarPosition;
+  /** Row index of the source task (0-based) */
+  sourceRowIndex: number;
+  /** Row index of the target task (0-based) */
+  targetRowIndex: number;
+  /** Height of each row in pixels */
+  rowHeight: number;
+}
+
+/**
+ * Result of a dependency path calculation
+ */
+export interface DependencyPathResult {
+  /** SVG path string (d attribute value) for the bezier curve */
+  path: string;
+  /** X coordinate where the path starts (right edge of source task) */
+  startX: number;
+  /** Y coordinate where the path starts (vertical center of source row) */
+  startY: number;
+  /** X coordinate where the path ends (left edge of target task) */
+  endX: number;
+  /** Y coordinate where the path ends (vertical center of target row) */
+  endY: number;
+  /** Recommended arrowhead marker ID based on path direction */
+  markerRecommendation: 'standard' | 'reverse';
+}
+
+/**
+ * SVG Arrowhead marker definition configuration
+ * Use this to create consistent arrowhead markers for dependency arrows
+ */
+export interface ArrowheadMarkerConfig {
+  /** Unique ID for the marker */
+  id: string;
+  /** Width of the marker bounding box */
+  markerWidth: number;
+  /** Height of the marker bounding box */
+  markerHeight: number;
+  /** X coordinate of reference point (attachment point) */
+  refX: number;
+  /** Y coordinate of reference point */
+  refY: number;
+  /** SVG path data for the arrowhead shape */
+  pathD: string;
+}
+
+/**
+ * Default arrowhead marker configuration
+ * Creates a standard triangular arrowhead pointing right
+ */
+export const DEFAULT_ARROWHEAD_MARKER: ArrowheadMarkerConfig = {
+  id: 'dependency-arrowhead',
+  markerWidth: 8,
+  markerHeight: 8,
+  refX: 7,
+  refY: 4,
+  pathD: 'M 0 0 L 8 4 L 0 8 L 2 4 Z'
+};
+
+/**
+ * Calculate the SVG path for a dependency arrow between two task bars.
+ * Creates a smooth bezier curve from the right edge of the source task to
+ * the left edge of the target task, with arrowhead marker support.
+ *
+ * The function handles both forward (left-to-right) and backward (right-to-left)
+ * dependencies with appropriate curve routing:
+ * - Forward: Simple S-curve with control points
+ * - Backward: Loops around to avoid overlapping with task bars
+ *
+ * @param options Configuration options including source/target positions
+ * @returns DependencyPathResult with SVG path string and coordinates
+ *
+ * @example
+ * ```tsx
+ * const result = calculateDependencyPath({
+ *   sourcePosition: { left: 100, width: 80, taskId: 'task1', startDate, endDate },
+ *   targetPosition: { left: 200, width: 60, taskId: 'task2', startDate, endDate },
+ *   sourceRowIndex: 0,
+ *   targetRowIndex: 1,
+ *   rowHeight: 40
+ * });
+ *
+ * // Use in SVG:
+ * <path d={result.path} markerEnd="url(#arrowhead)" />
+ * ```
+ */
+export function calculateDependencyPath(options: DependencyPathOptions): DependencyPathResult {
+  const {
+    sourcePosition,
+    targetPosition,
+    sourceRowIndex,
+    targetRowIndex,
+    rowHeight
+  } = options;
+
+  // Calculate connection points
+  // From: right edge of source task bar, vertically centered in row
+  const startX = sourcePosition.left + sourcePosition.width;
+  const startY = sourceRowIndex * rowHeight + rowHeight / 2;
+
+  // To: left edge of target task bar, vertically centered in row
+  const endX = targetPosition.left;
+  const endY = targetRowIndex * rowHeight + rowHeight / 2;
+
+  // Calculate path based on direction
+  const dx = endX - startX;
+  const dy = endY - startY;
+
+  let path: string;
+  let markerRecommendation: 'standard' | 'reverse';
+
+  if (dx > 0) {
+    // Forward direction (left to right) - standard S-curve
+    // Control point offset scales with distance but caps at 60px
+    const cpOffset = Math.min(Math.abs(dx) * 0.4, 60);
+
+    // Control points: exit horizontally right, enter horizontally left
+    const cp1x = startX + cpOffset;
+    const cp1y = startY;
+    const cp2x = endX - cpOffset;
+    const cp2y = endY;
+
+    path = `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${endX} ${endY}`;
+    markerRecommendation = 'standard';
+  } else {
+    // Backward direction (right to left) - need to route around task bars
+    // This creates a path that goes up/down first, then back to the target
+    const loopRadius = Math.max(Math.abs(dx) * 0.3, 30);
+
+    // Determine vertical direction based on relative row positions
+    // Go up if target is above, down if target is below (with offset to create clearance)
+    const verticalOffset = dy > 0 ? -20 : 20;
+
+    // Mid-point for the loop apex
+    const midX = (startX + endX) / 2;
+    const midY = (startY + endY) / 2 + verticalOffset;
+
+    // Control points for the S-curve around the task bars
+    const cp1x = startX + loopRadius;
+    const cp1y = startY;
+    const cp2x = startX + loopRadius;
+    const cp2y = midY;
+    const cp3x = endX - loopRadius;
+    const cp3y = midY;
+    const cp4x = endX - loopRadius;
+    const cp4y = endY;
+
+    // Using cubic bezier with smooth continuation (S command)
+    path = `M ${startX} ${startY} C ${cp1x} ${cp1y}, ${cp2x} ${cp2y}, ${midX} ${midY} S ${cp4x} ${cp4y}, ${endX} ${endY}`;
+    markerRecommendation = 'reverse';
+  }
+
+  return {
+    path,
+    startX,
+    startY,
+    endX,
+    endY,
+    markerRecommendation
+  };
+}
+
+/**
+ * Calculate dependency paths for multiple connections at once.
+ * Useful for batch rendering all dependency arrows in a timeline.
+ *
+ * @param connections Array of connection specifications
+ * @param rowHeight Height of each row in pixels
+ * @returns Array of path results with connection metadata
+ */
+export function calculateAllDependencyPaths(
+  connections: Array<{
+    sourcePosition: TaskBarPosition;
+    targetPosition: TaskBarPosition;
+    sourceRowIndex: number;
+    targetRowIndex: number;
+    sourceTaskId: string;
+    targetTaskId: string;
+  }>,
+  rowHeight: number
+): Array<DependencyPathResult & { sourceTaskId: string; targetTaskId: string }> {
+  return connections.map((connection) => ({
+    ...calculateDependencyPath({
+      sourcePosition: connection.sourcePosition,
+      targetPosition: connection.targetPosition,
+      sourceRowIndex: connection.sourceRowIndex,
+      targetRowIndex: connection.targetRowIndex,
+      rowHeight
+    }),
+    sourceTaskId: connection.sourceTaskId,
+    targetTaskId: connection.targetTaskId
+  }));
+}
+
+/**
+ * Generate SVG marker definition JSX-compatible attributes for an arrowhead.
+ * This helper creates the configuration needed to render an SVG <marker> element.
+ *
+ * @param config Arrowhead marker configuration
+ * @param fillClass Tailwind CSS class for fill color (e.g., 'fill-blue-400/60')
+ * @returns Object with all attributes needed for SVG marker element
+ *
+ * @example
+ * ```tsx
+ * const markerAttrs = getArrowheadMarkerAttrs(DEFAULT_ARROWHEAD_MARKER, 'fill-blue-500');
+ * // In JSX:
+ * <marker {...markerAttrs.marker}>
+ *   <path d={markerAttrs.pathD} className={markerAttrs.fillClass} />
+ * </marker>
+ * ```
+ */
+export function getArrowheadMarkerAttrs(
+  config: ArrowheadMarkerConfig = DEFAULT_ARROWHEAD_MARKER,
+  fillClass: string = 'fill-blue-400/60'
+): {
+  marker: {
+    id: string;
+    markerWidth: string;
+    markerHeight: string;
+    refX: string;
+    refY: string;
+    orient: string;
+    markerUnits: string;
+  };
+  pathD: string;
+  fillClass: string;
+} {
+  return {
+    marker: {
+      id: config.id,
+      markerWidth: String(config.markerWidth),
+      markerHeight: String(config.markerHeight),
+      refX: String(config.refX),
+      refY: String(config.refY),
+      orient: 'auto',
+      markerUnits: 'strokeWidth'
+    },
+    pathD: config.pathD,
+    fillClass
+  };
+}
