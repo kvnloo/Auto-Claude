@@ -60,6 +60,14 @@ from usage.tracker import (
     create_usage_tracker,
     extract_usage_from_sdk_response,
 )
+from usage.aggregator import (
+    UsageAggregator,
+    DailyUsage,
+    SpecUsage,
+    UsageTrend,
+    EfficiencyScore,
+    get_usage_aggregator,
+)
 
 __all__ = [
     # Models
@@ -86,4 +94,11 @@ __all__ = [
     "SessionUsageContext",
     "create_usage_tracker",
     "extract_usage_from_sdk_response",
+    # Aggregator
+    "UsageAggregator",
+    "DailyUsage",
+    "SpecUsage",
+    "UsageTrend",
+    "EfficiencyScore",
+    "get_usage_aggregator",
 ]
