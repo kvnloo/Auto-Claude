@@ -49,6 +49,7 @@ class Icons:
     PHASE = ("◆", "*")
     WORKER = ("⚡", "W")
     SESSION = ("▸", ">")
+    CLOCK = ("⏱", "[T]")
 
     # Menu
     EDIT = ("✏️", "[E]")

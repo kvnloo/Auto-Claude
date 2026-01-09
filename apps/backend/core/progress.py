@@ -6,10 +6,12 @@ Functions for tracking and displaying progress of the autonomous coding agent.
 Uses subtask-based implementation plans (implementation_plan.json).
 
 Enhanced with colored output, icons, and better visual formatting.
+Includes time estimation and remaining time tracking.
 """
 
 import json
 from pathlib import Path
+from typing import Optional
 
 from ui import (
     Icons,
@@ -24,6 +26,50 @@ from ui import (
     success,
     warning,
 )
+
+
+def _get_progress_calculator(spec_dir: Path):
+    """
+    Helper to get a ProgressCalculator for the given spec directory.
+
+    Returns None if the plan doesn't exist or can't be loaded.
+    """
+    try:
+        from implementation_plan import ImplementationPlan
+        from estimation.progress_calculator import ProgressCalculator
+
+        plan_file = spec_dir / "implementation_plan.json"
+        if not plan_file.exists():
+            return None
+
+        plan = ImplementationPlan.load(plan_file)
+        return ProgressCalculator(plan)
+    except (ImportError, OSError, json.JSONDecodeError, Exception):
+        # If imports fail or plan can't be loaded, return None
+        return None
+
+
+def format_time_estimate(minutes: float) -> str:
+    """
+    Format time estimate in human-readable form.
+
+    Args:
+        minutes: Time in minutes
+
+    Returns:
+        Formatted string like "2h 30m" or "45m"
+    """
+    if minutes < 1:
+        return "< 1m"
+    elif minutes < 60:
+        return f"{int(minutes)}m"
+    else:
+        hours = int(minutes // 60)
+        mins = int(minutes % 60)
+        if mins > 0:
+            return f"{hours}h {mins}m"
+        else:
+            return f"{hours}h"
 
 
 def count_subtasks(spec_dir: Path) -> tuple[int, int]:
@@ -134,6 +180,7 @@ def print_session_header(
     subtask_desc: str = None,
     phase_name: str = None,
     attempt: int = 1,
+    estimated_duration_minutes: Optional[float] = None,
 ) -> None:
     """Print a formatted header for the session."""
     session_type = "PLANNER AGENT" if is_planner else "CODING AGENT"
@@ -152,6 +199,11 @@ def print_session_header(
             subtask_line += f" - {desc}"
         content.append(subtask_line)
 
+        # Add time estimate for subtask if available
+        if estimated_duration_minutes and estimated_duration_minutes > 0:
+            time_str = format_time_estimate(estimated_duration_minutes)
+            content.append(f"{icon(Icons.CLOCK)} Estimated: {time_str}")
+
     if phase_name:
         content.append(f"{icon(Icons.PHASE)} Phase: {phase_name}")
 
@@ -164,7 +216,7 @@ def print_session_header(
 
 
 def print_progress_summary(spec_dir: Path, show_next: bool = True) -> None:
-    """Print a summary of current progress with enhanced formatting."""
+    """Print a summary of current progress with enhanced formatting and time estimates."""
     completed, total = count_subtasks(spec_dir)
 
     if total > 0:
@@ -172,12 +224,47 @@ def print_progress_summary(spec_dir: Path, show_next: bool = True) -> None:
         # Progress bar
         print(f"Progress: {progress_bar(completed, total, width=40)}")
 
-        # Status message
+        # Get time estimates from ProgressCalculator
+        calculator = _get_progress_calculator(spec_dir)
+        time_info = None
+        if calculator:
+            try:
+                snapshot = calculator.calculate_progress()
+                time_info = {
+                    "total_estimated": snapshot.total_estimated_minutes,
+                    "elapsed": snapshot.actual_elapsed_minutes or snapshot.elapsed_estimated_minutes,
+                    "remaining": snapshot.adjusted_remaining_minutes or snapshot.remaining_estimated_minutes,
+                    "velocity_ratio": snapshot.velocity_ratio,
+                }
+            except Exception:
+                # If time calculation fails, continue without time info
+                time_info = None
+
+        # Status message with time estimate
         if completed == total:
             print_status("BUILD COMPLETE - All subtasks completed!", "success")
+            # Show total time if available
+            if time_info and time_info["elapsed"]:
+                elapsed_str = format_time_estimate(time_info["elapsed"])
+                print_status(f"Total time: {elapsed_str}", "info")
         else:
             remaining = total - completed
-            print_status(f"{remaining} subtasks remaining", "info")
+            status_msg = f"{remaining} subtasks remaining"
+
+            # Add remaining time estimate if available
+            if time_info and time_info["remaining"]:
+                remaining_str = format_time_estimate(time_info["remaining"])
+                status_msg += f" • {icon(Icons.CLOCK)} ~{remaining_str} remaining"
+
+                # Add velocity indicator if available
+                if time_info["velocity_ratio"] is not None:
+                    velocity = time_info["velocity_ratio"]
+                    if velocity < 0.9:
+                        status_msg += " (ahead of schedule)"
+                    elif velocity > 1.1:
+                        status_msg += " (behind schedule)"
+
+            print_status(status_msg, "info")
 
         # Phase summary
         try:
@@ -237,17 +324,45 @@ def print_progress_summary(spec_dir: Path, show_next: bool = True) -> None:
 
 
 def print_build_complete_banner(spec_dir: Path) -> None:
-    """Print a completion banner."""
+    """Print a completion banner with total time taken."""
     content = [
         success(f"{icon(Icons.SUCCESS)} BUILD COMPLETE!"),
         "",
         "All subtasks have been implemented successfully.",
+    ]
+
+    # Add total time taken if available
+    calculator = _get_progress_calculator(spec_dir)
+    if calculator:
+        try:
+            snapshot = calculator.calculate_progress()
+            elapsed_time = snapshot.actual_elapsed_minutes or snapshot.elapsed_estimated_minutes
+            if elapsed_time and elapsed_time > 0:
+                time_str = format_time_estimate(elapsed_time)
+                content.append("")
+                content.append(f"{icon(Icons.CLOCK)} Total time: {time_str}")
+
+                # Add accuracy info if we have velocity data
+                if snapshot.velocity_ratio is not None:
+                    velocity = snapshot.velocity_ratio
+                    if velocity < 0.9:
+                        accuracy_msg = f"Completed {int((1 - velocity) * 100)}% faster than estimated"
+                    elif velocity > 1.1:
+                        accuracy_msg = f"Took {int((velocity - 1) * 100)}% longer than estimated"
+                    else:
+                        accuracy_msg = "Completed on schedule"
+                    content.append(muted(f"({accuracy_msg})"))
+        except Exception:
+            # If time calculation fails, continue without time info
+            pass
+
+    content.extend([
         "",
         muted("Next steps:"),
         f"  1. Review the {highlight('auto-claude/*')} branch",
         "  2. Run manual tests",
         "  3. Create a PR and merge to main",
-    ]
+    ])
 
     print()
     print(box(content, width=70, style="heavy"))
@@ -259,7 +374,7 @@ def print_paused_banner(
     spec_name: str,
     has_worktree: bool = False,
 ) -> None:
-    """Print a paused banner with resume instructions."""
+    """Print a paused banner with resume instructions and remaining time estimate."""
     completed, total = count_subtasks(spec_dir)
 
     content = [
@@ -267,6 +382,19 @@ def print_paused_banner(
         "",
         f"Progress saved: {completed}/{total} subtasks complete",
     ]
+
+    # Add remaining time estimate if available
+    calculator = _get_progress_calculator(spec_dir)
+    if calculator:
+        try:
+            snapshot = calculator.calculate_progress()
+            remaining_time = snapshot.adjusted_remaining_minutes or snapshot.remaining_estimated_minutes
+            if remaining_time and remaining_time > 0:
+                time_str = format_time_estimate(remaining_time)
+                content.append(f"Estimated remaining: {time_str}")
+        except Exception:
+            # If time calculation fails, continue without time info
+            pass
 
     if has_worktree:
         content.append("")
