@@ -145,6 +145,28 @@
     "noLinkedArtifacts": "No linked artifacts. Click + buttons to link commits, PRs, or tags.",
     "viewOnGitHub": "View on GitHub"
   },
+  "artifactLinkDialog": {
+    "title": "Link Git Artifacts",
+    "description": "Select commits, pull requests, or tags to link to this task. Linked artifacts will be highlighted on the timeline.",
+    "tabs": {
+      "commits": "Commits",
+      "prs": "PRs",
+      "tags": "Tags"
+    },
+    "searchPlaceholder": "Search by name, message, or hash...",
+    "loadingCommits": "Loading commits...",
+    "loadingTags": "Loading tags...",
+    "noCommits": "No commits found in this repository",
+    "noMatchingCommits": "No commits match your search",
+    "noTags": "No tags found in this repository",
+    "noMatchingTags": "No tags match your search",
+    "prsComingSoon": "Pull request linking coming soon. Use GitHub integration for PR management.",
+    "alreadyLinked": "Already linked",
+    "selectedCount": "{{count}} selected",
+    "selectedCount_one": "{{count}} selected",
+    "selectedCount_other": "{{count}} selected",
+    "linkSelected": "Link Selected"
+  },
   "timeline": {
     "title": "Trajectory Timeline",
     "today": "Today",

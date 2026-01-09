@@ -145,6 +145,28 @@
     "noLinkedArtifacts": "Aucun artefact lié. Cliquez sur les boutons + pour lier des commits, PRs ou tags.",
     "viewOnGitHub": "Voir sur GitHub"
   },
+  "artifactLinkDialog": {
+    "title": "Lier des artefacts Git",
+    "description": "Sélectionnez des commits, pull requests ou tags à lier à cette tâche. Les artefacts liés seront mis en évidence sur la chronologie.",
+    "tabs": {
+      "commits": "Commits",
+      "prs": "PRs",
+      "tags": "Tags"
+    },
+    "searchPlaceholder": "Rechercher par nom, message ou hash...",
+    "loadingCommits": "Chargement des commits...",
+    "loadingTags": "Chargement des tags...",
+    "noCommits": "Aucun commit trouvé dans ce dépôt",
+    "noMatchingCommits": "Aucun commit ne correspond à votre recherche",
+    "noTags": "Aucun tag trouvé dans ce dépôt",
+    "noMatchingTags": "Aucun tag ne correspond à votre recherche",
+    "prsComingSoon": "La liaison des pull requests arrive bientôt. Utilisez l'intégration GitHub pour la gestion des PRs.",
+    "alreadyLinked": "Déjà lié",
+    "selectedCount": "{{count}} sélectionné",
+    "selectedCount_one": "{{count}} sélectionné",
+    "selectedCount_other": "{{count}} sélectionnés",
+    "linkSelected": "Lier la sélection"
+  },
   "timeline": {
     "title": "Chronologie du Projet",
     "today": "Aujourd'hui",
