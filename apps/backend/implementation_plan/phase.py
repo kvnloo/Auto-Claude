@@ -81,3 +81,30 @@ class Phase:
         """Get (completed, total) subtask counts."""
         done = sum(1 for s in self.subtasks if s.status == SubtaskStatus.COMPLETED)
         return done, len(self.subtasks)
+
+    def get_total_estimated_time(self) -> int:
+        """Get total estimated time for all subtasks in minutes.
+
+        Returns:
+            Total estimated duration in minutes (0 if no estimates available)
+        """
+        total = 0
+        for subtask in self.subtasks:
+            if subtask.estimated_duration_minutes is not None:
+                total += subtask.estimated_duration_minutes
+        return total
+
+    def get_remaining_time(self) -> int:
+        """Get estimated time remaining for incomplete subtasks in minutes.
+
+        Returns:
+            Remaining estimated duration in minutes (0 if no estimates or all complete)
+        """
+        remaining = 0
+        for subtask in self.subtasks:
+            if (
+                subtask.status != SubtaskStatus.COMPLETED
+                and subtask.estimated_duration_minutes is not None
+            ):
+                remaining += subtask.estimated_duration_minutes
+        return remaining
