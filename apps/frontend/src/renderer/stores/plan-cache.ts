@@ -97,5 +97,75 @@ export class PlanCache {
   }
 }
 
+/**
+ * Get cached subtasks for a plan, or compute and cache them if not cached or plan changed
+ *
+ * This function implements the core caching optimization for plan parsing:
+ * - Computes plan hash to detect content changes
+ * - Returns cached subtasks if plan hasn't changed
+ * - Flattens phases->subtasks and caches result if plan changed
+ * - Avoids redundant flatMap, object creation, and validation on every call
+ *
+ * @param plan - The implementation plan to process
+ * @param cache - The PlanCache instance to use (defaults to singleton)
+ * @returns Flattened array of subtasks from all phases
+ */
+export function getCachedSubtasks(
+  plan: ImplementationPlan,
+  cache: PlanCache = planCache
+): Subtask[] {
+  // Compute current plan hash
+  const currentHash = getPlanHash(plan);
+
+  // Check if we have cached data for this plan
+  const cached = cache.get(plan);
+
+  // If cached and hash matches, return cached subtasks (fast path)
+  if (cached && cached.hash === currentHash) {
+    return cached.subtasks;
+  }
+
+  // Cache miss or plan changed - flatten subtasks from phases (slow path)
+  const subtasks: Subtask[] = plan.phases.flatMap((phase) =>
+    phase.subtasks.map((subtask) => {
+      // Ensure all required fields have valid values to prevent UI issues
+      // Use crypto.randomUUID() for stronger randomness when available
+      const id = subtask.id || (typeof crypto !== 'undefined' && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `subtask-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`);
+      const description = subtask.description || 'No description available';
+      const title = description; // Title and description are the same for subtasks
+      const status = subtask.status || 'pending';
+
+      return {
+        id,
+        title,
+        description,
+        status,
+        files: [],
+        verification: subtask.verification as Subtask['verification']
+      };
+    })
+  );
+
+  // Compute status flags for caching (will be used in future subtasks)
+  const statusFlags = {
+    allCompleted: subtasks.every((s) => s.status === 'completed'),
+    anyFailed: subtasks.some((s) => s.status === 'failed'),
+    anyInProgress: subtasks.some((s) => s.status === 'in_progress'),
+    anyCompleted: subtasks.some((s) => s.status === 'completed')
+  };
+
+  // Cache the result with current hash
+  cache.set(plan, {
+    hash: currentHash,
+    subtasks,
+    isValid: true, // We successfully processed the plan
+    statusFlags
+  });
+
+  return subtasks;
+}
+
 // Export singleton instance for use across the application
 export const planCache = new PlanCache();
