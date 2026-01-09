@@ -9,7 +9,13 @@
     "thisMonth": "This Month",
     "lastMonth": "Last Month",
     "thisYear": "This Year",
-    "custom": "Custom"
+    "custom": "Custom",
+    "ariaLabel": "Select date range",
+    "customRange": "Custom Range",
+    "startDate": "Start Date",
+    "endDate": "End Date",
+    "apply": "Apply",
+    "cancel": "Cancel"
   },
   "actions": {
     "export": "Export CSV",

@@ -9,7 +9,13 @@
     "thisMonth": "Ce Mois",
     "lastMonth": "Mois Dernier",
     "thisYear": "Cette Annee",
-    "custom": "Personnalise"
+    "custom": "Personnalise",
+    "ariaLabel": "Selectionner la plage de dates",
+    "customRange": "Plage Personnalisee",
+    "startDate": "Date de Debut",
+    "endDate": "Date de Fin",
+    "apply": "Appliquer",
+    "cancel": "Annuler"
   },
   "actions": {
     "export": "Exporter CSV",
