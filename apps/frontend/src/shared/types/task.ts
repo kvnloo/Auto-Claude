@@ -209,6 +209,7 @@ export interface TaskMetadata {
   linkedCommits?: string[];  // Array of commit hashes linked to this task
   linkedPRs?: number[];  // Array of PR numbers linked to this task
   linkedTags?: string[];  // Array of tag names linked to this task
+  dependsOnTaskIds?: string[];  // Task IDs (specIds) this task depends on - for timeline dependency arrows
 
   // Type-specific metadata (from different idea types)
   securitySeverity?: 'low' | 'medium' | 'high' | 'critical';
