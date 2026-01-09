@@ -44,6 +44,11 @@ class ComplexityAssessment:
     needs_research: bool = False
     needs_self_critique: bool = False
 
+    # Time estimation fields
+    estimated_duration_minutes: int | None = None
+    confidence_min: int | None = None
+    confidence_max: int | None = None
+
     def phases_to_run(self) -> list[str]:
         """Return list of phase names to run based on complexity."""
         # If AI provided recommended phases, use those
