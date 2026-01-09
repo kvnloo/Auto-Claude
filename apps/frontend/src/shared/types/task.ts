@@ -27,6 +27,11 @@ export interface ExecutionProgress {
   message?: string;  // Current status message
   startedAt?: Date;
   sequenceNumber?: number;  // Monotonically increasing counter to detect stale updates
+  // Time estimation fields
+  estimatedDuration?: number;  // Total estimated duration in minutes
+  elapsedTime?: number;  // Time elapsed in minutes
+  remainingTime?: number;  // Remaining time in minutes
+  estimatedCompletion?: Date;  // Estimated completion time
 }
 
 export interface Subtask {
@@ -40,6 +45,7 @@ export interface Subtask {
     run?: string;
     scenario?: string;
   };
+  estimatedDurationMinutes?: number;  // Estimated time in minutes
 }
 
 export interface QAReport {
@@ -203,6 +209,11 @@ export interface TaskMetadata {
   // Effort estimation
   estimatedEffort?: TaskComplexity;
 
+  // Time estimation (from complexity assessment)
+  estimatedDurationMinutes?: number;  // Estimated duration from complexity assessment
+  confidenceMin?: number;  // Min time estimate (confidence range)
+  confidenceMax?: number;  // Max time estimate (confidence range)
+
   // Type-specific metadata (from different idea types)
   securitySeverity?: 'low' | 'medium' | 'high' | 'critical';
   performanceCategory?: string;
@@ -274,6 +285,10 @@ export interface ImplementationPlan {
   planStatus?: string;
   recoveryNote?: string;
   description?: string;
+  // Time tracking
+  totalEstimatedMinutes?: number;  // Total estimated time for all subtasks
+  elapsedMinutes?: number;  // Actual time elapsed
+  remainingMinutes?: number;  // Remaining time estimate
 }
 
 export interface Phase {
@@ -293,6 +308,7 @@ export interface PlanSubtask {
     run?: string;
     scenario?: string;
   };
+  estimatedDurationMinutes?: number;  // Estimated time in minutes
 }
 
 // Workspace management types (for human review)
