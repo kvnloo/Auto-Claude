@@ -33,6 +33,12 @@ from usage.models import (
     TokenUsageSummary,
     AgentUsageBreakdown,
 )
+from usage.store import (
+    TokenUsageStore,
+    TokenUsageStoreError,
+    FileLockError,
+    FileLockTimeout,
+)
 
 __all__ = [
     "AgentType",
@@ -40,4 +46,8 @@ __all__ = [
     "TokenUsageRecord",
     "TokenUsageSummary",
     "AgentUsageBreakdown",
+    "TokenUsageStore",
+    "TokenUsageStoreError",
+    "FileLockError",
+    "FileLockTimeout",
 ]
