@@ -169,6 +169,7 @@ export const IPC_CHANNELS = {
   CONTEXT_MEMORY_STATUS: 'context:memoryStatus',
   CONTEXT_SEARCH_MEMORIES: 'context:searchMemories',
   CONTEXT_GET_MEMORIES: 'context:getMemories',
+  CONTEXT_GET_DEPENDENCY_GRAPH: 'context:getDependencyGraph',
 
   // Environment configuration
   ENV_GET: 'env:get',
