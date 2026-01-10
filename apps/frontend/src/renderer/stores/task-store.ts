@@ -1,3 +1,41 @@
+/**
+ * Task Store - Central state management for Auto Claude tasks
+ *
+ * PERFORMANCE OPTIMIZATION: This store uses Zustand's immer middleware for efficient state updates.
+ *
+ * WHY IMMER?
+ * - Before: Every task update created a new array with [...tasks], an O(n) operation
+ * - After: Direct draft mutations allow O(1) updates to individual tasks
+ * - Critical for appendLog: Logs can be appended multiple times per second during builds
+ * - Reduces GC pressure and unnecessary re-renders across the application
+ *
+ * IMMER USAGE PATTERN:
+ * Instead of:
+ *   set((state) => ({
+ *     tasks: state.tasks.map(t => t.id === taskId ? { ...t, ...updates } : t)
+ *   }))
+ *
+ * Use:
+ *   set((draft) => {
+ *     const task = draft.tasks[index];
+ *     Object.assign(task, updates);
+ *   })
+ *
+ * KEY PRINCIPLES:
+ * 1. Mutate draft state directly - immer handles immutability behind the scenes
+ * 2. Use draft.tasks.push() instead of [...state.tasks, newTask]
+ * 3. Use Object.assign() or direct property assignment (task.status = 'done')
+ * 4. Don't return anything from the set() callback - immer tracks mutations
+ * 5. findTaskIndex() helper locates tasks efficiently before mutation
+ *
+ * MIGRATION NOTES:
+ * - All task update functions migrated to immer draft mutations (subtask-3 through subtask-9)
+ * - updateTaskAtIndex helper removed as it's no longer needed (subtask-10)
+ * - findTaskIndex helper retained for efficient task lookup by id or specId
+ *
+ * @see https://github.com/pmndrs/zustand/blob/main/docs/integrations/immer-middleware.md
+ */
+
 import { create } from 'zustand';
 import { immer } from 'zustand/middleware/immer';
 import type { Task, TaskStatus, SubtaskStatus, ImplementationPlan, Subtask, TaskMetadata, ExecutionProgress, ExecutionPhase, ReviewReason, TaskDraft } from '../../shared/types';
@@ -74,6 +112,15 @@ function validatePlanData(plan: ImplementationPlan): boolean {
   return true;
 }
 
+/**
+ * Task store with immer middleware
+ *
+ * The store is created using Zustand's curried syntax with immer middleware:
+ * create<TaskState>()(immer((set, get) => ({...})))
+ *
+ * This allows all `set()` callbacks to receive a mutable draft state that
+ * immer automatically converts to immutable updates behind the scenes.
+ */
 export const useTaskStore = create<TaskState>()(
   immer((set, get) => ({
     tasks: [],
@@ -83,11 +130,27 @@ export const useTaskStore = create<TaskState>()(
 
   setTasks: (tasks) => set({ tasks }),
 
+  /**
+   * Add a new task to the store
+   *
+   * IMMER PATTERN: Uses draft.tasks.push() instead of array spread
+   * - Old approach: set((state) => ({ tasks: [...state.tasks, task] }))
+   * - New approach: draft.tasks.push(task)
+   * - Performance: O(1) push vs O(n) array copy
+   */
   addTask: (task) =>
     set((draft) => {
       draft.tasks.push(task);
     }),
 
+  /**
+   * Update task properties
+   *
+   * IMMER PATTERN: Direct mutation with Object.assign()
+   * - Old approach: tasks.map(t => t.id === taskId ? { ...t, ...updates } : t)
+   * - New approach: Object.assign(draft.tasks[index], updates)
+   * - Performance: O(1) direct mutation vs O(n) array iteration + spread
+   */
   updateTask: (taskId, updates) =>
     set((draft) => {
       const index = findTaskIndex(draft.tasks, taskId);
@@ -97,6 +160,14 @@ export const useTaskStore = create<TaskState>()(
       Object.assign(draft.tasks[index], updates);
     }),
 
+  /**
+   * Update task status and execution progress
+   *
+   * IMMER PATTERN: Direct property assignment on draft state
+   * - Old approach: tasks.map(t => t.id === taskId ? { ...t, status, executionProgress, updatedAt } : t)
+   * - New approach: task.status = status; task.executionProgress = ...; task.updatedAt = ...
+   * - Performance: O(1) direct mutation vs O(n) array iteration + spread
+   */
   updateTaskStatus: (taskId, status) =>
     set((draft) => {
       const index = findTaskIndex(draft.tasks, taskId);
@@ -123,6 +194,17 @@ export const useTaskStore = create<TaskState>()(
       task.updatedAt = new Date();
     }),
 
+  /**
+   * Update task with implementation plan data
+   *
+   * IMMER PATTERN: Direct property assignment on draft state
+   * - Old approach: Complex nested spread operations creating new task and tasks array
+   * - New approach: Direct mutations on task properties (task.title, task.subtasks, etc.)
+   * - Performance: O(1) direct mutation vs O(n) array iteration + deep object spread
+   *
+   * NOTE: This function handles complex logic for status transitions, subtask creation,
+   * and race condition prevention. All mutations use immer draft pattern.
+   */
   updateTaskFromPlan: (taskId, plan) =>
     set((draft) => {
       // FIX (PR Review): Gate debug logging to prevent production console clutter
@@ -251,6 +333,17 @@ export const useTaskStore = create<TaskState>()(
       task.updatedAt = new Date();
     }),
 
+  /**
+   * Update task execution progress (phase, progress percentages)
+   *
+   * IMMER PATTERN: Direct property assignment on draft state
+   * - Old approach: tasks.map(t => t.id === taskId ? { ...t, executionProgress: {...}, updatedAt } : t)
+   * - New approach: task.executionProgress = {...}; task.updatedAt = ...
+   * - Performance: O(1) direct mutation vs O(n) array iteration + spread
+   *
+   * NOTE: This function includes sequence number validation to prevent out-of-order updates
+   * during async progress reporting. Only updates updatedAt on phase changes to minimize re-renders.
+   */
   updateExecutionProgress: (taskId, progress) =>
     set((draft) => {
       const index = findTaskIndex(draft.tasks, taskId);
@@ -296,6 +389,18 @@ export const useTaskStore = create<TaskState>()(
       }
     }),
 
+  /**
+   * Append a single log entry to task logs
+   *
+   * IMMER PATTERN: Direct array push on draft state
+   * - Old approach: tasks.map(t => t.id === taskId ? { ...t, logs: [...(t.logs || []), log] } : t)
+   * - New approach: task.logs.push(log)
+   * - Performance: O(1) push vs O(n) task array copy + O(m) log array copy
+   *
+   * CRITICAL: This function can fire multiple times per second during build execution.
+   * The immer optimization eliminates O(n) array creation on every log append,
+   * significantly reducing GC pressure and preventing UI stuttering.
+   */
   appendLog: (taskId, log) =>
     set((draft) => {
       const index = findTaskIndex(draft.tasks, taskId);
@@ -309,7 +414,17 @@ export const useTaskStore = create<TaskState>()(
       task.logs.push(log);
     }),
 
-  // Batch append multiple logs at once (single state update instead of N updates)
+  /**
+   * Batch append multiple log entries at once
+   *
+   * IMMER PATTERN: Direct array push with spread operator on draft state
+   * - Old approach: tasks.map(t => t.id === taskId ? { ...t, logs: [...(t.logs || []), ...logs] } : t)
+   * - New approach: task.logs.push(...logs)
+   * - Performance: O(1) push vs O(n) task array copy + O(m) log array copy
+   *
+   * NOTE: Batching reduces the number of state updates and re-renders.
+   * Use this when you have multiple logs to append from a single operation.
+   */
   batchAppendLogs: (taskId, logs) =>
     set((draft) => {
       if (logs.length === 0) return;
