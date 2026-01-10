@@ -24,55 +24,50 @@ import {
   getTransitionWithReducedMotion,
 } from '../animation-utils';
 
-// Extended matchMedia mock type
-interface MockMediaQueryList {
-  matches: boolean;
-  media: string;
-  onchange: null;
-  addListener: ReturnType<typeof vi.fn>;
-  removeListener: ReturnType<typeof vi.fn>;
-  addEventListener: ReturnType<typeof vi.fn>;
-  removeEventListener: ReturnType<typeof vi.fn>;
-  dispatchEvent: ReturnType<typeof vi.fn>;
+// Extended matchMedia mock type with test helpers
+interface MockMediaQueryListExtended extends MediaQueryList {
   _triggerChange: (newMatches: boolean) => void;
   _listeners: Array<(event: MediaQueryListEvent) => void>;
 }
 
 // Create customizable matchMedia mock
-const createMatchMediaMock = (initialMatches: boolean): MockMediaQueryList => {
+const createMatchMediaMock = (initialMatches: boolean): MockMediaQueryListExtended => {
   const listeners: Array<(event: MediaQueryListEvent) => void> = [];
 
-  return {
+  const mockMediaQueryList = {
     matches: initialMatches,
     media: '(prefers-reduced-motion: reduce)',
     onchange: null,
-    addListener: vi.fn((listener) => {
+    addListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => {
       listeners.push(listener);
-    }),
-    removeListener: vi.fn((listener) => {
+    }) as unknown as MediaQueryList['addListener'],
+    removeListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => {
       const index = listeners.indexOf(listener);
       if (index > -1) listeners.splice(index, 1);
-    }),
-    addEventListener: vi.fn((_event, listener) => {
-      listeners.push(listener);
-    }),
-    removeEventListener: vi.fn((_event, listener) => {
-      const index = listeners.indexOf(listener);
+    }) as unknown as MediaQueryList['removeListener'],
+    addEventListener: vi.fn((_event: string, listener: EventListener) => {
+      listeners.push(listener as (event: MediaQueryListEvent) => void);
+    }) as MediaQueryList['addEventListener'],
+    removeEventListener: vi.fn((_event: string, listener: EventListener) => {
+      const index = listeners.indexOf(listener as (event: MediaQueryListEvent) => void);
       if (index > -1) listeners.splice(index, 1);
-    }),
-    dispatchEvent: vi.fn(),
+    }) as MediaQueryList['removeEventListener'],
+    dispatchEvent: vi.fn(() => true) as MediaQueryList['dispatchEvent'],
     _triggerChange: (newMatches: boolean) => {
+      mockMediaQueryList.matches = newMatches;
       listeners.forEach((listener) => {
         listener({ matches: newMatches } as MediaQueryListEvent);
       });
     },
     _listeners: listeners,
   };
+
+  return mockMediaQueryList;
 };
 
 describe('animation-utils', () => {
   describe('useReducedMotion', () => {
-    let mockMediaQueryList: MockMediaQueryList;
+    let mockMediaQueryList: MockMediaQueryListExtended;
 
     beforeEach(() => {
       // Default to reduced motion OFF
@@ -111,7 +106,6 @@ describe('animation-utils', () => {
 
       // Simulate user enabling reduced motion
       act(() => {
-        mockMediaQueryList.matches = true;
         mockMediaQueryList._triggerChange(true);
       });
 
