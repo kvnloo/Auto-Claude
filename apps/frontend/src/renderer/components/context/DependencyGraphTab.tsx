@@ -1,4 +1,4 @@
-import { lazy, Suspense, Component, ReactNode } from 'react';
+import { lazy, Suspense, Component, ReactNode, ErrorInfo } from 'react';
 import { RefreshCw, AlertCircle, Network } from 'lucide-react';
 import { Button } from '../ui/button';
 import { Card, CardContent } from '../ui/card';
@@ -36,7 +36,7 @@ class DependencyGraphErrorBoundary extends Component<ErrorBoundaryProps, ErrorBo
     return { hasError: true, error };
   }
 
-  componentDidCatch(error: Error, errorInfo: React.ErrorInfo) {
+  componentDidCatch(error: Error, errorInfo: ErrorInfo) {
     console.error('DependencyGraph rendering error:', error, errorInfo);
   }
 
