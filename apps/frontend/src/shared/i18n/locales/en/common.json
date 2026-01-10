@@ -307,5 +307,52 @@
     "done": "Done",
     "failedLabel": "Failed",
     "starting": "Starting..."
+  },
+  "dependencyGraph": {
+    "tabLabel": "Dependencies",
+    "title": "Dependency Graph",
+    "projectDependencies": "{{projectName}} Dependencies",
+    "loading": "Loading dependency graph...",
+    "analyzing": "Analyzing project dependencies...",
+    "analyzeDependencies": "Analyze Dependencies",
+    "tryAgain": "Try Again",
+    "errors": {
+      "renderingError": "Graph Rendering Error",
+      "failedToRender": "Failed to render the dependency graph",
+      "failedToLoad": "Failed to Load Dependencies",
+      "failedToLoadGraph": "Failed to load dependency graph"
+    },
+    "empty": {
+      "noDependencyData": "No Dependency Data",
+      "noDependencyDataDescription": "Click the button below to analyze your project's dependencies and generate a visualization.",
+      "noDependenciesFound": "No Dependencies Found",
+      "noDependenciesFoundDescription": "This project doesn't have any detected dependencies or the dependency files couldn't be parsed."
+    },
+    "stats": {
+      "package": "package",
+      "packages": "packages",
+      "relationship": "relationship",
+      "relationships": "relationships"
+    },
+    "legend": {
+      "direct": "Direct",
+      "dev": "Dev",
+      "peer": "Peer",
+      "optional": "Optional"
+    },
+    "controls": {
+      "title": "Controls:",
+      "drag": "Drag",
+      "dragDescription": "nodes to reposition",
+      "scroll": "Scroll",
+      "scrollDescription": "to zoom in/out",
+      "doubleClick": "Double-click",
+      "doubleClickDescription": "to reset view",
+      "click": "Click",
+      "clickDescription": "node for details"
+    },
+    "nodeDetails": {
+      "version": "Version:"
+    }
   }
 }

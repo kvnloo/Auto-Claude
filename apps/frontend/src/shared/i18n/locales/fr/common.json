@@ -307,5 +307,52 @@
     "done": "Terminé",
     "failedLabel": "Échoué",
     "starting": "Démarrage..."
+  },
+  "dependencyGraph": {
+    "tabLabel": "Dépendances",
+    "title": "Graphe de dépendances",
+    "projectDependencies": "Dépendances de {{projectName}}",
+    "loading": "Chargement du graphe de dépendances...",
+    "analyzing": "Analyse des dépendances du projet...",
+    "analyzeDependencies": "Analyser les dépendances",
+    "tryAgain": "Réessayer",
+    "errors": {
+      "renderingError": "Erreur de rendu du graphe",
+      "failedToRender": "Impossible de rendre le graphe de dépendances",
+      "failedToLoad": "Échec du chargement des dépendances",
+      "failedToLoadGraph": "Impossible de charger le graphe de dépendances"
+    },
+    "empty": {
+      "noDependencyData": "Aucune donnée de dépendances",
+      "noDependencyDataDescription": "Cliquez sur le bouton ci-dessous pour analyser les dépendances de votre projet et générer une visualisation.",
+      "noDependenciesFound": "Aucune dépendance trouvée",
+      "noDependenciesFoundDescription": "Ce projet n'a pas de dépendances détectées ou les fichiers de dépendances n'ont pas pu être analysés."
+    },
+    "stats": {
+      "package": "paquet",
+      "packages": "paquets",
+      "relationship": "relation",
+      "relationships": "relations"
+    },
+    "legend": {
+      "direct": "Directe",
+      "dev": "Dev",
+      "peer": "Pair",
+      "optional": "Optionnelle"
+    },
+    "controls": {
+      "title": "Contrôles :",
+      "drag": "Glisser",
+      "dragDescription": "les nœuds pour les repositionner",
+      "scroll": "Défiler",
+      "scrollDescription": "pour zoomer/dézoomer",
+      "doubleClick": "Double-clic",
+      "doubleClickDescription": "pour réinitialiser la vue",
+      "click": "Cliquer",
+      "clickDescription": "sur un nœud pour les détails"
+    },
+    "nodeDetails": {
+      "version": "Version :"
+    }
   }
 }
