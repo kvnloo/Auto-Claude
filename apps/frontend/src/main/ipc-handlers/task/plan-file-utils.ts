@@ -108,6 +108,39 @@ function setCachedPlan(planPath: string, plan: Record<string, unknown>): void {
 }
 
 /**
+ * Read a plan from disk, using cache when available.
+ * Checks the cache first before performing file I/O.
+ *
+ * @param planPath - The path to the plan file
+ * @returns The parsed plan object, or null if the file doesn't exist or can't be read
+ */
+export function getPlanWithCache(planPath: string): Record<string, unknown> | null {
+  // Check cache first
+  const cached = getCachedPlan(planPath);
+  if (cached) {
+    return cached;
+  }
+
+  // Cache miss - read from disk
+  try {
+    const planContent = readFileSync(planPath, 'utf-8');
+    const plan = JSON.parse(planContent);
+
+    // Update cache for next time
+    setCachedPlan(planPath, plan);
+
+    return plan;
+  } catch (err) {
+    // File not found or parse error
+    if (isFileNotFoundError(err)) {
+      return null;
+    }
+    console.warn(`[plan-file-utils] Could not read plan at ${planPath}:`, err);
+    return null;
+  }
+}
+
+/**
  * Check if an error is a "file not found" error
  */
 function isFileNotFoundError(err: unknown): boolean {
