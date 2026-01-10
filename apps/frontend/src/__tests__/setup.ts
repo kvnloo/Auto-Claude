@@ -116,3 +116,54 @@ console.error = (...args: unknown[]) => {
     originalConsoleError(...args);
   }
 };
+
+// Mock matchMedia for useReducedMotion tests
+// Creates a mock that can be customized per test
+export const createMatchMediaMock = (matches: boolean) => {
+  const listeners: Array<(event: MediaQueryListEvent) => void> = [];
+
+  return {
+    matches,
+    media: '(prefers-reduced-motion: reduce)',
+    onchange: null,
+    addListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => {
+      listeners.push(listener);
+    }),
+    removeListener: vi.fn((listener: (event: MediaQueryListEvent) => void) => {
+      const index = listeners.indexOf(listener);
+      if (index > -1) listeners.splice(index, 1);
+    }),
+    addEventListener: vi.fn((event: string, listener: (event: MediaQueryListEvent) => void) => {
+      if (event === 'change') {
+        listeners.push(listener);
+      }
+    }),
+    removeEventListener: vi.fn((event: string, listener: (event: MediaQueryListEvent) => void) => {
+      if (event === 'change') {
+        const index = listeners.indexOf(listener);
+        if (index > -1) listeners.splice(index, 1);
+      }
+    }),
+    dispatchEvent: vi.fn(),
+    // Helper to trigger change events for testing
+    _triggerChange: (newMatches: boolean) => {
+      listeners.forEach(listener => {
+        listener({ matches: newMatches } as MediaQueryListEvent);
+      });
+    },
+    _listeners: listeners,
+  };
+};
+
+// Default matchMedia mock (prefers motion enabled - reduced motion OFF)
+if (typeof window !== 'undefined') {
+  Object.defineProperty(window, 'matchMedia', {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => {
+      if (query === '(prefers-reduced-motion: reduce)') {
+        return createMatchMediaMock(false);
+      }
+      return createMatchMediaMock(false);
+    }),
+  });
+}
