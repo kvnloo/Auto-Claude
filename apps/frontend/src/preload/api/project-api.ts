@@ -11,7 +11,8 @@ import type {
   InfrastructureStatus,
   GraphitiValidationResult,
   GraphitiConnectionTestResult,
-  GitStatus
+  GitStatus,
+  DependencyGraph
 } from '../../shared/types';
 
 // Tab state interface (persisted in main process)
@@ -43,6 +44,8 @@ export interface ProjectAPI {
   getMemoryStatus: (projectId: string) => Promise<IPCResult<unknown>>;
   searchMemories: (projectId: string, query: string) => Promise<IPCResult<unknown>>;
   getRecentMemories: (projectId: string, limit?: number) => Promise<IPCResult<unknown>>;
+  getDependencyGraph: (projectId: string) => Promise<IPCResult<DependencyGraph>>;
+  refreshDependencyGraph: (projectId: string) => Promise<IPCResult<DependencyGraph>>;
 
   // Environment Configuration
   getProjectEnv: (projectId: string) => Promise<IPCResult<ProjectEnvConfig>>;
@@ -185,6 +188,12 @@ export const createProjectAPI = (): ProjectAPI => ({
 
   getRecentMemories: (projectId: string, limit?: number) =>
     ipcRenderer.invoke(IPC_CHANNELS.CONTEXT_GET_MEMORIES, projectId, limit),
+
+  getDependencyGraph: (projectId: string): Promise<IPCResult<DependencyGraph>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CONTEXT_GET_DEPENDENCY_GRAPH, projectId),
+
+  refreshDependencyGraph: (projectId: string): Promise<IPCResult<DependencyGraph>> =>
+    ipcRenderer.invoke(IPC_CHANNELS.CONTEXT_GET_DEPENDENCY_GRAPH, projectId),
 
   // Environment Configuration
   getProjectEnv: (projectId: string): Promise<IPCResult<ProjectEnvConfig>> =>
