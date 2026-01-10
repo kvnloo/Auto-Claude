@@ -46,17 +46,71 @@ export function getPlanHash(plan: ImplementationPlan): string {
 /**
  * PlanCache - Caches validated and processed implementation plans
  *
- * Uses WeakMap to cache plan data keyed by plan object reference.
- * This allows automatic garbage collection when plan objects are no longer referenced.
+ * ## Caching Strategy
  *
- * The cache stores:
- * - Plan hash for change detection
- * - Flattened and validated subtasks
- * - Validation results
- * - Computed status flags
+ * The cache uses a hash-based change detection system to avoid redundant processing:
+ * - Each plan is hashed based on its `updated_at` timestamp, phase count, and phase IDs
+ * - Cached data is returned immediately if the hash matches (fast path)
+ * - If the hash differs, the plan is reprocessed and the cache is updated (slow path)
+ * - This eliminates redundant JSON parsing, validation, and array operations during task execution
  *
- * This eliminates redundant JSON parsing, validation, and array operations
- * when the same plan is processed multiple times during task execution.
+ * ## WeakMap Usage
+ *
+ * Uses WeakMap<ImplementationPlan, CachedPlanData> for automatic memory management:
+ * - **Object-based keys**: Plans are keyed by object reference, not by ID/string
+ * - **Automatic garbage collection**: When a plan object is no longer referenced elsewhere,
+ *   the WeakMap entry is automatically removed by the JavaScript garbage collector
+ * - **Memory safety**: No manual cache cleanup needed; prevents memory leaks in long-running sessions
+ * - **Limitation**: WeakMap doesn't support iteration, so `clear()` creates a new instance
+ *
+ * ## Cache Invalidation Rules
+ *
+ * The cache automatically detects when a plan has changed and invalidates stale entries:
+ *
+ * 1. **Content-based invalidation**: Hash comparison detects when plan content changes
+ *    - Updated timestamp (`plan.updated_at`)
+ *    - Phase count change (`plan.phases.length`)
+ *    - Phase ID reordering (phase numbers change)
+ *
+ * 2. **Object reference change**: If the plan object is replaced (new reference), WeakMap
+ *    treats it as a different key, creating a new cache entry
+ *
+ * 3. **Explicit invalidation**: `clear()` removes all cached data by creating a new WeakMap
+ *
+ * 4. **Garbage collection**: Entries are removed when plan objects are no longer referenced
+ *
+ * ## Cached Data
+ *
+ * For each plan, the cache stores:
+ * - **hash**: String hash for change detection (updated_at|phase_count|phase_ids)
+ * - **subtasks**: Flattened array of validated subtasks from all phases
+ * - **isValid**: Boolean validation result from plan structure validation
+ * - **statusFlags**: Computed boolean flags (allCompleted, anyFailed, anyInProgress, anyCompleted)
+ *
+ * ## Performance Benefits
+ *
+ * Eliminates O(n*m) operations on every render/access:
+ * - Subtask flattening: `phases.flatMap(phase => phase.subtasks.map(...))` → O(n*m)
+ * - Validation checks: Nested loops through phases and subtasks → O(n*m)
+ * - Status calculations: `subtasks.every()`, `subtasks.some()` → O(n)
+ *
+ * With caching, these become O(1) lookups when the plan hasn't changed.
+ *
+ * @example
+ * ```ts
+ * const cache = new PlanCache();
+ * const plan = await loadPlan();
+ *
+ * // First access: slow path (parses, validates, caches)
+ * const subtasks1 = getCachedSubtasks(plan, cache);
+ *
+ * // Second access: fast path (returns cached result)
+ * const subtasks2 = getCachedSubtasks(plan, cache);
+ *
+ * // Plan updated: slow path (detects hash change, reprocesses)
+ * plan.updated_at = new Date().toISOString();
+ * const subtasks3 = getCachedSubtasks(plan, cache);
+ * ```
  */
 export class PlanCache {
   private cache: WeakMap<ImplementationPlan, CachedPlanData>;
