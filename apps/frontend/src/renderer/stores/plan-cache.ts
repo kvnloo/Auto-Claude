@@ -34,6 +34,11 @@ export interface CachedPlanData {
  * @returns A hash string representing the plan's current state
  */
 export function getPlanHash(plan: ImplementationPlan): string {
+  // Handle invalid plans gracefully (null/undefined phases)
+  // This ensures validation can run properly on invalid plans
+  if (!plan.phases || !Array.isArray(plan.phases)) {
+    return `invalid|0|[]`;
+  }
   const phaseIds = plan.phases.map(phase => phase.phase);
   return `${plan.updated_at}|${plan.phases.length}|${JSON.stringify(phaseIds)}`;
 }
@@ -114,6 +119,12 @@ export function getCachedSubtasks(
   plan: ImplementationPlan,
   cache: PlanCache = planCache
 ): Subtask[] {
+  // Defensive check: ensure plan and phases exist
+  if (!plan || !plan.phases || !Array.isArray(plan.phases)) {
+    console.warn('[getCachedSubtasks] Invalid plan structure, returning empty array');
+    return [];
+  }
+
   // Compute current plan hash
   const currentHash = getPlanHash(plan);
 
@@ -126,8 +137,14 @@ export function getCachedSubtasks(
   }
 
   // Cache miss or plan changed - flatten subtasks from phases (slow path)
-  const subtasks: Subtask[] = plan.phases.flatMap((phase) =>
-    phase.subtasks.map((subtask) => {
+  const subtasks: Subtask[] = plan.phases.flatMap((phase) => {
+    // Defensive check: ensure phase and phase.subtasks exist
+    if (!phase || !phase.subtasks || !Array.isArray(phase.subtasks)) {
+      console.warn('[getCachedSubtasks] Invalid phase structure, skipping phase');
+      return [];
+    }
+
+    return phase.subtasks.map((subtask) => {
       // Ensure all required fields have valid values to prevent UI issues
       // Use crypto.randomUUID() for stronger randomness when available
       const id = subtask.id || (typeof crypto !== 'undefined' && crypto.randomUUID
@@ -145,8 +162,8 @@ export function getCachedSubtasks(
         files: [],
         verification: subtask.verification as Subtask['verification']
       };
-    })
-  );
+    });
+  });
 
   // Compute status flags for caching (will be used in future subtasks)
   const statusFlags = {
@@ -200,28 +217,17 @@ export function getCachedValidation(
   // Cache miss or plan changed - run validation (slow path)
   const isValid = validator(plan);
 
-  // If we have cached data, update it with new validation result
+  // DON'T cache validation-only results - this causes getCachedSubtasks to return []
+  // Let getCachedSubtasks create the full cache entry when it's called
+  // Only update existing cache entry if we already have one
   if (cached) {
     cache.set(plan, {
       ...cached,
       hash: currentHash,
       isValid
     });
-  } else {
-    // No cached data yet - create minimal cache entry with validation result
-    // Note: subtasks and statusFlags will be populated by getCachedSubtasks
-    cache.set(plan, {
-      hash: currentHash,
-      subtasks: [],
-      isValid,
-      statusFlags: {
-        allCompleted: false,
-        anyFailed: false,
-        anyInProgress: false,
-        anyCompleted: false
-      }
-    });
   }
+  // If no cached data, don't create a partial entry - let getCachedSubtasks do it
 
   return isValid;
 }

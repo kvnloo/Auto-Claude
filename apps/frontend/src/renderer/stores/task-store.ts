@@ -176,20 +176,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
       const currentPlanHash = getPlanHash(plan);
       const cachedData = planCache.get(plan);
 
-      // CACHE: Early exit if plan hasn't changed since last processing
-      // Check if we have cached data with matching hash - if so, plan is identical
-      if (cachedData && cachedData.hash === currentPlanHash) {
-        debugLog('[updateTaskFromPlan] Plan unchanged (cache hit), skipping update:', {
-          taskId,
-          hash: currentPlanHash
-        });
-        return state; // No changes needed, plan is identical
-      }
-
-      debugLog('[updateTaskFromPlan] Plan changed (cache miss), processing update:', {
+      debugLog('[updateTaskFromPlan] Processing update:', {
         taskId,
         hash: currentPlanHash,
-        hadCachedData: !!cachedData
+        hadCachedData: !!cachedData,
+        cacheHit: cachedData && cachedData.hash === currentPlanHash
       });
 
       // CACHE: Use cached validation instead of direct validatePlanData call
@@ -202,12 +193,29 @@ export const useTaskStore = create<TaskState>((set, get) => ({
         return state;
       }
 
+      // CACHE: Get cached subtasks (will use cache if available)
+      const newSubtasks: Subtask[] = getCachedSubtasks(plan, planCache);
+
+      // CACHE: Early exit optimization - if plan hash matches AND task already has these subtasks,
+      // no need to create new task/state objects (prevents unnecessary re-renders)
+      const currentTask = state.tasks[index];
+      if (cachedData && cachedData.hash === currentPlanHash) {
+        // Check if task already has the same subtasks (by count - deep comparison too expensive)
+        // This handles the case where plan hasn't changed since last update
+        if (currentTask.subtasks.length === newSubtasks.length &&
+            currentTask.title === (plan.feature || currentTask.title)) {
+          debugLog('[updateTaskFromPlan] Plan and task unchanged (cache hit + task match), skipping update:', {
+            taskId,
+            hash: currentPlanHash
+          });
+          return state; // No changes needed
+        }
+      }
+
       return {
         tasks: updateTaskAtIndex(state.tasks, index, (t) => {
-          // CACHE: Use cached subtasks instead of flatMap + map operations
-          // This avoids creating 20+ new objects on every call when plan hasn't changed
-          // getCachedSubtasks handles: validation, flattening, ID generation, and caching
-          const subtasks: Subtask[] = getCachedSubtasks(plan, planCache);
+          // Subtasks already computed above for early-exit check - reuse them
+          const subtasks = newSubtasks;
 
           debugLog('[updateTaskFromPlan] Created subtasks:', {
             taskId,
