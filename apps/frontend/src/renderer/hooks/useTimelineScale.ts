@@ -527,6 +527,10 @@ export function useTimelineScale(
     formatColumnLabel,
     formatDateRange,
     getWeekNumber,
-    getQuarter
+    getQuarter,
+
+    // Snap utilities
+    snapToGrid,
+    positionToDate
   };
 }

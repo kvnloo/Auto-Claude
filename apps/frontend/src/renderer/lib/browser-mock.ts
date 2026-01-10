@@ -47,6 +47,17 @@ const browserMockAPI: ElectronAPI = {
   // Settings
   ...settingsMock,
 
+  // Git History Operations (for Timeline view in browser mode)
+  getGitHistory: async () => ({
+    success: true as const,
+    data: [] // GitCommit[]
+  }),
+
+  getGitTags: async () => ({
+    success: true as const,
+    data: [] // GitTagInfo[]
+  }),
+
   // Roadmap Operations
   getRoadmap: async () => ({
     success: true,
