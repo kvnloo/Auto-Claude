@@ -27,6 +27,18 @@ import { projectStore } from '../../project-store';
 // Key: plan file path, Value: Promise chain for serializing operations
 const planLocks = new Map<string, Promise<void>>();
 
+// In-memory plan file cache with TTL
+// Key: plan file path, Value: { plan: parsed JSON, timestamp: cache time in ms }
+interface PlanFileCacheEntry {
+  plan: Record<string, unknown>;
+  timestamp: number;
+}
+
+const planFileCache = new Map<string, PlanFileCacheEntry>();
+
+// Cache TTL in milliseconds (60 seconds)
+const PLAN_CACHE_TTL_MS = 60 * 1000;
+
 /**
  * Serialize operations on a specific plan file to prevent race conditions.
  * Each operation waits for the previous one to complete before starting.
@@ -53,6 +65,46 @@ async function withPlanLock<T>(planPath: string, operation: () => Promise<T>): P
       planLocks.delete(planPath);
     }
   }
+}
+
+/**
+ * Check if a cached plan entry is still valid (not expired)
+ * @param entry - The cache entry to check
+ * @returns True if cache entry is valid, false if expired
+ */
+function isCacheValid(entry: PlanFileCacheEntry | undefined): boolean {
+  if (!entry) return false;
+  const age = Date.now() - entry.timestamp;
+  return age < PLAN_CACHE_TTL_MS;
+}
+
+/**
+ * Get a plan from the cache if it exists and is still valid
+ * @param planPath - The path to the plan file
+ * @returns Cached plan if valid, undefined otherwise
+ */
+function getCachedPlan(planPath: string): Record<string, unknown> | undefined {
+  const entry = planFileCache.get(planPath);
+  if (isCacheValid(entry)) {
+    return entry!.plan;
+  }
+  // Cache miss or expired - remove stale entry
+  if (entry) {
+    planFileCache.delete(planPath);
+  }
+  return undefined;
+}
+
+/**
+ * Store a plan in the cache with current timestamp
+ * @param planPath - The path to the plan file
+ * @param plan - The parsed plan object to cache
+ */
+function setCachedPlan(planPath: string, plan: Record<string, unknown>): void {
+  planFileCache.set(planPath, {
+    plan,
+    timestamp: Date.now()
+  });
 }
 
 /**
