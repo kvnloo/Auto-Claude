@@ -4,6 +4,7 @@
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { useTaskStore } from '../stores/task-store';
+import { planCache } from '../stores/plan-cache';
 import type { Task, TaskStatus, ImplementationPlan } from '../../shared/types';
 
 // Helper to create test tasks
@@ -61,6 +62,10 @@ describe('Task Store', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    // Clear plan cache after each test to prevent test interference
+    // The cache uses WeakMap keyed by plan objects, but tests reuse plans
+    // with the same timestamps, leading to cache hits across tests
+    planCache.clear();
   });
 
   describe('setTasks', () => {
@@ -1344,6 +1349,529 @@ describe('Task Store', () => {
 
         // Status should remain human_review, not downgrade to ai_review
         expect(useTaskStore.getState().tasks[0].status).toBe('human_review');
+      });
+    });
+  });
+
+  // Cache-specific tests for updateTaskFromPlan optimization
+  describe('updateTaskFromPlan - caching behavior', () => {
+    beforeEach(() => {
+      // Spy on console methods to prevent test output clutter
+      vi.spyOn(console, 'log').mockImplementation(() => {});
+      vi.spyOn(console, 'warn').mockImplementation(() => {});
+      vi.spyOn(console, 'error').mockImplementation(() => {});
+    });
+
+    afterEach(() => {
+      vi.restoreAllMocks();
+    });
+
+    describe('early exit on unchanged plans', () => {
+      it('should skip update when plan hash is unchanged', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [
+                { id: 'subtask-1', description: 'First subtask', status: 'pending' }
+              ]
+            }
+          ]
+        });
+
+        // First call - should process and cache
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        const firstUpdate = useTaskStore.getState().tasks[0];
+        expect(firstUpdate.subtasks).toHaveLength(1);
+
+        // Store reference to verify no state change
+        const tasksBefore = useTaskStore.getState().tasks;
+
+        // Second call with same plan - should use cache and early exit (no state update)
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        const tasksAfter = useTaskStore.getState().tasks;
+
+        // State should not have changed (early exit)
+        expect(tasksBefore).toBe(tasksAfter);
+      });
+
+      it('should update when plan hash changes (different updated_at)', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan1 = createTestPlan({
+          feature: 'Version 1',
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'First subtask', status: 'pending' }]
+            }
+          ]
+        });
+
+        const plan2 = {
+          ...plan1,
+          feature: 'Version 2',
+          updated_at: '2024-01-01T00:01:00.000Z' // Different timestamp
+        };
+
+        // First call
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan1);
+        expect(useTaskStore.getState().tasks[0].title).toBe('Version 1');
+
+        // Second call with different updated_at - should process and update
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan2);
+        expect(useTaskStore.getState().tasks[0].title).toBe('Version 2');
+      });
+
+      it('should update when plan hash changes (different phase count)', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan1 = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'First subtask', status: 'pending' }]
+            }
+          ]
+        });
+
+        const plan2 = {
+          ...plan1,
+          phases: [
+            ...plan1.phases,
+            {
+              phase: 2,
+              name: 'Phase 2',
+              type: 'testing',
+              subtasks: [{ id: 'subtask-2', description: 'Second subtask', status: 'pending' }]
+            }
+          ]
+        };
+
+        // First call
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan1);
+        expect(useTaskStore.getState().tasks[0].subtasks).toHaveLength(1);
+
+        // Second call with additional phase - should process and update
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan2);
+        expect(useTaskStore.getState().tasks[0].subtasks).toHaveLength(2);
+      });
+
+      it('should update when plan hash changes (different phase IDs)', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan1 = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'First subtask', status: 'pending' }]
+            }
+          ]
+        });
+
+        const plan2 = {
+          ...plan1,
+          phases: [
+            {
+              phase: 2, // Different phase ID
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'First subtask', status: 'pending' }]
+            }
+          ]
+        };
+
+        // First call
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan1);
+        const firstUpdate = useTaskStore.getState().tasks[0];
+
+        // Store reference to verify state change
+        const tasksBefore = useTaskStore.getState().tasks;
+
+        // Second call with different phase ID - should process and update
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan2);
+        const tasksAfter = useTaskStore.getState().tasks;
+
+        // State should have changed (no early exit)
+        expect(tasksBefore).not.toBe(tasksAfter);
+      });
+    });
+
+    describe('cache invalidation', () => {
+      it('should clear cache when setTasks is called', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'First subtask', status: 'pending' }]
+            }
+          ]
+        });
+
+        // Populate cache
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+
+        // Replace tasks (should clear cache)
+        const newTask = createTestTask({ id: 'task-2', status: 'backlog' });
+        useTaskStore.getState().setTasks([newTask]);
+
+        // Add original task back
+        useTaskStore.getState().addTask(task);
+
+        // Now updateTaskFromPlan should not hit cache (because it was cleared)
+        // We can't directly test cache state, but we can verify the function still works correctly
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        expect(useTaskStore.getState().tasks[1].subtasks).toHaveLength(1);
+      });
+
+      it('should clear cache when clearTasks is called', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'First subtask', status: 'pending' }]
+            }
+          ]
+        });
+
+        // Populate cache
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+
+        // Clear all tasks (should clear cache)
+        useTaskStore.getState().clearTasks();
+
+        // Add task back
+        useTaskStore.getState().addTask(task);
+
+        // Now updateTaskFromPlan should not hit cache (because it was cleared)
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        expect(useTaskStore.getState().tasks[0].subtasks).toHaveLength(1);
+      });
+
+      it('should invalidate cache after multiple setTasks calls', () => {
+        const task1 = createTestTask({ id: 'task-1', status: 'in_progress' });
+        const task2 = createTestTask({ id: 'task-2', status: 'backlog' });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'First subtask', status: 'pending' }]
+            }
+          ]
+        });
+
+        // First setTasks
+        useTaskStore.getState().setTasks([task1]);
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+
+        // Second setTasks (should clear cache)
+        useTaskStore.getState().setTasks([task2]);
+
+        // Third setTasks back to task1
+        useTaskStore.getState().setTasks([task1]);
+
+        // Cache should be cleared, but function should still work
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        expect(useTaskStore.getState().tasks[0].subtasks).toHaveLength(1);
+      });
+    });
+
+    describe('cached subtasks usage', () => {
+      it('should reuse cached subtasks on repeated calls with same plan', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [
+                { id: 'subtask-1', description: 'First subtask', status: 'pending' },
+                { id: 'subtask-2', description: 'Second subtask', status: 'completed' }
+              ]
+            }
+          ]
+        });
+
+        // First call - computes subtasks
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        const firstSubtasks = useTaskStore.getState().tasks[0].subtasks;
+        expect(firstSubtasks).toHaveLength(2);
+
+        // Second call - should use cached subtasks (early exit, no state update)
+        const tasksBefore = useTaskStore.getState().tasks;
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        const tasksAfter = useTaskStore.getState().tasks;
+
+        // State unchanged due to early exit
+        expect(tasksBefore).toBe(tasksAfter);
+      });
+
+      it('should handle multiple tasks with separate cache entries', () => {
+        const task1 = createTestTask({ id: 'task-1', status: 'in_progress' });
+        const task2 = createTestTask({ id: 'task-2', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task1, task2] });
+
+        const plan1 = createTestPlan({
+          feature: 'Feature 1',
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [{ id: 'subtask-1', description: 'Task 1 subtask', status: 'pending' }]
+            }
+          ]
+        });
+
+        const plan2 = createTestPlan({
+          feature: 'Feature 2',
+          updated_at: '2024-01-02T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [
+                { id: 'subtask-2', description: 'Task 2 subtask 1', status: 'pending' },
+                { id: 'subtask-3', description: 'Task 2 subtask 2', status: 'completed' }
+              ]
+            }
+          ]
+        });
+
+        // Update both tasks
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan1);
+        useTaskStore.getState().updateTaskFromPlan('task-2', plan2);
+
+        // Verify both cached correctly
+        expect(useTaskStore.getState().tasks[0].subtasks).toHaveLength(1);
+        expect(useTaskStore.getState().tasks[1].subtasks).toHaveLength(2);
+        expect(useTaskStore.getState().tasks[0].title).toBe('Feature 1');
+        expect(useTaskStore.getState().tasks[1].title).toBe('Feature 2');
+
+        // Update both again with same plans - should use cache
+        const tasksBefore = useTaskStore.getState().tasks;
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan1);
+        const tasksAfter = useTaskStore.getState().tasks;
+
+        // State should not change (early exit)
+        expect(tasksBefore).toBe(tasksAfter);
+      });
+    });
+
+    describe('cached status flags usage', () => {
+      it('should reuse cached status flags on repeated calls', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [
+                { id: 'subtask-1', description: 'First subtask', status: 'completed' },
+                { id: 'subtask-2', description: 'Second subtask', status: 'completed' }
+              ]
+            }
+          ]
+        });
+
+        // First call - computes status flags and updates status to ai_review
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        expect(useTaskStore.getState().tasks[0].status).toBe('ai_review');
+
+        // Change status back to in_progress manually
+        useTaskStore.getState().updateTaskStatus('task-1', 'in_progress');
+
+        // Second call with same plan - should use cached status flags and early exit
+        const tasksBefore = useTaskStore.getState().tasks;
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        const tasksAfter = useTaskStore.getState().tasks;
+
+        // State unchanged due to early exit
+        expect(tasksBefore).toBe(tasksAfter);
+      });
+
+      it('should recalculate status flags when plan changes', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan1 = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [
+                { id: 'subtask-1', description: 'First subtask', status: 'in_progress' }
+              ]
+            }
+          ]
+        });
+
+        const plan2 = {
+          ...plan1,
+          updated_at: '2024-01-01T00:01:00.000Z', // Different timestamp
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [
+                { id: 'subtask-1', description: 'First subtask', status: 'completed' }
+              ]
+            }
+          ]
+        };
+
+        // First call - status should remain in_progress (subtask in_progress)
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan1);
+        expect(useTaskStore.getState().tasks[0].status).toBe('in_progress');
+
+        // Second call - status should change to ai_review (all subtasks completed)
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan2);
+        expect(useTaskStore.getState().tasks[0].status).toBe('ai_review');
+      });
+
+      it('should handle failed subtasks status flags correctly', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: [
+                { id: 'subtask-1', description: 'First subtask', status: 'completed' },
+                { id: 'subtask-2', description: 'Second subtask', status: 'failed' }
+              ]
+            }
+          ]
+        });
+
+        // First call - should set status to human_review (anyFailed)
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        expect(useTaskStore.getState().tasks[0].status).toBe('human_review');
+        expect(useTaskStore.getState().tasks[0].reviewReason).toBe('errors');
+
+        // Second call - should use cache and early exit
+        const tasksBefore = useTaskStore.getState().tasks;
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        const tasksAfter = useTaskStore.getState().tasks;
+
+        expect(tasksBefore).toBe(tasksAfter);
+      });
+    });
+
+    describe('cache performance characteristics', () => {
+      it('should handle rapid repeated updates efficiently with caching', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: [
+            {
+              phase: 1,
+              name: 'Phase 1',
+              type: 'implementation',
+              subtasks: Array.from({ length: 50 }, (_, i) => ({
+                id: `subtask-${i}`,
+                description: `Subtask ${i}`,
+                status: i < 25 ? 'completed' : 'pending'
+              }))
+            }
+          ]
+        });
+
+        // First call - populates cache
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+
+        // Rapid repeated calls - all should use cache and early exit
+        for (let i = 0; i < 10; i++) {
+          const tasksBefore = useTaskStore.getState().tasks;
+          useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+          const tasksAfter = useTaskStore.getState().tasks;
+
+          // All subsequent calls should early exit (no state change)
+          expect(tasksBefore).toBe(tasksAfter);
+        }
+      });
+
+      it('should handle large plans with multiple phases efficiently', () => {
+        const task = createTestTask({ id: 'task-1', status: 'in_progress' });
+        useTaskStore.setState({ tasks: [task] });
+
+        const plan = createTestPlan({
+          updated_at: '2024-01-01T00:00:00.000Z',
+          phases: Array.from({ length: 10 }, (_, phaseIdx) => ({
+            phase: phaseIdx + 1,
+            name: `Phase ${phaseIdx + 1}`,
+            type: 'implementation',
+            subtasks: Array.from({ length: 10 }, (_, subtaskIdx) => ({
+              id: `phase-${phaseIdx}-subtask-${subtaskIdx}`,
+              description: `Phase ${phaseIdx} Subtask ${subtaskIdx}`,
+              status: 'pending'
+            }))
+          }))
+        });
+
+        // First call - processes 10 phases * 10 subtasks = 100 subtasks
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        expect(useTaskStore.getState().tasks[0].subtasks).toHaveLength(100);
+
+        // Second call - should use cache and early exit
+        const tasksBefore = useTaskStore.getState().tasks;
+        useTaskStore.getState().updateTaskFromPlan('task-1', plan);
+        const tasksAfter = useTaskStore.getState().tasks;
+
+        expect(tasksBefore).toBe(tasksAfter);
       });
     });
   });
