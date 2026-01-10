@@ -166,6 +166,9 @@ export async function persistPlanStatus(planPath: string, status: TaskStatus, pr
       writeFileSync(planPath, JSON.stringify(plan, null, 2));
       console.warn(`[plan-file-utils] Successfully persisted status: ${status} to implementation_plan.json`);
 
+      // Update cache with the newly written plan to avoid immediate re-read
+      setCachedPlan(planPath, plan);
+
       // Invalidate tasks cache since status changed
       if (projectId) {
         projectStore.invalidateTasksCache(projectId);
@@ -220,6 +223,9 @@ export function persistPlanStatusSync(planPath: string, status: TaskStatus, proj
     plan.updated_at = new Date().toISOString();
 
     writeFileSync(planPath, JSON.stringify(plan, null, 2));
+
+    // Update cache with the newly written plan to avoid immediate re-read
+    setCachedPlan(planPath, plan);
 
     // Invalidate tasks cache since status changed
     if (projectId) {
