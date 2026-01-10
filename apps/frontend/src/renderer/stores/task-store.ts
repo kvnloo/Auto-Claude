@@ -1,7 +1,7 @@
 import { create } from 'zustand';
 import type { Task, TaskStatus, SubtaskStatus, ImplementationPlan, Subtask, TaskMetadata, ExecutionProgress, ExecutionPhase, ReviewReason, TaskDraft } from '../../shared/types';
 import { debugLog } from '../../shared/utils/debug-logger';
-import { planCache, getPlanHash, getCachedValidation, getCachedSubtasks } from './plan-cache';
+import { planCache, getPlanHash, getCachedValidation, getCachedSubtasks, getCachedStatusFlags } from './plan-cache';
 
 interface TaskState {
   tasks: Task[];
@@ -215,10 +215,10 @@ export const useTaskStore = create<TaskState>((set, get) => ({
             }))
           });
 
-          // CACHE: Get status flags from cached data (computed by getCachedSubtasks)
-          // This avoids four separate array iterations over all subtasks
-          const cachedDataAfterSubtasks = planCache.get(plan);
-          const { allCompleted, anyFailed, anyInProgress, anyCompleted } = cachedDataAfterSubtasks!.statusFlags;
+          // CACHE: Use cached status flags to avoid repeated array operations
+          // This avoids four separate array iterations (every, some) over all subtasks
+          // getCachedStatusFlags returns cached flags if plan hash matches, otherwise computes and caches
+          const { allCompleted, anyFailed, anyInProgress, anyCompleted } = getCachedStatusFlags(plan, subtasks, planCache);
 
           let status: TaskStatus = t.status;
           let reviewReason: ReviewReason | undefined = t.reviewReason;

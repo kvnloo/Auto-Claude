@@ -226,5 +226,65 @@ export function getCachedValidation(
   return isValid;
 }
 
+/**
+ * Get cached status flags for a plan, or compute and cache them if not cached or plan changed
+ *
+ * This function implements memoization for status calculations:
+ * - Returns cached status flags if plan hash matches
+ * - Computes status flags from subtasks if cache miss or plan changed
+ * - Avoids repeated array operations (every, some) on subtasks array
+ *
+ * This is called after getCachedSubtasks to ensure subtasks are available.
+ * If subtasks haven't been cached yet, it will use the provided subtasks parameter.
+ *
+ * @param plan - The implementation plan to get status flags for
+ * @param subtasks - Subtasks to compute status from (if not cached)
+ * @param cache - The PlanCache instance to use (defaults to singleton)
+ * @returns Status flags object with allCompleted, anyFailed, anyInProgress, anyCompleted
+ */
+export function getCachedStatusFlags(
+  plan: ImplementationPlan,
+  subtasks: Subtask[],
+  cache: PlanCache = planCache
+): CachedPlanData['statusFlags'] {
+  // Compute current plan hash
+  const currentHash = getPlanHash(plan);
+
+  // Check if we have cached data for this plan
+  const cached = cache.get(plan);
+
+  // If cached and hash matches, return cached status flags (fast path)
+  if (cached && cached.hash === currentHash) {
+    return cached.statusFlags;
+  }
+
+  // Cache miss or plan changed - compute status flags (slow path)
+  const statusFlags = {
+    allCompleted: subtasks.every((s) => s.status === 'completed'),
+    anyFailed: subtasks.some((s) => s.status === 'failed'),
+    anyInProgress: subtasks.some((s) => s.status === 'in_progress'),
+    anyCompleted: subtasks.some((s) => s.status === 'completed')
+  };
+
+  // Update cache with new status flags
+  if (cached) {
+    cache.set(plan, {
+      ...cached,
+      hash: currentHash,
+      statusFlags
+    });
+  } else {
+    // Create new cache entry with status flags
+    cache.set(plan, {
+      hash: currentHash,
+      subtasks,
+      isValid: true,
+      statusFlags
+    });
+  }
+
+  return statusFlags;
+}
+
 // Export singleton instance for use across the application
 export const planCache = new PlanCache();
