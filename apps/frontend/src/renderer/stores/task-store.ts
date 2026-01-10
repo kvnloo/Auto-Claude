@@ -101,7 +101,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
   isLoading: false,
   error: null,
 
-  setTasks: (tasks) => set({ tasks }),
+  setTasks: (tasks) => {
+    // CACHE: Invalidate cache when tasks are replaced to prevent stale entries
+    planCache.clear();
+    set({ tasks });
+  },
 
   addTask: (task) =>
     set((state) => ({
@@ -371,7 +375,11 @@ export const useTaskStore = create<TaskState>((set, get) => ({
 
   setError: (error) => set({ error }),
 
-  clearTasks: () => set({ tasks: [], selectedTaskId: null }),
+  clearTasks: () => {
+    // CACHE: Invalidate cache when tasks are cleared to prevent stale entries
+    planCache.clear();
+    set({ tasks: [], selectedTaskId: null });
+  },
 
   getSelectedTask: () => {
     const state = get();
