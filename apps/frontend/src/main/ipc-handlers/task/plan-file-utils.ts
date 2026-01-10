@@ -300,6 +300,10 @@ export async function updatePlanFile<T extends Record<string, unknown>>(
 
       writeFileSync(planPath, JSON.stringify(updatedPlan, null, 2));
       console.warn(`[plan-file-utils] Successfully updated implementation_plan.json`);
+
+      // Invalidate cache to ensure consistency - force re-read on next access
+      planFileCache.delete(planPath);
+
       return updatedPlan;
     } catch (err) {
       // File not found is expected - return null
@@ -359,6 +363,9 @@ export async function createPlanIfNotExists(
     }
 
     writeFileSync(planPath, JSON.stringify(plan, null, 2));
+
+    // Invalidate cache to ensure consistency - force re-read on next access
+    planFileCache.delete(planPath);
   });
 }
 
