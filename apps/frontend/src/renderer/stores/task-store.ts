@@ -218,7 +218,7 @@ export const useTaskStore = create<TaskState>()(
 
       const index = findTaskIndex(draft.tasks, taskId);
       if (index === -1) {
-        console.log('[updateTaskFromPlan] Task not found:', taskId);
+        console.warn('[updateTaskFromPlan] Task not found:', taskId);
         return;
       }
 
