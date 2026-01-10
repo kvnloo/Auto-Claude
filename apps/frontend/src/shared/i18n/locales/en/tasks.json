@@ -260,6 +260,11 @@
       "taskBars": "Rendering tasks...",
       "progressiveRender": "Rendering {{rendered}} of {{total}} tasks",
       "initializing": "Initializing timeline..."
+    },
+    "emptyState": {
+      "title": "No tasks on the timeline",
+      "description": "Create your first task to see it on the timeline. Tasks will appear as duration bars that you can drag to schedule.",
+      "createTask": "Create First Task"
     }
   }
 }

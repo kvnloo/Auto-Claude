@@ -28,6 +28,7 @@ import {
   Clock,
   Diamond,
   Flag,
+  GanttChartSquare,
   GitBranch,
   GitCommit as GitCommitIcon,
   Inbox,
@@ -41,6 +42,7 @@ import { ScrollArea } from './ui/scroll-area';
 import { Button } from './ui/button';
 import { Tooltip, TooltipContent, TooltipTrigger } from './ui/tooltip';
 import { Separator } from './ui/separator';
+import { Card } from './ui/card';
 import { cn } from '../lib/utils';
 import {
   calculateTaskBarPosition,
@@ -1417,6 +1419,38 @@ function getWeekNumber(date: Date): number {
 }
 
 /**
+ * TimelineEmptyState - Empty state component shown when no tasks exist
+ * Similar to KanbanBoard empty states and RoadmapEmptyState
+ */
+interface TimelineEmptyStateProps {
+  onNewTaskClick?: () => void;
+}
+
+function TimelineEmptyState({ onNewTaskClick }: TimelineEmptyStateProps) {
+  const { t } = useTranslation(['tasks', 'common']);
+
+  return (
+    <div className="flex h-full items-center justify-center p-8">
+      <Card className="w-full max-w-md p-8 text-center">
+        <GanttChartSquare className="h-12 w-12 text-muted-foreground mx-auto mb-4" />
+        <h2 className="text-xl font-semibold mb-2">
+          {t('tasks:timeline.emptyState.title')}
+        </h2>
+        <p className="text-muted-foreground mb-6">
+          {t('tasks:timeline.emptyState.description')}
+        </p>
+        {onNewTaskClick && (
+          <Button onClick={onNewTaskClick} size="lg">
+            <Plus className="h-4 w-4 mr-2" />
+            {t('tasks:timeline.emptyState.createTask')}
+          </Button>
+        )}
+      </Card>
+    </div>
+  );
+}
+
+/**
  * TimelineView - Main timeline/Gantt view component
  */
 export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskScheduleChange }: TimelineViewProps) {
@@ -2080,37 +2114,40 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
         </div>
       </div>
 
-      {/* Main content area */}
-      <div className="flex flex-1 overflow-hidden">
-        {/* Left sidebar - task list */}
-        <div
-          className="border-r border-border bg-card/30 flex-shrink-0"
-          style={{ width: SIDEBAR_WIDTH }}
-        >
+      {/* Main content area - show empty state when no tasks */}
+      {filteredTasks.length === 0 ? (
+        <TimelineEmptyState onNewTaskClick={onNewTaskClick} />
+      ) : (
+        <div className="flex flex-1 overflow-hidden">
+          {/* Left sidebar - task list */}
           <div
-            className="flex items-center px-3 border-b border-border font-medium text-sm text-muted-foreground"
-            style={{ height: TIMELINE_HEADER_HEIGHT }}
+            className="border-r border-border bg-card/30 flex-shrink-0"
+            style={{ width: SIDEBAR_WIDTH }}
           >
-            <Clock className="h-4 w-4 mr-2" />
-            Tasks
+            <div
+              className="flex items-center px-3 border-b border-border font-medium text-sm text-muted-foreground"
+              style={{ height: TIMELINE_HEADER_HEIGHT }}
+            >
+              <Clock className="h-4 w-4 mr-2" />
+              Tasks
+            </div>
+            <div style={{ height: `calc(100% - ${TIMELINE_HEADER_HEIGHT}px)` }}>
+              <TimelineTaskSidebar
+                tasks={filteredTasks}
+                onTaskClick={handleTaskClick}
+                selectedTaskId={selectedTaskId}
+              />
+            </div>
           </div>
-          <div style={{ height: `calc(100% - ${TIMELINE_HEADER_HEIGHT}px)` }}>
-            <TimelineTaskSidebar
-              tasks={filteredTasks}
-              onTaskClick={handleTaskClick}
-              selectedTaskId={selectedTaskId}
-            />
-          </div>
-        </div>
 
-        {/* Timeline area - wrapped with DndContext for drag-to-schedule */}
-        {/* Note: Horizontal axis restriction is handled in TimelineTaskBar's dragStyle (y: 0) */}
-        <DndContext
-          sensors={sensors}
-          onDragStart={handleDragStart}
-          onDragMove={handleDragMove}
-          onDragEnd={handleDragEnd}
-        >
+          {/* Timeline area - wrapped with DndContext for drag-to-schedule */}
+          {/* Note: Horizontal axis restriction is handled in TimelineTaskBar's dragStyle (y: 0) */}
+          <DndContext
+            sensors={sensors}
+            onDragStart={handleDragStart}
+            onDragMove={handleDragMove}
+            onDragEnd={handleDragEnd}
+          >
           <div className="flex-1 flex flex-col overflow-hidden">
             {/* Timeline header */}
             <TimelineHeader
@@ -2158,7 +2195,8 @@ export function TimelineView({ tasks, onTaskClick, onNewTaskClick, onTaskSchedul
             )}
           </DragOverlay>
         </DndContext>
-      </div>
+        </div>
+      )}
 
       {/* Shallow history indicator */}
       <ShallowHistoryIndicator

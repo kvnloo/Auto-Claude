@@ -260,6 +260,11 @@
       "taskBars": "Rendu des tâches...",
       "progressiveRender": "Rendu de {{rendered}} sur {{total}} tâches",
       "initializing": "Initialisation de la chronologie..."
+    },
+    "emptyState": {
+      "title": "Aucune tâche sur la chronologie",
+      "description": "Créez votre première tâche pour la voir sur la chronologie. Les tâches apparaîtront sous forme de barres de durée que vous pouvez glisser pour planifier.",
+      "createTask": "Créer la première tâche"
     }
   }
 }
