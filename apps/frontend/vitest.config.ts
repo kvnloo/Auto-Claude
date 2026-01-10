@@ -4,7 +4,13 @@ import { resolve } from 'path';
 export default defineConfig({
   test: {
     globals: true,
-    environment: 'jsdom',
+    // Default to node environment (preserves original behavior for main process tests)
+    environment: 'node',
+    // Environment per-file pattern: renderer tests use jsdom for DOM APIs
+    environmentMatchGlobs: [
+      // Renderer tests need jsdom for React component testing and DOM APIs
+      ['**/src/renderer/**', 'jsdom'],
+    ],
     include: ['src/**/*.test.ts', 'src/**/*.test.tsx', 'src/**/*.spec.ts', 'src/**/*.spec.tsx'],
     exclude: ['node_modules', 'dist', 'out'],
     coverage: {
